@@ -1,3 +1,4 @@
+// ImageToTable/src/jvmMain/kotlin/com/example/imagetotable/Main.kt
 package com.example.imagetotable
 
 import androidx.compose.foundation.background
@@ -19,27 +20,34 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import com.example.imagetotable.model.TableData
+import com.example.imagetotable.ocr.OcrTableExtractor
 import com.example.imagetotable.util.ClipboardManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import javax.swing.JFileChooser
+import javax.swing.filechooser.FileNameExtensionFilter
 
 fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
-        title = "ImageToTable - Interactive Editor"
+        title = "ImageToTable - Tesseract OCR Editor"
     ) {
+        val coroutineScope = rememberCoroutineScope()
         val tableData = remember {
             TableData(
                 initialHeaders = listOf("SKU / Code", "Description", "Quantity", "Price ($)"),
                 initialRows = listOf(
                     listOf("A-101", "Ballpoint Pens", "50", "1.25"),
-                    listOf("B-204", "A4 Copy Paper", "10", "4.50"),
-                    listOf("C-305", "Desk Organizer", "3", "12.00"),
-                    listOf("D-402", "USB Flash Drive", "8", "7.99")
+                    listOf("B-204", "A4 Copy Paper", "10", "4.50")
                 )
             )
         }
 
         var selectedCell by remember { mutableStateOf<Pair<Int, Int>?>(Pair(0, 0)) }
         var statusMessage by remember { mutableStateOf("Ready") }
+        var isProcessing by remember { mutableStateOf(false) }
 
         Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
             // Action Toolbar
@@ -48,12 +56,46 @@ fun main() = application {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // OCR Image Loader
+                Button(
+                    onClick = {
+                        val fileChooser = JFileChooser().apply {
+                            dialogTitle = "Select Table Image"
+                            fileFilter = FileNameExtensionFilter(
+                                "Images (*.png, *.jpg, *.jpeg, *.tiff, *.bmp)",
+                                "png", "jpg", "jpeg", "tiff", "bmp"
+                            )
+                        }
+                        if (fileChooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                            val selectedFile = fileChooser.selectedFile
+                            isProcessing = true
+                            statusMessage = "Running OCR extraction..."
+
+                            coroutineScope.launch {
+                                try {
+                                    val extracted = withContext(Dispatchers.IO) {
+                                        OcrTableExtractor.extractTableFromImage(selectedFile)
+                                    }
+                                    tableData.loadExtractedData(extracted.headers, extracted.rows)
+                                    statusMessage = "Loaded ${extracted.rows.size} rows from ${selectedFile.name}"
+                                } catch (e: Exception) {
+                                    statusMessage = "OCR Error: ${e.message}"
+                                } finally {
+                                    isProcessing = false
+                                }
+                            }
+                        }
+                    },
+                    enabled = !isProcessing
+                ) {
+                    Text(if (isProcessing) "Extracting..." else "Open Image & Extract")
+                }
+
                 Button(onClick = { tableData.addRow() }) { Text("+ Row") }
                 Button(onClick = { tableData.addColumn() }) { Text("+ Column") }
 
                 Button(onClick = {
-                    val tsv = tableData.toTsvString()
-                    ClipboardManager.copyText(tsv)
+                    ClipboardManager.copyText(tableData.toTsvString())
                     statusMessage = "Table copied as TSV!"
                 }) {
                     Text("Copy All")
@@ -79,9 +121,13 @@ fun main() = application {
                 )
             }
 
-            Divider()
+            if (isProcessing) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
+            } else {
+                Divider()
+            }
 
-            // Header Row (Horizontal reordering)
+            // Headers with Sideways Controls
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -143,7 +189,7 @@ fun main() = application {
                 }
             }
 
-            // Data Rows (Vertical reordering & inline editing)
+            // Data Rows with Vertical Controls
             LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 itemsIndexed(tableData.rows) { rowIdx, rowData ->
                     Row(
@@ -152,7 +198,6 @@ fun main() = application {
                             .border(0.5.dp, Color(0xFFE0E0E0)),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Directional controls for rows: Up / Down / Remove
                         Row(
                             modifier = Modifier.width(90.dp).padding(4.dp),
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -189,7 +234,6 @@ fun main() = application {
                             Text("#${rowIdx + 1}", fontSize = 11.sp, color = Color.Gray)
                         }
 
-                        // Inline Editable Cells
                         rowData.forEachIndexed { colIdx, cellValue ->
                             val isSelected = selectedCell == Pair(rowIdx, colIdx)
                             Box(

@@ -4,6 +4,11 @@
 sourceSets {
     val jvmMain by getting {
         dependencies {
+// In your androidMain dependencies / app build.gradle.kts
+
+    implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+
             implementation(compose.desktop.currentOs)
             implementation(compose.material)
             

@@ -21,6 +21,14 @@ object OcrTableExtractor {
         setLanguage("eng")
         setPageSegMode(ITessAPI.TessPageSegMode.PSM_SINGLE_BLOCK)
     }
+// In OcrTableExtractor.kt
+fun extractTextForCell(image: java.awt.image.BufferedImage, rect: java.awt.Rectangle): String {
+    return try {
+        tesseract.doOCR(image, rect).replace("\n", " ").trim()
+    } catch (_: Exception) {
+        ""
+    }
+}
 
     fun extractTableFromImage(imageFile: File): ExtractedTableResult {
         val originalImage: BufferedImage = ImageIO.read(imageFile)

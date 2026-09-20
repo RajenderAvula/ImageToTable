@@ -33,6 +33,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.imagetotable.model.TableData
+import com.example.imagetotable.ocr.AndroidOcrService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,6 +53,7 @@ class MainActivity : ComponentActivity() {
 fun MobileTableEditorScreen() {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val coroutineScope = rememberCoroutineScope()
 
     val tableData = remember {
         TableData(
@@ -64,7 +69,8 @@ fun MobileTableEditorScreen() {
 
     var selectedCell by remember { mutableStateOf<Pair<Int, Int>?>(Pair(0, 0)) }
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var statusMessage by remember { mutableStateOf("Ready") }
+    var isProcessing by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf("Ready. Pick an image to extract.") }
     var showImagePreview by remember { mutableStateOf(false) }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -75,7 +81,7 @@ fun MobileTableEditorScreen() {
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     selectedBitmap = BitmapFactory.decodeStream(stream)
                     showImagePreview = true
-                    statusMessage = "Image loaded successfully"
+                    statusMessage = "Image loaded. Tap 'Extract Table' to process."
                 }
             } catch (e: Exception) {
                 statusMessage = "Error loading image: ${e.message}"
@@ -84,8 +90,6 @@ fun MobileTableEditorScreen() {
     }
 
     val horizontalScrollState = rememberScrollState()
-
-    // Calculate exact grid width: 90dp action column + 130dp per data column
     val totalTableWidth = 90.dp + (130.dp * tableData.headers.size)
 
     Scaffold(
@@ -124,46 +128,97 @@ fun MobileTableEditorScreen() {
             ) {
                 Button(
                     onClick = { imagePickerLauncher.launch("image/*") },
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
+                    enabled = !isProcessing
                 ) {
                     Text("Pick Image", color = Color.White, fontSize = 12.sp)
                 }
 
-                Button(onClick = { tableData.addRow() }) {
+                // SUBMIT BUTTON: Sends the picked image to the OCR table extractor
+                Button(
+                    onClick = {
+                        val bitmap = selectedBitmap
+                        if (bitmap != null) {
+                            coroutineScope.launch {
+                                isProcessing = true
+                                statusMessage = "Extracting table with OCR..."
+                                try {
+                                    val service = AndroidOcrService(context)
+                                    val (extractedHeaders, extractedRows) = service.extractTable(bitmap)
+
+                                    withContext(Dispatchers.Main) {
+                                        tableData.loadExtractedData(extractedHeaders, extractedRows)
+                                        statusMessage = "Extracted ${extractedRows.size} rows & ${extractedHeaders.size} columns!"
+                                    }
+                                } catch (e: Exception) {
+                                    statusMessage = "OCR Failed: ${e.message}"
+                                } finally {
+                                    isProcessing = false
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                    enabled = selectedBitmap != null && !isProcessing
+                ) {
+                    Text("Extract Table", color = Color.White, fontSize = 12.sp)
+                }
+
+                Button(onClick = { tableData.addRow() }, enabled = !isProcessing) {
                     Text("+ Row", fontSize = 12.sp)
                 }
 
-                Button(onClick = { tableData.addColumn() }) {
+                Button(onClick = { tableData.addColumn() }, enabled = !isProcessing) {
                     Text("+ Col", fontSize = 12.sp)
                 }
 
-                Button(onClick = {
-                    clipboardManager.setText(AnnotatedString(tableData.toTsvString()))
-                    statusMessage = "Table copied to clipboard!"
-                }) {
+                Button(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(tableData.toTsvString()))
+                        statusMessage = "Table copied to clipboard!"
+                    },
+                    enabled = !isProcessing
+                ) {
                     Text("Copy TSV", fontSize = 12.sp)
                 }
 
-                Button(onClick = {
-                    val clipText = clipboardManager.getText()?.text
-                    if (!clipText.isNullOrBlank()) {
-                        val (r, c) = selectedCell ?: Pair(0, 0)
-                        tableData.pasteTsvData(clipText, r, c)
-                        statusMessage = "Pasted at ($r, $c)"
-                    } else {
-                        statusMessage = "Clipboard is empty"
-                    }
-                }) {
+                Button(
+                    onClick = {
+                        val clipText = clipboardManager.getText()?.text
+                        if (!clipText.isNullOrBlank()) {
+                            val (r, c) = selectedCell ?: Pair(0, 0)
+                            tableData.pasteTsvData(clipText, r, c)
+                            statusMessage = "Pasted at ($r, $c)"
+                        } else {
+                            statusMessage = "Clipboard is empty"
+                        }
+                    },
+                    enabled = !isProcessing
+                ) {
                     Text("Paste", fontSize = 12.sp)
                 }
             }
 
-            Text(
-                text = statusMessage,
-                style = TextStyle(fontSize = 11.sp, color = Color.DarkGray),
+            // Status bar with circular progress indicator
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(bottom = 6.dp)
-            )
+            ) {
+                if (isProcessing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Color(0xFF1E88E5)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text(
+                    text = statusMessage,
+                    style = TextStyle(fontSize = 11.sp, color = Color.DarkGray)
+                )
+            }
 
+            // Image Preview Collapsible
             if (showImagePreview && selectedBitmap != null) {
                 Card(
                     shape = RoundedCornerShape(8.dp),
@@ -183,20 +238,19 @@ fun MobileTableEditorScreen() {
 
             Divider()
 
-            // Outer Horizontal Scroll
+            // Main Interactive Table Container
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .horizontalScroll(horizontalScrollState)
             ) {
-                // Fixed explicit width prevents intrinsic measure crashes
                 Column(
                     modifier = Modifier
                         .width(totalTableWidth)
                         .fillMaxHeight()
                 ) {
-                    // Header Row
+                    // Header Row (Sideways Controls: ◀ / ▶)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -265,7 +319,7 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Vertical Lazy List of Rows
+                    // Vertical Data Rows (Up/Down Controls: ▲ / ▼)
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()

@@ -1,3 +1,4 @@
+// ImageToTable/src/jvmMain/kotlin/com/example/imagetotable/model/TableData.kt
 package com.example.imagetotable.model
 
 import androidx.compose.runtime.mutableStateListOf
@@ -11,6 +12,15 @@ class TableData(
     val rows: SnapshotStateList<SnapshotStateList<String>> = mutableStateListOf(
         *initialRows.map { mutableStateListOf(*it.toTypedArray()) }.toTypedArray()
     )
+
+    fun loadExtractedData(newHeaders: List<String>, newRows: List<List<String>>) {
+        headers.clear()
+        headers.addAll(newHeaders)
+        rows.clear()
+        for (r in newRows) {
+            rows.add(mutableStateListOf(*r.toTypedArray()))
+        }
+    }
 
     fun moveColumn(fromIndex: Int, toIndex: Int) {
         if (fromIndex !in headers.indices || toIndex !in headers.indices) return

@@ -5,9 +5,7 @@ import net.sourceforge.tess4j.ITessAPI
 import net.sourceforge.tess4j.Tesseract
 import net.sourceforge.tess4j.Word
 import java.awt.Rectangle
-import java.awt.image.BufferedImage
 import java.io.File
-import javax.imageio.ImageIO
 import kotlin.math.abs
 
 data class ExtractedTable(
@@ -17,8 +15,6 @@ data class ExtractedTable(
 
 object OcrTableExtractor {
     private val tesseract = Tesseract().apply {
-        // Set path to directory containing 'tessdata/eng.traineddata'
-        // Defaults to system TESSDATA_PREFIX if set, or local './tessdata'
         val tessDataEnv = System.getenv("TESSDATA_PREFIX") ?: "./tessdata"
         setDatapath(tessDataEnv)
         setLanguage("eng")
@@ -26,23 +22,24 @@ object OcrTableExtractor {
     }
 
     fun extractTableFromImage(imageFile: File): ExtractedTable {
-        val image: BufferedImage = ImageIO.read(imageFile)
-            ?: throw IllegalArgumentException("Could not read image file: ${imageFile.absolutePath}")
+        // Preprocess through OpenCV: Otsu thresholding + border subtraction
+        val preprocessed = OpenCvPreprocessor.process(imageFile)
+        val ocrReadyImage = preprocessed.cleanedTextImage
 
-        // 1. Retrieve all detected words with their bounding boxes
-        val words: List<Word> = tesseract.getWords(image, ITessAPI.TessPageIteratorLevel.RIL_WORD)
+        // Retrieve words with coordinates from preprocessed image
+        val words: List<Word> = tesseract.getWords(ocrReadyImage, ITessAPI.TessPageIteratorLevel.RIL_WORD)
             .filter { it.text.isNotBlank() }
 
         if (words.isEmpty()) {
             return ExtractedTable(headers = listOf("Column 1"), rows = emptyList())
         }
 
-        // 2. Sort words top-to-bottom, then left-to-right
+        // Sort words top-to-bottom, left-to-right
         val sortedWords = words.sortedWith(
             compareBy<Word> { it.boundingBox.y }.thenBy { it.boundingBox.x }
         )
 
-        // 3. Cluster words into rows based on vertical proximity
+        // Cluster words into rows based on line-height overlap
         val rawRows = mutableListOf<MutableList<Word>>()
         for (word in sortedWords) {
             val matchingRow = rawRows.firstOrNull { rowWords ->
@@ -59,10 +56,9 @@ object OcrTableExtractor {
             }
         }
 
-        // Sort rows by vertical position
         rawRows.sortBy { row -> row.minOf { it.boundingBox.y } }
 
-        // 4. Within each row, sort words by X and group adjacent words into cell tokens
+        // Tokenize cells by horizontal gap distance
         val structuredRows = rawRows.map { rowWords ->
             rowWords.sortBy { it.boundingBox.x }
             val cells = mutableListOf<String>()
@@ -78,12 +74,10 @@ object OcrTableExtractor {
                     val spaceThreshold = (prevBox.height * 0.9).coerceAtLeast(25.0)
 
                     if (gap > spaceThreshold) {
-                        // Horizontal gap is wide -> start a new column
                         cells.add(currentCell.toString())
                         currentCell.clear()
                         currentCell.append(w.text.trim())
                     } else {
-                        // Narrow gap -> words belong to the same cell phrase
                         currentCell.append(" ").append(w.text.trim())
                     }
                 }
@@ -95,7 +89,6 @@ object OcrTableExtractor {
             cells
         }
 
-        // 5. Determine maximum column count and pad rows
         val maxCols = structuredRows.maxOfOrNull { it.size } ?: 1
         val normalizedRows = structuredRows.map { row ->
             row + List(maxCols - row.size) { "" }

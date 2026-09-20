@@ -1,7 +1,6 @@
 package com.example.imagetotable.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -15,17 +14,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.YearMonth
+import java.time.format.DateTimeFormatter
 
 @Composable
 fun TableCalendarView(
-    activeDates: Set<String>,
-    selectedDate: String?,
-    onDateSelected: (String?) -> Unit
+    currentTableDateTime: String,
+    onDateBound: (String) -> Unit
 ) {
     var currentYearMonth by remember { mutableStateOf(YearMonth.now()) }
     val daysInMonth = currentYearMonth.lengthOfMonth()
-    val firstDayOfWeek = currentYearMonth.atDay(1).dayOfWeek.value % 7 // 0 for Sunday
+    val firstDayOfWeek = currentYearMonth.atDay(1).dayOfWeek.value % 7
+
+    val boundDateOnly = remember(currentTableDateTime) {
+        currentTableDateTime.take(10) // Extracts YYYY-MM-DD
+    }
 
     Card(
         shape = RoundedCornerShape(8.dp),
@@ -33,7 +37,6 @@ fun TableCalendarView(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
-            // Calendar Month Navigation
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -52,7 +55,6 @@ fun TableCalendarView(
                 }
             }
 
-            // Day Labels
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                 listOf("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa").forEach {
                     Text(it, fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
@@ -60,7 +62,6 @@ fun TableCalendarView(
             }
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Calendar Days Matrix
             val totalSlots = firstDayOfWeek + daysInMonth
             val rows = (totalSlots + 6) / 7
 
@@ -72,39 +73,28 @@ fun TableCalendarView(
                     for (c in 0..6) {
                         val dayNumber = (r * 7 + c) - firstDayOfWeek + 1
                         if (dayNumber in 1..daysInMonth) {
-                            val dateString = currentYearMonth.atDay(dayNumber).toString()
-                            val hasEntries = activeDates.contains(dateString)
-                            val isSelected = selectedDate == dateString
+                            val dayDate = currentYearMonth.atDay(dayNumber).toString()
+                            val isTableDate = boundDateOnly == dayDate
 
                             Box(
                                 modifier = Modifier
                                     .size(32.dp)
                                     .background(
-                                        color = if (isSelected) Color(0xFF1E88E5) else Color.Transparent,
+                                        color = if (isTableDate) Color(0xFF1E88E5) else Color.Transparent,
                                         shape = CircleShape
                                     )
                                     .clickable {
-                                        if (isSelected) onDateSelected(null) else onDateSelected(dateString)
+                                        val timePart = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+                                        onDateBound("$dayDate $timePart")
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(
-                                        text = "$dayNumber",
-                                        fontSize = 12.sp,
-                                        color = if (isSelected) Color.White else Color.Black
-                                    )
-                                    if (hasEntries) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(4.dp)
-                                                .background(
-                                                    if (isSelected) Color.White else Color(0xFF2E7D32),
-                                                    CircleShape
-                                                )
-                                        )
-                                    }
-                                }
+                                Text(
+                                    text = "$dayNumber",
+                                    fontSize = 12.sp,
+                                    color = if (isTableDate) Color.White else Color.Black,
+                                    fontWeight = if (isTableDate) FontWeight.Bold else FontWeight.Normal
+                                )
                             }
                         } else {
                             Spacer(modifier = Modifier.size(32.dp))
@@ -113,14 +103,13 @@ fun TableCalendarView(
                 }
             }
 
-            if (selectedDate != null) {
-                TextButton(
-                    onClick = { onDateSelected(null) },
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                ) {
-                    Text("Clear Date Filter ($selectedDate)", fontSize = 11.sp, color = Color.Red)
-                }
-            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Tap any date above to re-bind the entire table to that day.",
+                fontSize = 10.sp,
+                color = Color.DarkGray,
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            )
         }
     }
 }

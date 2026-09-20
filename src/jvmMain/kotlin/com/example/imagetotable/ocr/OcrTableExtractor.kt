@@ -3,10 +3,7 @@ package com.example.imagetotable.ocr
 
 import net.sourceforge.tess4j.ITessAPI
 import net.sourceforge.tess4j.Tesseract
-import net.sourceforge.tess4j.Word
-import java.awt.Rectangle
 import java.io.File
-import kotlin.math.abs
 
 data class ExtractedTable(
     val headers: List<String>,
@@ -18,87 +15,48 @@ object OcrTableExtractor {
         val tessDataEnv = System.getenv("TESSDATA_PREFIX") ?: "./tessdata"
         setDatapath(tessDataEnv)
         setLanguage("eng")
-        setPageSegMode(ITessAPI.TessPageSegMode.PSM_AUTO)
+        // PSM_SINGLE_BLOCK or PSM_SINGLE_LINE works best inside individual cropped cells
+        setPageSegMode(ITessAPI.TessPageSegMode.PSM_SINGLE_BLOCK)
     }
 
     fun extractTableFromImage(imageFile: File): ExtractedTable {
-        // Preprocess through OpenCV: Otsu thresholding + border subtraction
-        val preprocessed = OpenCvPreprocessor.process(imageFile)
-        val ocrReadyImage = preprocessed.cleanedTextImage
+        val context = OpenCvPreprocessor.process(imageFile)
+        val ocrImage = context.cleanedTextImage
+        val cellMatrix = context.cellMatrix
 
-        // Retrieve words with coordinates from preprocessed image
-        val words: List<Word> = tesseract.getWords(ocrReadyImage, ITessAPI.TessPageIteratorLevel.RIL_WORD)
-            .filter { it.text.isNotBlank() }
-
-        if (words.isEmpty()) {
+        if (cellMatrix.isEmpty()) {
             return ExtractedTable(headers = listOf("Column 1"), rows = emptyList())
         }
 
-        // Sort words top-to-bottom, left-to-right
-        val sortedWords = words.sortedWith(
-            compareBy<Word> { it.boundingBox.y }.thenBy { it.boundingBox.x }
-        )
+        // Determine the maximum number of columns across all detected rows
+        val maxCols = cellMatrix.maxOfOrNull { it.size } ?: 1
 
-        // Cluster words into rows based on line-height overlap
-        val rawRows = mutableListOf<MutableList<Word>>()
-        for (word in sortedWords) {
-            val matchingRow = rawRows.firstOrNull { rowWords ->
-                val avgY = rowWords.map { it.boundingBox.y }.average()
-                val avgH = rowWords.map { it.boundingBox.height }.average()
-                val threshold = (avgH * 0.6).coerceAtLeast(10.0)
-                abs(word.boundingBox.y - avgY) <= threshold
-            }
-
-            if (matchingRow != null) {
-                matchingRow.add(word)
-            } else {
-                rawRows.add(mutableListOf(word))
-            }
-        }
-
-        rawRows.sortBy { row -> row.minOf { it.boundingBox.y } }
-
-        // Tokenize cells by horizontal gap distance
-        val structuredRows = rawRows.map { rowWords ->
-            rowWords.sortBy { it.boundingBox.x }
-            val cells = mutableListOf<String>()
-            val currentCell = StringBuilder()
-            var prevBox: Rectangle? = null
-
-            for (w in rowWords) {
-                val box = w.boundingBox
-                if (prevBox == null) {
-                    currentCell.append(w.text.trim())
-                } else {
-                    val gap = box.x - (prevBox.x + prevBox.width)
-                    val spaceThreshold = (prevBox.height * 0.9).coerceAtLeast(25.0)
-
-                    if (gap > spaceThreshold) {
-                        cells.add(currentCell.toString())
-                        currentCell.clear()
-                        currentCell.append(w.text.trim())
-                    } else {
-                        currentCell.append(" ").append(w.text.trim())
-                    }
+        // Execute OCR per cell coordinate box
+        val parsedRows = cellMatrix.map { rowCells ->
+            val rowValues = rowCells.map { cell ->
+                try {
+                    // Target OCR to the exact bounding box of this cell
+                    val cellText = tesseract.doOCR(ocrImage, cell.awtRectangle)
+                    cellText.replace("\n", " ").trim()
+                } catch (_: Exception) {
+                    ""
                 }
-                prevBox = box
+            }.toMutableList()
+
+            // Pad rows with fewer columns so the table forms an even matrix
+            while (rowValues.size < maxCols) {
+                rowValues.add("")
             }
-            if (currentCell.isNotEmpty()) {
-                cells.add(currentCell.toString())
-            }
-            cells
+            rowValues
         }
 
-        val maxCols = structuredRows.maxOfOrNull { it.size } ?: 1
-        val normalizedRows = structuredRows.map { row ->
-            row + List(maxCols - row.size) { "" }
+        // Designate the first physical row as header, remaining rows as body
+        val rawHeaders = parsedRows.firstOrNull() ?: emptyList()
+        val headers = rawHeaders.mapIndexed { idx, text ->
+            text.ifBlank { "Column ${idx + 1}" }
         }
 
-        val headers = normalizedRows.firstOrNull()?.mapIndexed { idx, value ->
-            value.ifBlank { "Column ${idx + 1}" }
-        } ?: List(maxCols) { "Column ${it + 1}" }
-
-        val dataRows = if (normalizedRows.size > 1) normalizedRows.drop(1) else emptyList()
+        val dataRows = if (parsedRows.size > 1) parsedRows.drop(1) else emptyList()
 
         return ExtractedTable(headers = headers, rows = dataRows)
     }

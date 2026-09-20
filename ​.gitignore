@@ -1,0 +1,15 @@
+# Gradle & JVM
+.gradle/
+build/
+bin/
+out/
+
+# JetBrains IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# OS Files
+.DS_Store
+Thumbs.db

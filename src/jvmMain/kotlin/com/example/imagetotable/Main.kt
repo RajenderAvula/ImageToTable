@@ -138,16 +138,39 @@ fun main() = application {
                         .fillMaxHeight()
                         .border(1.dp, Color.LightGray)
                 ) {
-                    TableOverlayPreview(
-                        image = sourceImage,
-                        cellMatrix = detectedCellMatrix,
-                        selectedCell = selectedCell,
-                        onCellClick = { rowIdx, colIdx ->
-                            selectAndScrollToCell(rowIdx, colIdx)
-                            statusMessage = "Selected cell [Row $rowIdx, Col $colIdx]"
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                   // In Main.kt inside TableOverlayPreview(...) call:
+TableOverlayPreview(
+    image = sourceImage,
+    cellMatrix = detectedCellMatrix,
+    selectedCell = selectedCell,
+    onCellClick = { rowIdx, colIdx ->
+        selectAndScrollToCell(rowIdx, colIdx)
+        statusMessage = "Selected cell [Row $rowIdx, Col $colIdx]"
+    },
+    onBoxResized = { rowIdx, colIdx, updatedBox ->
+        statusMessage = "Resized cell [$rowIdx, $colIdx]. Re-running OCR..."
+        coroutineScope.launch {
+            if (sourceImage != null) {
+                val newText = withContext(Dispatchers.IO) {
+                    OcrTableExtractor.extractTextForCell(sourceImage!!, updatedBox.awtRectangle)
+                }
+                
+                // If row 0 represents headers:
+                if (rowIdx == 0 && colIdx in tableData.headers.indices) {
+                    tableData.headers[colIdx] = newText
+                } else {
+                    val dataRow = rowIdx - 1
+                    if (dataRow in tableData.rows.indices && colIdx in tableData.headers.indices) {
+                        tableData.updateCell(dataRow, colIdx, newText)
+                    }
+                }
+                statusMessage = "Updated text: \"$newText\""
+            }
+        }
+    },
+    modifier = Modifier.fillMaxSize()
+)
+ 
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))

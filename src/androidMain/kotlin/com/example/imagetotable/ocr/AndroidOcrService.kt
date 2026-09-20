@@ -6,20 +6,27 @@ import com.googlecode.tesseract.android.TessBaseAPI
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class AndroidOcrService(private val context: Context) {
+class AndroidOcrService(
+    private val context: Context,
+    private val onStatusUpdate: (String) -> Unit = {}
+) {
 
     suspend fun extractTable(bitmap: Bitmap): Pair<List<String>, List<List<String>>> =
         withContext(Dispatchers.Default) {
-            val basePath = MobileTessData.getOrExtractTessBasePath(context)
-            val tess = TessBaseAPI()
+            val basePath = MobileTessData.getOrExtractTessBasePath(context, onStatusUpdate)
 
+            withContext(Dispatchers.Main) {
+                onStatusUpdate("Running OCR recognition...")
+            }
+
+            val tess = TessBaseAPI()
             try {
                 val initialized = tess.init(basePath, "eng")
                 if (!initialized) {
                     throw IllegalStateException("Failed to initialize Tesseract with language 'eng'.")
                 }
 
-                tess.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
+                tess.pageSegMode = TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT
                 tess.setImage(bitmap)
                 val rawText = tess.utF8Text ?: ""
                 tess.clear()
@@ -33,13 +40,12 @@ class AndroidOcrService(private val context: Context) {
     private fun parseRawTextToTable(rawText: String): Pair<List<String>, List<List<String>>> {
         val lines = rawText.lines()
             .map { it.trim() }
-            .filter { it.isNotBlank() && !it.matches(Regex("^[\\-_+=|\\s]+$")) } // Filter divider lines
+            .filter { it.isNotBlank() && !it.matches(Regex("^[\\-_+=|\\s]+$")) }
 
         if (lines.isEmpty()) {
             return Pair(listOf("Col 1", "Col 2"), emptyList())
         }
 
-        // Split columns by tabs, pipes (|), or 2+ consecutive spaces
         val parsedRows = lines.map { line ->
             line.trim('|')
                 .split(Regex("\\s*\\|\\s*|\\t+|\\s{2,}"))

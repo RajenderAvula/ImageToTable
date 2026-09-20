@@ -12,9 +12,8 @@ repositories {
 }
 
 kotlin {
-    jvm {
-        withJava()
-    }
+    // Plain JVM target without JavaPlugin collision
+    jvm()
     androidTarget()
 
     sourceSets {
@@ -50,6 +49,9 @@ android {
         versionCode = 1
         versionName = "1.0.0"
     }
+
+    // Point AGP to your Multiplatform AndroidManifest location
+    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

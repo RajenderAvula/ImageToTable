@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.*
 import androidx.compose.runtime.*
@@ -34,9 +35,11 @@ import javax.swing.filechooser.FileNameExtensionFilter
 fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
-        title = "ImageToTable - Visual Grid Verification"
+        title = "ImageToTable - Click-to-Select Navigation"
     ) {
         val coroutineScope = rememberCoroutineScope()
+        val lazyListState = rememberLazyListState()
+
         val tableData = remember {
             TableData(
                 initialHeaders = listOf("SKU / Code", "Description", "Quantity", "Price ($)"),
@@ -52,6 +55,18 @@ fun main() = application {
         var selectedCell by remember { mutableStateOf<Pair<Int, Int>?>(Pair(0, 0)) }
         var statusMessage by remember { mutableStateOf("Ready") }
         var isProcessing by remember { mutableStateOf(false) }
+
+        // Function to select a cell and automatically scroll to its table row
+        fun selectAndScrollToCell(matrixRow: Int, colIdx: Int) {
+            selectedCell = Pair(matrixRow, colIdx)
+            // If row 0 in matrix corresponds to table header, row 1+ maps to data rows (index - 1)
+            val tableRowIndex = (matrixRow - 1).coerceAtLeast(0)
+            coroutineScope.launch {
+                if (tableData.rows.isNotEmpty()) {
+                    lazyListState.animateScrollToItem(tableRowIndex)
+                }
+            }
+        }
 
         Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
             // Top Toolbar
@@ -82,7 +97,7 @@ fun main() = application {
                                     sourceImage = result.originalImage
                                     detectedCellMatrix = result.cellMatrix
                                     tableData.loadExtractedData(result.headers, result.rows)
-                                    statusMessage = "Detected ${result.cellMatrix.flatten().size} cells in ${selectedFile.name}"
+                                    statusMessage = "Loaded ${result.cellMatrix.flatten().size} cells. Click any image box to inspect."
                                 } catch (e: Exception) {
                                     statusMessage = "Error: ${e.message}"
                                 } finally {
@@ -114,9 +129,9 @@ fun main() = application {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
             }
 
-            // Split View: Image Overlay Preview (Left) and Editable Table Grid (Right)
+            // Split View: Image Overlay (Left) & Synchronized Table (Right)
             Row(modifier = Modifier.fillMaxSize().weight(1f)) {
-                // Left Panel: Image + Bounding Box Canvas
+                // Interactive Canvas Panel
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -127,13 +142,17 @@ fun main() = application {
                         image = sourceImage,
                         cellMatrix = detectedCellMatrix,
                         selectedCell = selectedCell,
+                        onCellClick = { rowIdx, colIdx ->
+                            selectAndScrollToCell(rowIdx, colIdx)
+                            statusMessage = "Selected cell [Row $rowIdx, Col $colIdx]"
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // Right Panel: Editable Table Grid
+                // Table Panel with Synchronized Scroll State
                 Column(
                     modifier = Modifier
                         .weight(1.2f)
@@ -152,10 +171,16 @@ fun main() = application {
                             Text("Actions", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                         tableData.headers.forEachIndexed { colIdx, headerText ->
+                            val isHeaderSelected = selectedCell == Pair(0, colIdx)
                             Column(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .border(0.5.dp, Color.LightGray)
+                                    .border(
+                                        width = if (isHeaderSelected) 1.5.dp else 0.5.dp,
+                                        color = if (isHeaderSelected) Color(0xFF1E88E5) else Color.LightGray
+                                    )
+                                    .background(if (isHeaderSelected) Color(0xFFE3F2FD) else Color.Transparent)
+                                    .clickable { selectAndScrollToCell(0, colIdx) }
                                     .padding(4.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
@@ -190,8 +215,8 @@ fun main() = application {
                         }
                     }
 
-                    // Rows
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    // Table Body with Scroll State
+                    LazyColumn(state = lazyListState, modifier = Modifier.fillMaxSize()) {
                         itemsIndexed(tableData.rows) { rowIdx, rowData ->
                             Row(
                                 modifier = Modifier
@@ -228,7 +253,6 @@ fun main() = application {
                                 }
 
                                 rowData.forEachIndexed { colIdx, cellValue ->
-                                    // Row 0 in TableData maps to row index 1 in cellMatrix if row 0 was used as headers
                                     val isSelected = selectedCell == Pair(rowIdx + 1, colIdx)
                                     Box(
                                         modifier = Modifier
@@ -238,10 +262,7 @@ fun main() = application {
                                                 color = if (isSelected) Color(0xFF1E88E5) else Color.LightGray
                                             )
                                             .background(if (isSelected) Color(0xFFE3F2FD) else Color.White)
-                                            .clickable {
-                                                // Link selection directly to cellMatrix index
-                                                selectedCell = Pair(rowIdx + 1, colIdx)
-                                            }
+                                            .clickable { selectAndScrollToCell(rowIdx + 1, colIdx) }
                                             .padding(6.dp)
                                     ) {
                                         BasicTextField(

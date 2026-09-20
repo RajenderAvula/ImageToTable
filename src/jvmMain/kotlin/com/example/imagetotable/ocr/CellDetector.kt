@@ -6,12 +6,30 @@ import org.opencv.imgproc.Imgproc
 import java.awt.Rectangle
 import kotlin.math.abs
 
+
+    
+// 
+
+
 object CellDetector {
 
     data class CellBox(
-        val rect: Rect,
-        val awtRectangle: Rectangle
-    )
+        var rect: Rect,
+        var awtRectangle: Rectangle = Rectangle(rect.x, rect.y, rect.width, rect.height)
+    ) {
+        fun updateBounds(newX: Int, newY: Int, newW: Int, newH: Int, imgW: Int, imgH: Int) {
+            val clampedX = newX.coerceIn(0, imgW - 5)
+            val clampedY = newY.coerceIn(0, imgH - 5)
+            val clampedW = newW.coerceIn(5, imgW - clampedX)
+            val clampedH = newH.coerceIn(5, imgH - clampedY)
+
+            rect = Rect(clampedX, clampedY, clampedW, clampedH)
+            awtRectangle = Rectangle(clampedX, clampedY, clampedW, clampedH)
+        }
+    }
+
+    // ... (rest of CellDetector remains unchanged)
+}
 
     /**
      * Finds individual cell bounding boxes from the binary table grid mask.

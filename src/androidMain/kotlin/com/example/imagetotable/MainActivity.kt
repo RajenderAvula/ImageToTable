@@ -41,7 +41,6 @@ import com.example.imagetotable.util.TableExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.time.LocalDate
 
 enum class ExportFormat(val extension: String, val mime: String) {
     PDF("pdf", "application/pdf"),
@@ -75,13 +74,7 @@ fun MobileTableEditorScreen() {
                 listOf("C-305", "Desk Organizer", "3", "12.00"),
                 listOf("D-402", "USB Drive 64GB", "8", "7.99")
             ),
-            initialRowNames = listOf("Item 1", "Item 2", "Item 3", "Item 4"),
-            initialDates = listOf(
-                LocalDate.now().toString(),
-                LocalDate.now().toString(),
-                LocalDate.now().minusDays(1).toString(),
-                LocalDate.now().plusDays(1).toString()
-            )
+            initialRowNames = listOf("Item 1", "Item 2", "Item 3", "Item 4")
         )
     }
 
@@ -90,7 +83,6 @@ fun MobileTableEditorScreen() {
     var isProcessing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Ready") }
 
-    // Display & Layout Modifiers
     var isFullScreen by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
     var showImagePreview by remember { mutableStateOf(false) }
@@ -99,16 +91,12 @@ fun MobileTableEditorScreen() {
     var showExportMenu by remember { mutableStateOf(false) }
     var activeExportFormat by remember { mutableStateOf(ExportFormat.PDF) }
 
-    // Filtering State
     var rowSearchQuery by remember { mutableStateOf("") }
-    var selectedCalendarDate by remember { mutableStateOf<String?>(null) }
     val hiddenColumns = remember { mutableStateListOf<Int>() }
 
-    // Manual CRUD Entry Dialog State
     var activeEditingRowIndex by remember { mutableStateOf<Int?>(null) }
     var showRowEditorDialog by remember { mutableStateOf(false) }
 
-    // Import CSV Launcher
     val csvImportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -117,15 +105,14 @@ fun MobileTableEditorScreen() {
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val content = stream.bufferedReader().use { it.readText() }
                     tableData.importCsv(content)
-                    statusMessage = "Imported CSV successfully!"
+                    statusMessage = "CSV Imported!"
                 }
             } catch (e: Exception) {
-                statusMessage = "CSV Import Failed: ${e.message}"
+                statusMessage = "Import Failed: ${e.message}"
             }
         }
     }
 
-    // Export Document Launcher
     val fileSaveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument(activeExportFormat.mime)
     ) { uri: Uri? ->
@@ -145,7 +132,6 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // Photo Picker
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -162,7 +148,6 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // Modals
     if (showCropperDialog && selectedBitmap != null) {
         ImageCropperDialog(
             sourceBitmap = selectedBitmap!!,
@@ -170,7 +155,7 @@ fun MobileTableEditorScreen() {
             onCropConfirmed = { cropped ->
                 selectedBitmap = cropped
                 showCropperDialog = false
-                statusMessage = "Image cropped successfully."
+                statusMessage = "Image cropped."
             }
         )
     }
@@ -180,17 +165,16 @@ fun MobileTableEditorScreen() {
         RowEditorDialog(
             rowIndex = rIdx,
             initialName = if (rIdx != null) tableData.rowNames.getOrElse(rIdx) { "" } else "",
-            initialDate = if (rIdx != null) tableData.rowDates.getOrElse(rIdx) { "" } else "",
             headers = tableData.headers,
             initialValues = if (rIdx != null) tableData.rows.getOrElse(rIdx) { emptyList() } else emptyList(),
             onDismiss = { showRowEditorDialog = false },
-            onSave = { name, date, values ->
+            onSave = { name, values ->
                 if (rIdx != null) {
-                    tableData.updateFullRow(rIdx, name, date, values)
+                    tableData.updateFullRow(rIdx, name, values)
                     statusMessage = "Updated Row #${rIdx + 1}"
                 } else {
-                    tableData.addManualRow(name, date, values)
-                    statusMessage = "Created new row: $name"
+                    tableData.addManualRow(name, values)
+                    statusMessage = "Added row: $name"
                 }
                 showRowEditorDialog = false
             },
@@ -238,22 +222,25 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Filter computation
     val visibleColIndices = tableData.headers.indices.filter { !hiddenColumns.contains(it) }
     val filteredRowIndices = tableData.rows.indices.filter { rIdx ->
-        val dateMatch = selectedCalendarDate == null || tableData.rowDates.getOrNull(rIdx) == selectedCalendarDate
         val nameMatch = tableData.rowNames.getOrElse(rIdx) { "" }.contains(rowSearchQuery, ignoreCase = true)
         val cellMatch = tableData.rows[rIdx].any { it.contains(rowSearchQuery, ignoreCase = true) }
-        dateMatch && (rowSearchQuery.isBlank() || nameMatch || cellMatch)
+        rowSearchQuery.isBlank() || nameMatch || cellMatch
     }
 
-    val totalTableWidth = 160.dp + (130.dp * visibleColIndices.size)
+    val totalTableWidth = 140.dp + (130.dp * visibleColIndices.size)
 
     Scaffold(
         topBar = {
             if (!isFullScreen) {
                 TopAppBar(
-                    title = { Text("ImageToTable", fontSize = 18.sp) },
+                    title = {
+                        Column {
+                            Text("ImageToTable", fontSize = 16.sp)
+                            Text("📅 ${tableData.tableDateTime}", fontSize = 10.sp, color = Color.White.copy(alpha = 0.85f))
+                        }
+                    },
                     backgroundColor = Color(0xFF1E88E5),
                     contentColor = Color.White,
                     actions = {
@@ -273,14 +260,13 @@ fun MobileTableEditorScreen() {
                 .fillMaxSize()
                 .padding(if (isFullScreen) 4.dp else paddingValues.calculateBottomPadding() + 8.dp)
         ) {
-            // Full Screen Exit Toolbar
             if (isFullScreen) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Full Screen Mode", fontWeight = FontWeight.Bold, color = Color(0xFF1E88E5))
+                    Text("Full Screen • 📅 ${tableData.tableDateTime}", fontWeight = FontWeight.Bold, color = Color(0xFF1E88E5), fontSize = 12.sp)
                     Button(
                         onClick = { isFullScreen = false },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color.DarkGray)
@@ -290,7 +276,6 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // Main Toolbar (Hidden in full-screen)
             if (!isFullScreen) {
                 Row(
                     modifier = Modifier
@@ -318,7 +303,7 @@ fun MobileTableEditorScreen() {
                             if (bitmap != null) {
                                 coroutineScope.launch {
                                     isProcessing = true
-                                    statusMessage = "Running OCR..."
+                                    statusMessage = "Extracting table..."
                                     try {
                                         val service = AndroidOcrService(context) { msg -> statusMessage = msg }
                                         val (h, r) = service.extractTable(bitmap)
@@ -340,7 +325,6 @@ fun MobileTableEditorScreen() {
                         Text("Extract", color = Color.White, fontSize = 12.sp)
                     }
 
-                    // Import CSV
                     Button(
                         onClick = { csvImportLauncher.launch("text/*") },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
@@ -348,7 +332,6 @@ fun MobileTableEditorScreen() {
                         Text("Import CSV", color = Color.White, fontSize = 12.sp)
                     }
 
-                    // Manual Add Dialog Launcher
                     Button(
                         onClick = {
                             activeEditingRowIndex = null
@@ -359,12 +342,10 @@ fun MobileTableEditorScreen() {
                         Text("+ New Entry", color = Color.White, fontSize = 12.sp)
                     }
 
-                    // Column Visibility Filter Button
                     Button(onClick = { showColumnVisibilityDialog = true }) {
                         Text("Cols Filter (${tableData.headers.size - hiddenColumns.size})", fontSize = 12.sp)
                     }
 
-                    // Export Menu
                     Box {
                         Button(
                             onClick = { showExportMenu = true },
@@ -392,27 +373,42 @@ fun MobileTableEditorScreen() {
                     }
                 }
 
-                // Row Search Filter Bar
-                OutlinedTextField(
-                    value = rowSearchQuery,
-                    onValueChange = { rowSearchQuery = it },
-                    placeholder = { Text("Filter rows by text, title or values...") },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    textStyle = TextStyle(fontSize = 12.sp),
-                    singleLine = true
-                )
+                // Global Table Timestamp Customization Field & Search
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = tableData.tableDateTime,
+                        onValueChange = { tableData.setCustomDateTime(it) },
+                        label = { Text("Table Date & Time") },
+                        modifier = Modifier.weight(0.45f).height(52.dp),
+                        textStyle = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = rowSearchQuery,
+                        onValueChange = { rowSearchQuery = it },
+                        label = { Text("Filter table rows...") },
+                        modifier = Modifier.weight(0.55f).height(52.dp),
+                        textStyle = TextStyle(fontSize = 11.sp),
+                        singleLine = true
+                    )
+                }
             }
 
-            // Collapsible In-App Calendar
             if (showCalendar && !isFullScreen) {
                 TableCalendarView(
-                    activeDates = tableData.rowDates.toSet(),
-                    selectedDate = selectedCalendarDate,
-                    onDateSelected = { selectedCalendarDate = it }
+                    currentTableDateTime = tableData.tableDateTime,
+                    onDateBound = { newDateTime ->
+                        tableData.setCustomDateTime(newDateTime)
+                        statusMessage = "Bound entire table to: $newDateTime"
+                    }
                 )
             }
 
-            // Image Preview Collapsible
             if (showImagePreview && selectedBitmap != null && !isFullScreen) {
                 Card(
                     shape = RoundedCornerShape(8.dp),
@@ -423,21 +419,20 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // Status Bar
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
                 if (isProcessing) {
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                     Spacer(modifier = Modifier.width(6.dp))
                 }
                 Text(
-                    text = "${filteredRowIndices.size} of ${tableData.rows.size} rows visible • $statusMessage",
-                    style = TextStyle(fontSize = 11.sp, color = Color.DarkGray)
+                    text = "${filteredRowIndices.size} of ${tableData.rows.size} rows • Last Table Update: ${tableData.tableDateTime}",
+                    style = TextStyle(fontSize = 10.sp, color = Color.DarkGray)
                 )
             }
 
             Divider()
 
-            // Main Interactive Table Canvas
+            // Main Table View
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -445,7 +440,7 @@ fun MobileTableEditorScreen() {
                     .horizontalScroll(rememberScrollState())
             ) {
                 Column(modifier = Modifier.width(totalTableWidth).fillMaxHeight()) {
-                    // Header Row
+                    // Column Headers
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -453,8 +448,8 @@ fun MobileTableEditorScreen() {
                             .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(modifier = Modifier.width(160.dp).padding(4.dp), contentAlignment = Alignment.Center) {
-                            Text("Title & Date", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Box(modifier = Modifier.width(140.dp).padding(4.dp), contentAlignment = Alignment.Center) {
+                            Text("Row Titles", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
 
                         visibleColIndices.forEach { colIdx ->
@@ -468,7 +463,7 @@ fun MobileTableEditorScreen() {
                             ) {
                                 BasicTextField(
                                     value = headerText,
-                                    onValueChange = { tableData.headers[colIdx] = it },
+                                    onValueChange = { tableData.updateHeader(colIdx, it) },
                                     textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp),
                                     modifier = Modifier.fillMaxWidth()
                                 )
@@ -484,7 +479,7 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Body Rows
+                    // Rows
                     LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         itemsIndexed(filteredRowIndices) { _, originalRowIdx ->
                             val rowData = tableData.rows[originalRowIdx]
@@ -492,10 +487,9 @@ fun MobileTableEditorScreen() {
                                 modifier = Modifier.fillMaxWidth().border(0.5.dp, Color(0xFFE0E0E0)),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Row Title, Date & Action Panel
                                 Row(
                                     modifier = Modifier
-                                        .width(160.dp)
+                                        .width(140.dp)
                                         .background(Color(0xFFF9FAFB))
                                         .padding(4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -503,8 +497,6 @@ fun MobileTableEditorScreen() {
                                 ) {
                                     Text("▲", modifier = Modifier.clickable(enabled = originalRowIdx > 0) { tableData.moveRow(originalRowIdx, originalRowIdx - 1) }, fontSize = 11.sp)
                                     Text("▼", modifier = Modifier.clickable(enabled = originalRowIdx < tableData.rows.size - 1) { tableData.moveRow(originalRowIdx, originalRowIdx + 1) }, fontSize = 11.sp)
-
-                                    // Open Dedicated CRUD Editor Modal
                                     Text(
                                         text = "✎",
                                         modifier = Modifier
@@ -517,22 +509,14 @@ fun MobileTableEditorScreen() {
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold
                                     )
-
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        BasicTextField(
-                                            value = tableData.rowNames.getOrElse(originalRowIdx) { "Row ${originalRowIdx + 1}" },
-                                            onValueChange = { tableData.updateRowName(originalRowIdx, it) },
-                                            textStyle = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                                        )
-                                        BasicTextField(
-                                            value = tableData.rowDates.getOrElse(originalRowIdx) { "" },
-                                            onValueChange = { tableData.updateRowDate(originalRowIdx, it) },
-                                            textStyle = TextStyle(fontSize = 9.sp, color = Color.Gray)
-                                        )
-                                    }
+                                    BasicTextField(
+                                        value = tableData.rowNames.getOrElse(originalRowIdx) { "Row ${originalRowIdx + 1}" },
+                                        onValueChange = { tableData.updateRowName(originalRowIdx, it) },
+                                        textStyle = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+                                        modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
+                                    )
                                 }
 
-                                // Cells for visible columns
                                 visibleColIndices.forEach { colIdx ->
                                     val cellValue = rowData.getOrElse(colIdx) { "" }
                                     val isSelected = selectedCell == Pair(originalRowIdx, colIdx)

@@ -73,6 +73,7 @@ fun MobileTableEditorScreen() {
     var statusMessage by remember { mutableStateOf("Ready. Pick an image to extract.") }
     var showImagePreview by remember { mutableStateOf(false) }
 
+    // System Image Picker launcher
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -81,7 +82,7 @@ fun MobileTableEditorScreen() {
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     selectedBitmap = BitmapFactory.decodeStream(stream)
                     showImagePreview = true
-                    statusMessage = "Image loaded. Tap 'Extract Table' to process."
+                    statusMessage = "Image loaded. Tap 'Extract Table' to run OCR."
                 }
             } catch (e: Exception) {
                 statusMessage = "Error loading image: ${e.message}"
@@ -90,7 +91,11 @@ fun MobileTableEditorScreen() {
     }
 
     val horizontalScrollState = rememberScrollState()
-    val totalTableWidth = 90.dp + (130.dp * tableData.headers.size)
+
+    // Fixed column width strategy prevents intrinsic measurement crashes
+    val actionColWidth = 90.dp
+    val dataColWidth = 130.dp
+    val totalTableWidth = actionColWidth + (dataColWidth * tableData.headers.size)
 
     Scaffold(
         topBar = {
@@ -117,7 +122,7 @@ fun MobileTableEditorScreen() {
                 .padding(paddingValues)
                 .padding(8.dp)
         ) {
-            // Horizontal Toolbar
+            // Scrollable Action Toolbar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -134,16 +139,18 @@ fun MobileTableEditorScreen() {
                     Text("Pick Image", color = Color.White, fontSize = 12.sp)
                 }
 
-                // SUBMIT BUTTON: Sends the picked image to the OCR table extractor
+                // SUBMIT / EXTRACT ACTION
                 Button(
                     onClick = {
                         val bitmap = selectedBitmap
                         if (bitmap != null) {
                             coroutineScope.launch {
                                 isProcessing = true
-                                statusMessage = "Extracting table with OCR..."
+                                statusMessage = "Starting extraction..."
                                 try {
-                                    val service = AndroidOcrService(context)
+                                    val service = AndroidOcrService(context) { msg ->
+                                        statusMessage = msg
+                                    }
                                     val (extractedHeaders, extractedRows) = service.extractTable(bitmap)
 
                                     withContext(Dispatchers.Main) {
@@ -164,11 +171,17 @@ fun MobileTableEditorScreen() {
                     Text("Extract Table", color = Color.White, fontSize = 12.sp)
                 }
 
-                Button(onClick = { tableData.addRow() }, enabled = !isProcessing) {
+                Button(
+                    onClick = { tableData.addRow() },
+                    enabled = !isProcessing
+                ) {
                     Text("+ Row", fontSize = 12.sp)
                 }
 
-                Button(onClick = { tableData.addColumn() }, enabled = !isProcessing) {
+                Button(
+                    onClick = { tableData.addColumn() },
+                    enabled = !isProcessing
+                ) {
                     Text("+ Col", fontSize = 12.sp)
                 }
 
@@ -199,7 +212,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // Status bar with circular progress indicator
+            // Status Bar & Processing Spinner
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(bottom = 6.dp)
@@ -218,7 +231,7 @@ fun MobileTableEditorScreen() {
                 )
             }
 
-            // Image Preview Collapsible
+            // Image Preview Container
             if (showImagePreview && selectedBitmap != null) {
                 Card(
                     shape = RoundedCornerShape(8.dp),
@@ -238,7 +251,7 @@ fun MobileTableEditorScreen() {
 
             Divider()
 
-            // Main Interactive Table Container
+            // Horizontal Scrollable Grid Shell
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -250,7 +263,7 @@ fun MobileTableEditorScreen() {
                         .width(totalTableWidth)
                         .fillMaxHeight()
                 ) {
-                    // Header Row (Sideways Controls: ◀ / ▶)
+                    // Header Row with Sideways (◀ / ▶) Shifts
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -259,7 +272,7 @@ fun MobileTableEditorScreen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
-                            modifier = Modifier.width(90.dp).padding(4.dp),
+                            modifier = Modifier.width(actionColWidth).padding(4.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text("Actions", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -268,7 +281,7 @@ fun MobileTableEditorScreen() {
                         tableData.headers.forEachIndexed { colIdx, headerText ->
                             Column(
                                 modifier = Modifier
-                                    .width(130.dp)
+                                    .width(dataColWidth)
                                     .border(0.5.dp, Color.LightGray)
                                     .padding(4.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
@@ -319,7 +332,7 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Vertical Data Rows (Up/Down Controls: ▲ / ▼)
+                    // Vertically Scrollable Body with Up/Down (▲ / ▼) Shifts
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -333,7 +346,7 @@ fun MobileTableEditorScreen() {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Row(
-                                    modifier = Modifier.width(90.dp).padding(4.dp),
+                                    modifier = Modifier.width(actionColWidth).padding(4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -372,7 +385,7 @@ fun MobileTableEditorScreen() {
                                     val isSelected = selectedCell == Pair(rowIdx, colIdx)
                                     Box(
                                         modifier = Modifier
-                                            .width(130.dp)
+                                            .width(dataColWidth)
                                             .border(
                                                 width = if (isSelected) 1.5.dp else 0.5.dp,
                                                 color = if (isSelected) Color(0xFF1E88E5) else Color.LightGray

@@ -1,3 +1,22 @@
+
+// ImageToTable/build.gradle.kts
+
+sourceSets {
+    val jvmMain by getting {
+        dependencies {
+            implementation(compose.desktop.currentOs)
+            implementation(compose.material)
+            
+            // Tess4J - Java JNI wrapper for Tesseract OCR
+            implementation("net.sourceforge.tess4j:tess4j:5.11.0")
+            
+            // Coroutines for background OCR processing
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.8.1")
+        }
+    }
+}
+
 plugins {
     kotlin("multiplatform") version "2.0.20"
     id("org.jetbrains.compose") version "1.7.0"

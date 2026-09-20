@@ -8,11 +8,10 @@ plugins {
 repositories {
     google()
     mavenCentral()
-    maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    maven("https://jitpack.io")
 }
 
 kotlin {
-    // Plain JVM target without JavaPlugin collision
     jvm()
     androidTarget()
 
@@ -50,7 +49,6 @@ android {
         versionName = "1.0.0"
     }
 
-    // Point AGP to your Multiplatform AndroidManifest location
     sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
 
     compileOptions {

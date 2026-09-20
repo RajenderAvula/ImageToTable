@@ -20,19 +20,21 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import com.example.imagetotable.model.TableData
+import com.example.imagetotable.ocr.CellDetector
 import com.example.imagetotable.ocr.OcrTableExtractor
+import com.example.imagetotable.ui.TableOverlayPreview
 import com.example.imagetotable.util.ClipboardManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
+import java.awt.image.BufferedImage
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 
 fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
-        title = "ImageToTable - Tesseract OCR Editor"
+        title = "ImageToTable - Visual Grid Verification"
     ) {
         val coroutineScope = rememberCoroutineScope()
         val tableData = remember {
@@ -45,41 +47,44 @@ fun main() = application {
             )
         }
 
+        var sourceImage by remember { mutableStateOf<BufferedImage?>(null) }
+        var detectedCellMatrix by remember { mutableStateOf<List<List<CellDetector.CellBox>>>(emptyList()) }
         var selectedCell by remember { mutableStateOf<Pair<Int, Int>?>(Pair(0, 0)) }
         var statusMessage by remember { mutableStateOf("Ready") }
         var isProcessing by remember { mutableStateOf(false) }
 
         Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-            // Action Toolbar
+            // Top Toolbar
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // OCR Image Loader
                 Button(
                     onClick = {
                         val fileChooser = JFileChooser().apply {
                             dialogTitle = "Select Table Image"
                             fileFilter = FileNameExtensionFilter(
-                                "Images (*.png, *.jpg, *.jpeg, *.tiff, *.bmp)",
-                                "png", "jpg", "jpeg", "tiff", "bmp"
+                                "Image Files (*.png, *.jpg, *.jpeg, *.bmp)",
+                                "png", "jpg", "jpeg", "bmp"
                             )
                         }
                         if (fileChooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
                             val selectedFile = fileChooser.selectedFile
                             isProcessing = true
-                            statusMessage = "Running OCR extraction..."
+                            statusMessage = "Analyzing image and grid lines..."
 
                             coroutineScope.launch {
                                 try {
-                                    val extracted = withContext(Dispatchers.IO) {
+                                    val result = withContext(Dispatchers.IO) {
                                         OcrTableExtractor.extractTableFromImage(selectedFile)
                                     }
-                                    tableData.loadExtractedData(extracted.headers, extracted.rows)
-                                    statusMessage = "Loaded ${extracted.rows.size} rows from ${selectedFile.name}"
+                                    sourceImage = result.originalImage
+                                    detectedCellMatrix = result.cellMatrix
+                                    tableData.loadExtractedData(result.headers, result.rows)
+                                    statusMessage = "Detected ${result.cellMatrix.flatten().size} cells in ${selectedFile.name}"
                                 } catch (e: Exception) {
-                                    statusMessage = "OCR Error: ${e.message}"
+                                    statusMessage = "Error: ${e.message}"
                                 } finally {
                                     isProcessing = false
                                 }
@@ -98,161 +103,155 @@ fun main() = application {
                     ClipboardManager.copyText(tableData.toTsvString())
                     statusMessage = "Table copied as TSV!"
                 }) {
-                    Text("Copy All")
-                }
-
-                Button(onClick = {
-                    val clip = ClipboardManager.readClipboardText()
-                    if (!clip.isNullOrBlank()) {
-                        val (r, c) = selectedCell ?: Pair(0, 0)
-                        tableData.pasteTsvData(clip, r, c)
-                        statusMessage = "Pasted at cell ($r, $c)"
-                    } else {
-                        statusMessage = "Clipboard is empty"
-                    }
-                }) {
-                    Text("Paste at Selection")
+                    Text("Copy TSV")
                 }
 
                 Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    text = statusMessage,
-                    style = TextStyle(fontSize = 12.sp, color = Color.DarkGray)
-                )
+                Text(text = statusMessage, style = TextStyle(fontSize = 12.sp, color = Color.DarkGray))
             }
 
             if (isProcessing) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
-            } else {
-                Divider()
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
             }
 
-            // Headers with Sideways Controls
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFFE8EEF5))
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(modifier = Modifier.width(90.dp).padding(4.dp)) {
-                    Text("Actions", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            // Split View: Image Overlay Preview (Left) and Editable Table Grid (Right)
+            Row(modifier = Modifier.fillMaxSize().weight(1f)) {
+                // Left Panel: Image + Bounding Box Canvas
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .border(1.dp, Color.LightGray)
+                ) {
+                    TableOverlayPreview(
+                        image = sourceImage,
+                        cellMatrix = detectedCellMatrix,
+                        selectedCell = selectedCell,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
 
-                tableData.headers.forEachIndexed { colIdx, headerText ->
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .border(0.5.dp, Color.LightGray)
-                            .padding(4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        BasicTextField(
-                            value = headerText,
-                            onValueChange = { tableData.headers[colIdx] = it },
-                            textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        )
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                            modifier = Modifier.padding(top = 2.dp)
-                        ) {
-                            Text(
-                                text = "◀",
-                                modifier = Modifier
-                                    .clickable(enabled = colIdx > 0) {
-                                        tableData.moveColumn(colIdx, colIdx - 1)
-                                    }
-                                    .padding(2.dp),
-                                color = if (colIdx > 0) Color.Black else Color.Gray,
-                                fontSize = 11.sp
-                            )
-                            Text(
-                                text = "▶",
-                                modifier = Modifier
-                                    .clickable(enabled = colIdx < tableData.headers.size - 1) {
-                                        tableData.moveColumn(colIdx, colIdx + 1)
-                                    }
-                                    .padding(2.dp),
-                                color = if (colIdx < tableData.headers.size - 1) Color.Black else Color.Gray,
-                                fontSize = 11.sp
-                            )
-                            Text(
-                                text = "✕",
-                                modifier = Modifier
-                                    .clickable { tableData.deleteColumn(colIdx) }
-                                    .padding(2.dp),
-                                color = Color.Red,
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
-                }
-            }
+                Spacer(modifier = Modifier.width(12.dp))
 
-            // Data Rows with Vertical Controls
-            LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                itemsIndexed(tableData.rows) { rowIdx, rowData ->
+                // Right Panel: Editable Table Grid
+                Column(
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .fillMaxHeight()
+                        .border(1.dp, Color.LightGray)
+                ) {
+                    // Headers
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(0.5.dp, Color(0xFFE0E0E0)),
+                            .background(Color(0xFFE8EEF5))
+                            .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.width(90.dp).padding(4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "▲",
-                                modifier = Modifier
-                                    .clickable(enabled = rowIdx > 0) {
-                                        tableData.moveRow(rowIdx, rowIdx - 1)
-                                    }
-                                    .padding(2.dp),
-                                color = if (rowIdx > 0) Color.Black else Color.Gray,
-                                fontSize = 11.sp
-                            )
-                            Text(
-                                text = "▼",
-                                modifier = Modifier
-                                    .clickable(enabled = rowIdx < tableData.rows.size - 1) {
-                                        tableData.moveRow(rowIdx, rowIdx + 1)
-                                    }
-                                    .padding(2.dp),
-                                color = if (rowIdx < tableData.rows.size - 1) Color.Black else Color.Gray,
-                                fontSize = 11.sp
-                            )
-                            Text(
-                                text = "✕",
-                                modifier = Modifier
-                                    .clickable { tableData.deleteRow(rowIdx) }
-                                    .padding(2.dp),
-                                color = Color.Red,
-                                fontSize = 11.sp
-                            )
-                            Text("#${rowIdx + 1}", fontSize = 11.sp, color = Color.Gray)
+                        Box(modifier = Modifier.width(85.dp).padding(4.dp)) {
+                            Text("Actions", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
-
-                        rowData.forEachIndexed { colIdx, cellValue ->
-                            val isSelected = selectedCell == Pair(rowIdx, colIdx)
-                            Box(
+                        tableData.headers.forEachIndexed { colIdx, headerText ->
+                            Column(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .border(
-                                        width = if (isSelected) 1.5.dp else 0.5.dp,
-                                        color = if (isSelected) Color(0xFF1E88E5) else Color.LightGray
-                                    )
-                                    .background(if (isSelected) Color(0xFFE3F2FD) else Color.White)
-                                    .clickable { selectedCell = Pair(rowIdx, colIdx) }
-                                    .padding(8.dp)
+                                    .border(0.5.dp, Color.LightGray)
+                                    .padding(4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 BasicTextField(
-                                    value = cellValue,
-                                    onValueChange = { tableData.updateCell(rowIdx, colIdx, it) },
-                                    textStyle = TextStyle(fontSize = 13.sp),
-                                    modifier = Modifier.fillMaxWidth()
+                                    value = headerText,
+                                    onValueChange = { tableData.headers[colIdx] = it },
+                                    textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 )
+                                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = "◀",
+                                        modifier = Modifier.clickable(enabled = colIdx > 0) {
+                                            tableData.moveColumn(colIdx, colIdx - 1)
+                                        }.padding(2.dp),
+                                        fontSize = 10.sp
+                                    )
+                                    Text(
+                                        text = "▶",
+                                        modifier = Modifier.clickable(enabled = colIdx < tableData.headers.size - 1) {
+                                            tableData.moveColumn(colIdx, colIdx + 1)
+                                        }.padding(2.dp),
+                                        fontSize = 10.sp
+                                    )
+                                    Text(
+                                        text = "✕",
+                                        modifier = Modifier.clickable { tableData.deleteColumn(colIdx) }.padding(2.dp),
+                                        color = Color.Red,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Rows
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        itemsIndexed(tableData.rows) { rowIdx, rowData ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(0.5.dp, Color(0xFFEEEEEE)),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.width(85.dp).padding(4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "▲",
+                                        modifier = Modifier.clickable(enabled = rowIdx > 0) {
+                                            tableData.moveRow(rowIdx, rowIdx - 1)
+                                        }.padding(2.dp),
+                                        fontSize = 10.sp
+                                    )
+                                    Text(
+                                        text = "▼",
+                                        modifier = Modifier.clickable(enabled = rowIdx < tableData.rows.size - 1) {
+                                            tableData.moveRow(rowIdx, rowIdx + 1)
+                                        }.padding(2.dp),
+                                        fontSize = 10.sp
+                                    )
+                                    Text(
+                                        text = "✕",
+                                        modifier = Modifier.clickable { tableData.deleteRow(rowIdx) }.padding(2.dp),
+                                        color = Color.Red,
+                                        fontSize = 10.sp
+                                    )
+                                    Text("#${rowIdx + 1}", fontSize = 10.sp, color = Color.Gray)
+                                }
+
+                                rowData.forEachIndexed { colIdx, cellValue ->
+                                    // Row 0 in TableData maps to row index 1 in cellMatrix if row 0 was used as headers
+                                    val isSelected = selectedCell == Pair(rowIdx + 1, colIdx)
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .border(
+                                                width = if (isSelected) 1.5.dp else 0.5.dp,
+                                                color = if (isSelected) Color(0xFF1E88E5) else Color.LightGray
+                                            )
+                                            .background(if (isSelected) Color(0xFFE3F2FD) else Color.White)
+                                            .clickable {
+                                                // Link selection directly to cellMatrix index
+                                                selectedCell = Pair(rowIdx + 1, colIdx)
+                                            }
+                                            .padding(6.dp)
+                                    ) {
+                                        BasicTextField(
+                                            value = cellValue,
+                                            onValueChange = { tableData.updateCell(rowIdx, colIdx, it) },
+                                            textStyle = TextStyle(fontSize = 12.sp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

@@ -1,0 +1,5 @@
+# Navigate to your assets folder
+cd src/androidMain/assets/tessdata/
+
+# Download the real binary trained data file
+curl -L -O https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata

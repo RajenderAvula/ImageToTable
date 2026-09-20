@@ -6,13 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
 import androidx.compose.material.Text
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,6 +15,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -41,13 +37,12 @@ fun TableOverlayPreview(
     cellMatrix: List<List<CellDetector.CellBox>>,
     selectedCell: Pair<Int, Int>?,
     onCellClick: (rowIndex: Int, colIndex: Int) -> Unit,
+    onBoxResized: (rowIndex: Int, colIndex: Int, updatedBox: CellDetector.CellBox) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (image == null) {
         Box(
-            modifier = modifier
-                .background(Color(0xFF202020))
-                .fillMaxSize(),
+            modifier = modifier.background(Color(0xFF202020)).fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
             Text("No Image Loaded", color = Color.Gray, fontSize = 14.sp)
@@ -57,16 +52,19 @@ fun TableOverlayPreview(
 
     val imageBitmap = remember(image) { image.toComposeImageBitmap() }
 
-    // Transformation States
     var zoom by remember(image) { mutableStateOf(1.0f) }
     var pan by remember(image) { mutableStateOf(Offset.Zero) }
+
+    // Active drag tracking
+    var activeHandle by remember { mutableStateOf(ResizeHandle.NONE) }
+    var dragCellIndices by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     Box(modifier = modifier.fillMaxSize().clipToBounds()) {
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xFF1E1E1E))
-                .pointerInput(image, cellMatrix, zoom, pan) {
+                .pointerInput(image, cellMatrix, selectedCell, zoom, pan) {
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Main)
@@ -78,29 +76,83 @@ fun TableOverlayPreview(
                             if (imgW <= 0f || imgH <= 0f) continue
 
                             val center = Offset(canvasW / 2f, canvasH / 2f)
+                            val baseScale = min(canvasW / imgW, canvasH / imgH)
+                            val baseOffsetX = (canvasW - imgW * baseScale) / 2f
+                            val baseOffsetY = (canvasH - imgH * baseScale) / 2f
+
+                            fun screenToImg(screenPos: Offset): Offset {
+                                val baseX = center.x + (screenPos.x - center.x - pan.x) / zoom
+                                val baseY = center.y + (screenPos.y - center.y - pan.y) / zoom
+                                return Offset(
+                                    (baseX - baseOffsetX) / baseScale,
+                                    (baseY - baseOffsetY) / baseScale
+                                )
+                            }
+
+                            fun imgToScreen(imgPos: Offset): Offset {
+                                val baseX = baseOffsetX + imgPos.x * baseScale
+                                val baseY = baseOffsetY + imgPos.y * baseScale
+                                return Offset(
+                                    center.x + pan.x + (baseX - center.x) * zoom,
+                                    center.y + pan.y + (baseY - center.y) * zoom
+                                )
+                            }
 
                             when (event.type) {
-                                // 1. Scroll Wheel -> Zoom at mouse cursor
+                                // 1. Scroll-Wheel Zoom
                                 PointerEventType.Scroll -> {
                                     val change = event.changes.firstOrNull() ?: continue
                                     val scrollDelta = change.scrollDelta.y
                                     val cursor = change.position
-
                                     val zoomFactor = if (scrollDelta < 0) 1.15f else (1f / 1.15f)
                                     val newZoom = (zoom * zoomFactor).coerceIn(0.2f, 25.0f)
 
-                                    // Adjust pan so the point under the cursor stays fixed
-                                    val newPan = pan + (cursor - center - pan) * (1f - newZoom / zoom)
+                                    pan += (cursor - center - pan) * (1f - newZoom / zoom)
                                     zoom = newZoom
-                                    pan = newPan
                                     change.consume()
                                 }
 
-                                // 2. Mouse Press -> Distinguish between Pan Drag and Tap Selection
+                                // 2. Pointer Down -> Handle detection vs Pan vs Cell Select
                                 PointerEventType.Press -> {
                                     val downPos = event.changes.first().position
                                     var lastPos = downPos
-                                    var totalDragDistance = 0f
+                                    var totalDrag = 0f
+
+                                    // Check if pointer hit a resize handle on the selected cell
+                                    var hitHandle = ResizeHandle.NONE
+                                    val activeIndices = selectedCell
+
+                                    if (activeIndices != null) {
+                                        val (r, c) = activeIndices
+                                        val box = cellMatrix.getOrNull(r)?.getOrNull(c)?.rect
+                                        if (box != null) {
+                                            val tl = imgToScreen(Offset(box.x.toFloat(), box.y.toFloat()))
+                                            val br = imgToScreen(Offset((box.x + box.width).toFloat(), (box.y + box.height).toFloat()))
+                                            val tr = Offset(br.x, tl.y)
+                                            val bl = Offset(tl.x, br.y)
+                                            val midT = Offset((tl.x + br.x) / 2f, tl.y)
+                                            val midB = Offset((tl.x + br.x) / 2f, br.y)
+                                            val midL = Offset(tl.x, (tl.y + br.y) / 2f)
+                                            val midR = Offset(br.x, (tl.y + br.y) / 2f)
+
+                                            val handleRadius = 12f // Hit threshold in screen pixels
+
+                                            hitHandle = when {
+                                                (downPos - tl).getDistance() <= handleRadius -> ResizeHandle.TOP_LEFT
+                                                (downPos - tr).getDistance() <= handleRadius -> ResizeHandle.TOP_RIGHT
+                                                (downPos - bl).getDistance() <= handleRadius -> ResizeHandle.BOTTOM_LEFT
+                                                (downPos - br).getDistance() <= handleRadius -> ResizeHandle.BOTTOM_RIGHT
+                                                (downPos - midT).getDistance() <= handleRadius -> ResizeHandle.TOP
+                                                (downPos - midB).getDistance() <= handleRadius -> ResizeHandle.BOTTOM
+                                                (downPos - midL).getDistance() <= handleRadius -> ResizeHandle.LEFT
+                                                (downPos - midR).getDistance() <= handleRadius -> ResizeHandle.RIGHT
+                                                else -> ResizeHandle.NONE
+                                            }
+                                        }
+                                    }
+
+                                    activeHandle = hitHandle
+                                    dragCellIndices = activeIndices
 
                                     while (true) {
                                         val subEvent = awaitPointerEvent(PointerEventPass.Main)
@@ -108,38 +160,88 @@ fun TableOverlayPreview(
                                             val currentPos = subEvent.changes.first().position
                                             val delta = currentPos - lastPos
                                             lastPos = currentPos
-                                            totalDragDistance += delta.getDistance()
+                                            totalDrag += delta.getDistance()
 
-                                            // Pan the canvas
-                                            pan += delta
+                                            if (activeHandle != ResizeHandle.NONE && dragCellIndices != null) {
+                                                // Convert screen delta to image pixel delta
+                                                val deltaImgX = (delta.x / (baseScale * zoom)).roundToInt()
+                                                val deltaImgY = (delta.y / (baseScale * zoom)).roundToInt()
+
+                                                val (r, c) = dragCellIndices!!
+                                                val targetCell = cellMatrix[r][c]
+                                                val b = targetCell.rect
+
+                                                var newX = b.x
+                                                var newY = b.y
+                                                var newW = b.width
+                                                var newH = b.height
+
+                                                when (activeHandle) {
+                                                    ResizeHandle.LEFT -> {
+                                                        newX += deltaImgX
+                                                        newW -= deltaImgX
+                                                    }
+                                                    ResizeHandle.RIGHT -> {
+                                                        newW += deltaImgX
+                                                    }
+                                                    ResizeHandle.TOP -> {
+                                                        newY += deltaImgY
+                                                        newH -= deltaImgY
+                                                    }
+                                                    ResizeHandle.BOTTOM -> {
+                                                        newH += deltaImgY
+                                                    }
+                                                    ResizeHandle.TOP_LEFT -> {
+                                                        newX += deltaImgX
+                                                        newW -= deltaImgX
+                                                        newY += deltaImgY
+                                                        newH -= deltaImgY
+                                                    }
+                                                    ResizeHandle.TOP_RIGHT -> {
+                                                        newW += deltaImgX
+                                                        newY += deltaImgY
+                                                        newH -= deltaImgY
+                                                    }
+                                                    ResizeHandle.BOTTOM_LEFT -> {
+                                                        newX += deltaImgX
+                                                        newW -= deltaImgX
+                                                        newH += deltaImgY
+                                                    }
+                                                    ResizeHandle.BOTTOM_RIGHT -> {
+                                                        newW += deltaImgX
+                                                        newH += deltaImgY
+                                                    }
+                                                    ResizeHandle.NONE -> {}
+                                                }
+
+                                                targetCell.updateBounds(newX, newY, newW, newH, image.width, image.height)
+                                            } else {
+                                                // Pan view if not dragging a handle
+                                                pan += delta
+                                            }
                                             subEvent.changes.first().consume()
                                         } else if (subEvent.type == PointerEventType.Release) {
-                                            // Tap detected if user moved less than 5 pixels
-                                            if (totalDragDistance < 5f) {
-                                                val baseScale = min(canvasW / imgW, canvasH / imgH)
-                                                val baseOffsetX = (canvasW - imgW * baseScale) / 2f
-                                                val baseOffsetY = (canvasH - imgH * baseScale) / 2f
-
-                                                // Invert screen coords to image coords
-                                                val baseX = center.x + (downPos.x - center.x - pan.x) / zoom
-                                                val baseY = center.y + (downPos.y - center.y - pan.y) / zoom
-
-                                                val imgX = (baseX - baseOffsetX) / baseScale
-                                                val imgY = (baseY - baseOffsetY) / baseScale
-
-                                                // Hit test against cell boxes
-                                                for ((rowIdx, rowCells) in cellMatrix.withIndex()) {
-                                                    for ((colIdx, cell) in rowCells.withIndex()) {
+                                            if (activeHandle != ResizeHandle.NONE && dragCellIndices != null) {
+                                                // Notify parent that box dimensions finalized
+                                                val (r, c) = dragCellIndices!!
+                                                onBoxResized(r, c, cellMatrix[r][c])
+                                            } else if (totalDrag < 5f) {
+                                                // Tap selection
+                                                val tapImg = screenToImg(downPos)
+                                                for ((r, row) in cellMatrix.withIndex()) {
+                                                    for ((c, cell) in row.withIndex()) {
                                                         val box = cell.rect
-                                                        if (imgX >= box.x && imgX <= (box.x + box.width) &&
-                                                            imgY >= box.y && imgY <= (box.y + box.height)
+                                                        if (tapImg.x >= box.x && tapImg.x <= box.x + box.width &&
+                                                            tapImg.y >= box.y && tapImg.y <= box.y + box.height
                                                         ) {
-                                                            onCellClick(rowIdx, colIdx)
+                                                            onCellClick(r, c)
                                                             break
                                                         }
                                                     }
                                                 }
                                             }
+                                            activeHandle = ResizeHandle.NONE
+                                            dragCellIndices = null
                                             break
                                         }
                                     }
@@ -161,63 +263,94 @@ fun TableOverlayPreview(
             val baseOffsetX = (canvasW - imgW * baseScale) / 2f
             val baseOffsetY = (canvasH - imgH * baseScale) / 2f
 
-            fun imageToScreen(imgX: Float, imgY: Float): Offset {
-                val baseX = baseOffsetX + imgX * baseScale
-                val baseY = baseOffsetY + imgY * baseScale
-                val screenX = center.x + pan.x + (baseX - center.x) * zoom
-                val screenY = center.y + pan.y + (baseY - center.y) * zoom
-                return Offset(screenX, screenY)
+            fun imgToScreen(x: Float, y: Float): Offset {
+                val baseX = baseOffsetX + x * baseScale
+                val baseY = baseOffsetY + y * baseScale
+                return Offset(
+                    center.x + pan.x + (baseX - center.x) * zoom,
+                    center.y + pan.y + (baseY - center.y) * zoom
+                )
             }
 
-            // Draw image scaled and translated
-            val imgTopLeft = imageToScreen(0f, 0f)
-            val renderedW = (imgW * baseScale * zoom).roundToInt().coerceAtLeast(1)
-            val renderedH = (imgH * baseScale * zoom).roundToInt().coerceAtLeast(1)
+            // Draw image
+            val imgTopLeft = imgToScreen(0f, 0f)
+            val renderW = (imgW * baseScale * zoom).roundToInt().coerceAtLeast(1)
+            val renderH = (imgH * baseScale * zoom).roundToInt().coerceAtLeast(1)
 
             drawImage(
                 image = imageBitmap,
                 dstOffset = IntOffset(imgTopLeft.x.roundToInt(), imgTopLeft.y.roundToInt()),
-                dstSize = IntSize(renderedW, renderedH)
+                dstSize = IntSize(renderW, renderH)
             )
 
             // Draw bounding boxes
-            val effectiveStroke = (1.5f * zoom).coerceIn(1f, 4f)
-            val selectedStroke = (3f * zoom).coerceIn(2f, 6f)
+            val strokeW = (1.5f * zoom).coerceIn(1f, 3.5f)
+            val selectedStrokeW = (2.5f * zoom).coerceIn(2f, 5f)
 
-            cellMatrix.forEachIndexed { rowIdx, rowCells ->
-                rowCells.forEachIndexed { colIdx, cell ->
-                    val box = cell.rect
-                    val cellTopLeft = imageToScreen(box.x.toFloat(), box.y.toFloat())
-                    val cellW = box.width * baseScale * zoom
-                    val cellH = box.height * baseScale * zoom
-
-                    val isSelected = selectedCell == Pair(rowIdx, colIdx)
+            cellMatrix.forEachIndexed { r, rowCells ->
+                rowCells.forEachIndexed { c, cell ->
+                    val b = cell.rect
+                    val tl = imgToScreen(b.x.toFloat(), b.y.toFloat())
+                    val w = b.width * baseScale * zoom
+                    val h = b.height * baseScale * zoom
+                    val isSelected = selectedCell == Pair(r, c)
 
                     if (isSelected) {
+                        // Cell interior fill & primary border
                         drawRect(
-                            color = Color(0x662196F3),
-                            topLeft = cellTopLeft,
-                            size = Size(cellW, cellH)
+                            color = Color(0x442196F3),
+                            topLeft = tl,
+                            size = Size(w, h)
                         )
                         drawRect(
                             color = Color(0xFF1E88E5),
-                            topLeft = cellTopLeft,
-                            size = Size(cellW, cellH),
-                            style = Stroke(width = selectedStroke)
+                            topLeft = tl,
+                            size = Size(w, h),
+                            style = Stroke(width = selectedStrokeW)
                         )
+
+                        // Draw 8 Interactive Resize Handles on the selected box
+                        val handleRadius = 5f * zoom.coerceIn(0.8f, 1.8f)
+                        val points = listOf(
+                            tl,                                    // Top-Left
+                            Offset(tl.x + w / 2f, tl.y),          // Top-Mid
+                            Offset(tl.x + w, tl.y),               // Top-Right
+                            Offset(tl.x, tl.y + h / 2f),          // Left-Mid
+                            Offset(tl.x + w, tl.y + h / 2f),      // Right-Mid
+                            Offset(tl.x, tl.y + h),               // Bottom-Left
+                            Offset(tl.x + w / 2f, tl.y + h),      // Bottom-Mid
+                            Offset(tl.x + w, tl.y + h)            // Bottom-Right
+                        )
+
+                        for (pt in points) {
+                            // White interior circle
+                            drawCircle(
+                                color = Color.White,
+                                radius = handleRadius,
+                                center = pt,
+                                style = Fill
+                            )
+                            // Solid blue border around handle
+                            drawCircle(
+                                color = Color(0xFF0D47A1),
+                                radius = handleRadius,
+                                center = pt,
+                                style = Stroke(width = 2f)
+                            )
+                        }
                     } else {
                         drawRect(
                             color = Color(0xFF00E676),
-                            topLeft = cellTopLeft,
-                            size = Size(cellW, cellH),
-                            style = Stroke(width = effectiveStroke)
+                            topLeft = tl,
+                            size = Size(w, h),
+                            style = Stroke(width = strokeW)
                         )
                     }
                 }
             }
         }
 
-        // Floating Zoom / Pan Controls Overlay
+        // Zoom Toolbar
         Row(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -233,21 +366,18 @@ fun TableOverlayPreview(
             ) {
                 Text("-", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
-
             Text(
                 text = "${(zoom * 100).roundToInt()}%",
                 color = Color.White,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(horizontal = 6.dp)
             )
-
             IconButton(
                 onClick = { zoom = (zoom * 1.25f).coerceAtMost(25.0f) },
                 modifier = Modifier.size(28.dp)
             ) {
                 Text("+", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
-
             IconButton(
                 onClick = {
                     zoom = 1.0f

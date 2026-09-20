@@ -13,21 +13,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import java.time.LocalDate
 
 @Composable
 fun RowEditorDialog(
-    rowIndex: Int?, // null = Create New Row, number = Edit Existing Row
+    rowIndex: Int?,
     initialName: String = "",
-    initialDate: String = "",
     headers: List<String>,
     initialValues: List<String> = emptyList(),
     onDismiss: () -> Unit,
-    onSave: (name: String, date: String, values: List<String>) -> Unit,
+    onSave: (name: String, values: List<String>) -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
     var name by remember { mutableStateOf(initialName.ifBlank { "Row New" }) }
-    var date by remember { mutableStateOf(initialDate.ifBlank { LocalDate.now().toString() }) }
     val cellValues = remember {
         mutableStateListOf(*Array(headers.size) { idx -> initialValues.getOrElse(idx) { "" } })
     }
@@ -35,21 +32,21 @@ fun RowEditorDialog(
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f).padding(8.dp),
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.8f).padding(8.dp),
             elevation = 8.dp
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = if (rowIndex != null) "Edit Entry #${rowIndex + 1}" else "New Table Entry",
+                    text = if (rowIndex != null) "Edit Row #${rowIndex + 1}" else "New Row Entry",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF1E88E5)
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Column(
                     modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedTextField(
                         value = name,
@@ -58,15 +55,8 @@ fun RowEditorDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    OutlinedTextField(
-                        value = date,
-                        onValueChange = { date = it },
-                        label = { Text("Assigned Date (YYYY-MM-DD)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
                     Divider(modifier = Modifier.padding(vertical = 4.dp))
-                    Text("Column Values", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text("Column Values", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
 
                     headers.forEachIndexed { colIdx, headerName ->
                         OutlinedTextField(
@@ -78,7 +68,7 @@ fun RowEditorDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -87,7 +77,7 @@ fun RowEditorDialog(
                 ) {
                     if (onDelete != null) {
                         TextButton(onClick = onDelete) {
-                            Text("Delete", color = Color.Red)
+                            Text("Delete Row", color = Color.Red)
                         }
                     } else {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -96,7 +86,7 @@ fun RowEditorDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = onDismiss) { Text("Cancel") }
                         Button(
-                            onClick = { onSave(name, date, cellValues.toList()) },
+                            onClick = { onSave(name, cellValues.toList()) },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
                         ) {
                             Text("Save", color = Color.White)

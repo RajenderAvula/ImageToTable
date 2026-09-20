@@ -67,7 +67,6 @@ fun MobileTableEditorScreen() {
     var statusMessage by remember { mutableStateOf("Ready") }
     var showImagePreview by remember { mutableStateOf(false) }
 
-    // Android Image Picker Launcher
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -85,6 +84,9 @@ fun MobileTableEditorScreen() {
     }
 
     val horizontalScrollState = rememberScrollState()
+
+    // Calculate exact grid width: 90dp action column + 130dp per data column
+    val totalTableWidth = 90.dp + (130.dp * tableData.headers.size)
 
     Scaffold(
         topBar = {
@@ -111,7 +113,7 @@ fun MobileTableEditorScreen() {
                 .padding(paddingValues)
                 .padding(8.dp)
         ) {
-            // Mobile Action Toolbar (Horizontally scrollable for small screens)
+            // Horizontal Toolbar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -156,14 +158,12 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // Status message label
             Text(
                 text = statusMessage,
                 style = TextStyle(fontSize = 11.sp, color = Color.DarkGray),
                 modifier = Modifier.padding(bottom = 6.dp)
             )
 
-            // Optional Image Preview Banner
             if (showImagePreview && selectedBitmap != null) {
                 Card(
                     shape = RoundedCornerShape(8.dp),
@@ -183,17 +183,23 @@ fun MobileTableEditorScreen() {
 
             Divider()
 
-            // Horizontal Scroll Container: Allows arbitrary column expansion on narrow mobile screens
+            // Outer Horizontal Scroll
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .horizontalScroll(horizontalScrollState)
             ) {
-                Column(modifier = Modifier.width(IntrinsicSize.Max)) {
-                    // Table Header Row with Sideways (◀ / ▶) Reorder Controls
+                // Fixed explicit width prevents intrinsic measure crashes
+                Column(
+                    modifier = Modifier
+                        .width(totalTableWidth)
+                        .fillMaxHeight()
+                ) {
+                    // Header Row
                     Row(
                         modifier = Modifier
+                            .fillMaxWidth()
                             .background(Color(0xFFE8EEF5))
                             .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -202,7 +208,7 @@ fun MobileTableEditorScreen() {
                             modifier = Modifier.width(90.dp).padding(4.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("Rows", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("Actions", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
 
                         tableData.headers.forEachIndexed { colIdx, headerText ->
@@ -259,15 +265,19 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Vertically Scrollable Rows with Up/Down (▲ / ▼) Reorder Controls
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    // Vertical Lazy List of Rows
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                    ) {
                         itemsIndexed(tableData.rows) { rowIdx, rowData ->
                             Row(
                                 modifier = Modifier
+                                    .fillMaxWidth()
                                     .border(0.5.dp, Color(0xFFE0E0E0)),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Row Controls (▲ Up, ▼ Down, ✕ Delete)
                                 Row(
                                     modifier = Modifier.width(90.dp).padding(4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -304,7 +314,6 @@ fun MobileTableEditorScreen() {
                                     Text("#${rowIdx + 1}", fontSize = 10.sp, color = Color.Gray)
                                 }
 
-                                // Editable Cells
                                 rowData.forEachIndexed { colIdx, cellValue ->
                                     val isSelected = selectedCell == Pair(rowIdx, colIdx)
                                     Box(

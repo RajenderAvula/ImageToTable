@@ -1,5 +1,8 @@
 package com.example.imagetotable
 
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items          // <-- ADD THIS IMPORT
+import androidx.compose.foundation.lazy.itemsIndexed
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri

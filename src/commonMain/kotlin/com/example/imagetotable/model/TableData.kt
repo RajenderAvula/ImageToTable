@@ -46,10 +46,34 @@ class TableData(
         tableDateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
     }
 
-    // --- TRANSPOSE / AXIS FIX (When rows are extracted as columns) ---
+    // --- SNAPSHOT & REVERT (For Save & Cancel) ---
+    fun createSnapshot(): TableData {
+        return TableData(
+            id = this.id,
+            initialName = this.tableName,
+            initialHeaders = this.headers.map { it.copy() },
+            initialRows = this.rows.map { it.toList() },
+            initialRowNames = this.rowNames.toList(),
+            initialDateTime = this.tableDateTime
+        )
+    }
+
+    fun revertToSnapshot(snapshot: TableData) {
+        this.tableName = snapshot.tableName
+        this.tableDateTime = snapshot.tableDateTime
+        this.headers.clear()
+        this.headers.addAll(snapshot.headers.map { it.copy() })
+        this.rowNames.clear()
+        this.rowNames.addAll(snapshot.rowNames)
+        this.rows.clear()
+        snapshot.rows.forEach { r ->
+            this.rows.add(mutableStateListOf(*r.toTypedArray()))
+        }
+    }
+
+    // --- TRANSPOSE / AXIS SWAP ---
     fun transposeTable() {
         if (rows.isEmpty() || headers.isEmpty()) return
-
         val oldColsCount = headers.size
         val oldRowsCount = rows.size
 
@@ -76,10 +100,9 @@ class TableData(
         markUpdated()
     }
 
-    // --- INDIVIDUAL CELL SHIFTING (Independent of rows & columns) ---
+    // --- INDIVIDUAL CELL SHIFTING ---
     fun shiftIndividualCell(r: Int, c: Int, direction: ShiftDirection) {
         if (r !in rows.indices || c !in headers.indices) return
-
         val targetR = when (direction) {
             ShiftDirection.UP -> r - 1
             ShiftDirection.DOWN -> r + 1
@@ -155,25 +178,6 @@ class TableData(
         }
     }
 
-    // --- CREATE SUB-TABLE FROM FILTERED VIEW ---
-    fun createSubTable(
-        newTableName: String,
-        selectedRowIndices: List<Int>,
-        selectedColIndices: List<Int>
-    ): TableData {
-        val subHeaders = selectedColIndices.map { headers[it].copy() }
-        val subRowNames = selectedRowIndices.map { rowNames[it] }
-        val subRows = selectedRowIndices.map { rIdx ->
-            selectedColIndices.map { cIdx -> rows[rIdx][cIdx] }
-        }
-        return TableData(
-            initialName = newTableName,
-            initialHeaders = subHeaders,
-            initialRows = subRows,
-            initialRowNames = subRowNames
-        )
-    }
-
     fun loadExtractedData(newHeaders: List<String>, newRows: List<List<String>>) {
         headers.clear()
         headers.addAll(newHeaders.map { ColumnDef(it, ColumnType.TEXT) })
@@ -186,8 +190,62 @@ class TableData(
         markUpdated()
     }
 
+    fun importCsv(csvContent: String) {
+        val lines = csvContent.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        if (lines.isEmpty()) return
+
+        var dataStartIdx = 0
+        if (lines.first().startsWith("# Title:")) {
+            tableName = lines.first().substringAfter("# Title:").substringBefore("|").trim()
+            dataStartIdx = 1
+        }
+
+        val remainingLines = lines.drop(dataStartIdx)
+        if (remainingLines.isEmpty()) return
+
+        val parsed = remainingLines.map { parseCsvLine(it) }
+        val rawHeaders = parsed.first()
+        val dataLines = if (parsed.size > 1) parsed.drop(1) else emptyList()
+
+        val hasRowTitle = rawHeaders.firstOrNull()?.equals("Row Title", ignoreCase = true) == true
+        val actualHeaders = if (hasRowTitle) rawHeaders.drop(1) else rawHeaders
+
+        headers.clear()
+        headers.addAll(actualHeaders.map { ColumnDef(it, ColumnType.TEXT) })
+        rowNames.clear()
+        rows.clear()
+
+        for ((idx, line) in dataLines.withIndex()) {
+            val rName = if (hasRowTitle) line.getOrElse(0) { "Row ${idx + 1}" } else "Row ${idx + 1}"
+            val cellValues = if (hasRowTitle) line.drop(1) else line
+
+            rowNames.add(rName)
+            val padded = cellValues + List((actualHeaders.size - cellValues.size).coerceAtLeast(0)) { "" }
+            rows.add(mutableStateListOf(*padded.take(actualHeaders.size).toTypedArray()))
+        }
+        markUpdated()
+    }
+
+    private fun parseCsvLine(line: String): List<String> {
+        val result = mutableListOf<String>()
+        val sb = StringBuilder()
+        var inQuotes = false
+        for (ch in line) {
+            when {
+                ch == '\"' -> inQuotes = !inQuotes
+                ch == ',' && !inQuotes -> {
+                    result.add(sb.toString().trim())
+                    sb.clear()
+                }
+                else -> sb.append(ch)
+            }
+        }
+        result.add(sb.toString().trim())
+        return result
+    }
+
     fun toTsvString(): String {
-        val sb = java.lang.StringBuilder()
+        val sb = StringBuilder()
         sb.append("# Title: ").append(tableName).append(" | Date: ").append(tableDateTime).append("\n")
         sb.append("Row Title\t").append(headers.joinToString("\t") { it.name }).append("\n")
         for ((idx, row) in rows.withIndex()) {
@@ -200,7 +258,6 @@ class TableData(
     }
 }
 
-// Global Repository managing multi-table instances across dates
 object TableRepository {
     val tables = mutableStateListOf<TableData>()
 
@@ -213,7 +270,7 @@ object TableRepository {
         }
     }
 
-    fun getTablesForDate(datePrefix: String): List<TableData> {
-        return tables.filter { it.tableDateTime.startsWith(datePrefix) }
+    fun deleteTable(tableId: String) {
+        tables.removeAll { it.id == tableId }
     }
 }

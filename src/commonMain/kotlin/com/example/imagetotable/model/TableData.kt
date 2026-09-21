@@ -1,27 +1,40 @@
 package com.example.imagetotable.model
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.UUID
+
+enum class ColumnType(val label: String) {
+    TEXT("Text"),
+    NUMBER("Whole Number"),
+    DECIMAL("Decimal"),
+    DATE("Date (YYYY-MM-DD)"),
+    TIME("Time (HH:MM)")
+}
+
+data class ColumnDef(
+    var name: String,
+    var type: ColumnType = ColumnType.TEXT
+)
+
+enum class ShiftDirection { UP, DOWN, LEFT, RIGHT }
 
 class TableData(
-    initialHeaders: List<String>,
+    val id: String = UUID.randomUUID().toString(),
+    initialName: String = "Untitled Table",
+    initialHeaders: List<ColumnDef>,
     initialRows: List<List<String>>,
     initialRowNames: List<String>? = null,
     initialDateTime: String? = null
 ) {
-    private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-
-    // The entire table is bound to this date & time
+    var tableName by mutableStateOf(initialName)
     var tableDateTime by mutableStateOf(
-        initialDateTime ?: LocalDateTime.now().format(formatter)
+        initialDateTime ?: LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
     )
 
-    val headers: SnapshotStateList<String> = mutableStateListOf(*initialHeaders.toTypedArray())
+    val headers: SnapshotStateList<ColumnDef> = mutableStateListOf(*initialHeaders.toTypedArray())
     val rowNames: SnapshotStateList<String> = mutableStateListOf(
         *(initialRowNames ?: List(initialRows.size) { "Row ${it + 1}" }).toTypedArray()
     )
@@ -29,174 +42,154 @@ class TableData(
         *initialRows.map { mutableStateListOf(*it.toTypedArray()) }.toTypedArray()
     )
 
-    private fun touchDateTime() {
-        tableDateTime = LocalDateTime.now().format(formatter)
+    fun markUpdated() {
+        tableDateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
     }
 
-    fun setCustomDateTime(customDateTime: String) {
-        tableDateTime = customDateTime
-    }
+    // --- TRANSPOSE / AXIS FIX (When rows are extracted as columns) ---
+    fun transposeTable() {
+        if (rows.isEmpty() || headers.isEmpty()) return
 
-    fun loadExtractedData(newHeaders: List<String>, newRows: List<List<String>>) {
+        val oldColsCount = headers.size
+        val oldRowsCount = rows.size
+
+        val newHeaders = (1..oldRowsCount).map {
+            ColumnDef(rowNames.getOrElse(it - 1) { "Col $it" }, ColumnType.TEXT)
+        }
+        val newRowNames = headers.map { it.name }
+
+        val newGrid = mutableListOf<MutableList<String>>()
+        for (c in 0 until oldColsCount) {
+            val newRow = mutableListOf<String>()
+            for (r in 0 until oldRowsCount) {
+                newRow.add(rows[r].getOrElse(c) { "" })
+            }
+            newGrid.add(newRow)
+        }
+
         headers.clear()
         headers.addAll(newHeaders)
         rowNames.clear()
+        rowNames.addAll(newRowNames)
         rows.clear()
-        for ((idx, r) in newRows.withIndex()) {
-            rowNames.add("Row ${idx + 1}")
-            rows.add(mutableStateListOf(*r.toTypedArray()))
-        }
-        touchDateTime()
+        newGrid.forEach { rows.add(mutableStateListOf(*it.toTypedArray())) }
+        markUpdated()
     }
 
-    fun updateHeader(colIndex: Int, newName: String) {
-        if (colIndex in headers.indices) {
-            headers[colIndex] = newName
-            touchDateTime()
-        }
-    }
+    // --- INDIVIDUAL CELL SHIFTING (Independent of rows & columns) ---
+    fun shiftIndividualCell(r: Int, c: Int, direction: ShiftDirection) {
+        if (r !in rows.indices || c !in headers.indices) return
 
-    fun updateRowName(rowIndex: Int, name: String) {
-        if (rowIndex in rowNames.indices) {
-            rowNames[rowIndex] = name
-            touchDateTime()
+        val targetR = when (direction) {
+            ShiftDirection.UP -> r - 1
+            ShiftDirection.DOWN -> r + 1
+            else -> r
         }
-    }
-
-    fun updateCell(rowIndex: Int, colIndex: Int, value: String) {
-        if (rowIndex in rows.indices && colIndex in headers.indices) {
-            rows[rowIndex][colIndex] = value
-            touchDateTime()
+        val targetC = when (direction) {
+            ShiftDirection.LEFT -> c - 1
+            ShiftDirection.RIGHT -> c + 1
+            else -> c
         }
-    }
 
-    fun updateFullRow(rowIndex: Int, name: String, values: List<String>) {
-        if (rowIndex in rows.indices) {
-            rowNames[rowIndex] = name
-            rows[rowIndex].clear()
-            rows[rowIndex].addAll(values)
-            touchDateTime()
+        if (targetR in rows.indices && targetC in headers.indices) {
+            val temp = rows[r][c]
+            rows[r][c] = rows[targetR][targetC]
+            rows[targetR][targetC] = temp
+            markUpdated()
         }
     }
 
-    fun addManualRow(name: String, values: List<String>) {
-        rowNames.add(name.ifBlank { "Row ${rows.size + 1}" })
-        val paddedValues = values + List((headers.size - values.size).coerceAtLeast(0)) { "" }
-        rows.add(mutableStateListOf(*paddedValues.take(headers.size).toTypedArray()))
-        touchDateTime()
-    }
-
+    // --- ROW & COLUMN MUTATIONS ---
     fun addRow(name: String = "Row ${rows.size + 1}") {
         rowNames.add(name)
         rows.add(mutableStateListOf(*Array(headers.size) { "" }))
-        touchDateTime()
-    }
-
-    fun addColumn(name: String = "Col ${headers.size + 1}") {
-        headers.add(name)
-        for (row in rows) {
-            row.add("")
-        }
-        touchDateTime()
+        markUpdated()
     }
 
     fun deleteRow(index: Int) {
         if (index in rows.indices) {
             rowNames.removeAt(index)
             rows.removeAt(index)
-            touchDateTime()
+            markUpdated()
         }
+    }
+
+    fun moveRow(from: Int, to: Int) {
+        if (from !in rows.indices || to !in rows.indices) return
+        val rName = rowNames.removeAt(from)
+        rowNames.add(to, rName)
+        val rData = rows.removeAt(from)
+        rows.add(to, rData)
+        markUpdated()
+    }
+
+    fun addColumn(name: String, type: ColumnType = ColumnType.TEXT) {
+        headers.add(ColumnDef(name, type))
+        rows.forEach { it.add("") }
+        markUpdated()
     }
 
     fun deleteColumn(index: Int) {
         if (index in headers.indices && headers.size > 1) {
             headers.removeAt(index)
-            for (row in rows) {
-                row.removeAt(index)
-            }
-            touchDateTime()
+            rows.forEach { it.removeAt(index) }
+            markUpdated()
         }
     }
 
-    fun moveColumn(fromIndex: Int, toIndex: Int) {
-        if (fromIndex !in headers.indices || toIndex !in headers.indices) return
-        val header = headers.removeAt(fromIndex)
-        headers.add(toIndex, header)
-        for (row in rows) {
-            val cell = row.removeAt(fromIndex)
-            row.add(toIndex, cell)
+    fun moveColumn(from: Int, to: Int) {
+        if (from !in headers.indices || to !in headers.indices) return
+        val h = headers.removeAt(from)
+        headers.add(to, h)
+        rows.forEach { row ->
+            val cell = row.removeAt(from)
+            row.add(to, cell)
         }
-        touchDateTime()
+        markUpdated()
     }
 
-    fun moveRow(fromIndex: Int, toIndex: Int) {
-        if (fromIndex !in rows.indices || toIndex !in rows.indices) return
-        val name = rowNames.removeAt(fromIndex)
-        rowNames.add(toIndex, name)
-        val row = rows.removeAt(fromIndex)
-        rows.add(toIndex, row)
-        touchDateTime()
+    fun updateCell(r: Int, c: Int, value: String) {
+        if (r in rows.indices && c in headers.indices) {
+            rows[r][c] = value
+            markUpdated()
+        }
     }
 
-    fun importCsv(csvContent: String) {
-        val lines = csvContent.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        if (lines.isEmpty()) return
-
-        var dataStartIdx = 0
-        // Extract table timestamp if stored as metadata on line 1 (# Table Timestamp: ...)
-        if (lines.first().startsWith("# Table Timestamp:")) {
-            tableDateTime = lines.first().removePrefix("# Table Timestamp:").trim()
-            dataStartIdx = 1
+    // --- CREATE SUB-TABLE FROM FILTERED VIEW ---
+    fun createSubTable(
+        newTableName: String,
+        selectedRowIndices: List<Int>,
+        selectedColIndices: List<Int>
+    ): TableData {
+        val subHeaders = selectedColIndices.map { headers[it].copy() }
+        val subRowNames = selectedRowIndices.map { rowNames[it] }
+        val subRows = selectedRowIndices.map { rIdx ->
+            selectedColIndices.map { cIdx -> rows[rIdx][cIdx] }
         }
+        return TableData(
+            initialName = newTableName,
+            initialHeaders = subHeaders,
+            initialRows = subRows,
+            initialRowNames = subRowNames
+        )
+    }
 
-        val remainingLines = lines.drop(dataStartIdx)
-        if (remainingLines.isEmpty()) return
-
-        val parsed = remainingLines.map { parseCsvLine(it) }
-        val rawHeaders = parsed.first()
-        val dataLines = if (parsed.size > 1) parsed.drop(1) else emptyList()
-
-        val hasRowTitle = rawHeaders.firstOrNull()?.equals("Row Title", ignoreCase = true) == true
-        val actualHeaders = if (hasRowTitle) rawHeaders.drop(1) else rawHeaders
-
+    fun loadExtractedData(newHeaders: List<String>, newRows: List<List<String>>) {
         headers.clear()
-        headers.addAll(actualHeaders)
+        headers.addAll(newHeaders.map { ColumnDef(it, ColumnType.TEXT) })
         rowNames.clear()
         rows.clear()
-
-        for ((idx, line) in dataLines.withIndex()) {
-            val rName = if (hasRowTitle) line.getOrElse(0) { "Row ${idx + 1}" } else "Row ${idx + 1}"
-            val cellValues = if (hasRowTitle) line.drop(1) else line
-
-            rowNames.add(rName)
-            val padded = cellValues + List((actualHeaders.size - cellValues.size).coerceAtLeast(0)) { "" }
-            rows.add(mutableStateListOf(*padded.take(actualHeaders.size).toTypedArray()))
+        for ((idx, r) in newRows.withIndex()) {
+            rowNames.add("Row ${idx + 1}")
+            rows.add(mutableStateListOf(*r.toTypedArray()))
         }
-        touchDateTime()
-    }
-
-    private fun parseCsvLine(line: String): List<String> {
-        val result = mutableListOf<String>()
-        val sb = StringBuilder()
-        var inQuotes = false
-        for (ch in line) {
-            when {
-                ch == '\"' -> inQuotes = !inQuotes
-                ch == ',' && !inQuotes -> {
-                    result.add(sb.toString().trim())
-                    sb.clear()
-                }
-                else -> sb.append(ch)
-            }
-        }
-        result.add(sb.toString().trim())
-        return result
+        markUpdated()
     }
 
     fun toTsvString(): String {
-        val sb = StringBuilder()
-        sb.append("# Table Timestamp: ").append(tableDateTime).append("\n")
-        sb.append("Row Title\t").append(headers.joinToString("\t")).append("\n")
+        val sb = java.lang.StringBuilder()
+        sb.append("# Title: ").append(tableName).append(" | Date: ").append(tableDateTime).append("\n")
+        sb.append("Row Title\t").append(headers.joinToString("\t") { it.name }).append("\n")
         for ((idx, row) in rows.withIndex()) {
             sb.append(rowNames.getOrElse(idx) { "Row ${idx + 1}" })
                 .append("\t")
@@ -204,5 +197,23 @@ class TableData(
                 .append("\n")
         }
         return sb.toString()
+    }
+}
+
+// Global Repository managing multi-table instances across dates
+object TableRepository {
+    val tables = mutableStateListOf<TableData>()
+
+    fun saveOrUpdate(table: TableData) {
+        val existingIndex = tables.indexOfFirst { it.id == table.id }
+        if (existingIndex >= 0) {
+            tables[existingIndex] = table
+        } else {
+            tables.add(table)
+        }
+    }
+
+    fun getTablesForDate(datePrefix: String): List<TableData> {
+        return tables.filter { it.tableDateTime.startsWith(datePrefix) }
     }
 }

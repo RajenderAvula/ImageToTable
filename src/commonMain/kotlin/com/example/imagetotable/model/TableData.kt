@@ -21,6 +21,19 @@ data class ColumnDef(
 
 enum class ShiftDirection { UP, DOWN, LEFT, RIGHT }
 
+// --- MULTI-CELL CLIPBOARD MODELS ---
+data class CellOffsetValue(
+    val rowOffset: Int,
+    val colOffset: Int,
+    val value: String
+)
+
+data class CellClipboard(
+    val items: List<CellOffsetValue>,
+    val isCut: Boolean,
+    val sourceCoords: List<Pair<Int, Int>>
+)
+
 class TableData(
     val id: String = UUID.randomUUID().toString(),
     initialName: String = "Untitled Table",
@@ -46,7 +59,107 @@ class TableData(
         tableDateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
     }
 
-    // --- SNAPSHOT & REVERT (For Save & Cancel) ---
+    // --- MULTI-CELL COPY & CUT ---
+    fun copyCells(coords: Collection<Pair<Int, Int>>, isCut: Boolean = false): CellClipboard? {
+        if (coords.isEmpty()) return null
+        val minR = coords.minOf { it.first }
+        val minC = coords.minOf { it.second }
+
+        val items = coords.mapNotNull { (r, c) ->
+            if (r in rows.indices && c in headers.indices) {
+                CellOffsetValue(
+                    rowOffset = r - minR,
+                    colOffset = c - minC,
+                    value = rows[r][c]
+                )
+            } else null
+        }
+        return CellClipboard(items = items, isCut = isCut, sourceCoords = coords.toList())
+    }
+
+    // --- MULTI-CELL PASTE / MOVE TO TARGET ---
+    fun pasteCells(targetRow: Int, targetCol: Int, clipboard: CellClipboard): List<Pair<Int, Int>> {
+        if (clipboard.items.isEmpty()) return emptyList()
+
+        // 1. If this was a Cut / Move, clear the original cells first
+        if (clipboard.isCut) {
+            for ((sr, sc) in clipboard.sourceCoords) {
+                if (sr in rows.indices && sc in headers.indices) {
+                    rows[sr][sc] = ""
+                }
+            }
+        }
+
+        // 2. Ensure table dimensions expand to accommodate the pasted block
+        val maxReqRow = targetRow + (clipboard.items.maxOfOrNull { it.rowOffset } ?: 0)
+        val maxReqCol = targetCol + (clipboard.items.maxOfOrNull { it.colOffset } ?: 0)
+
+        while (headers.size <= maxReqCol) {
+            addColumn("Col ${headers.size + 1}")
+        }
+        while (rows.size <= maxReqRow) {
+            addRow()
+        }
+
+        // 3. Write copied/moved values into the target region
+        val newSelection = mutableListOf<Pair<Int, Int>>()
+        for (item in clipboard.items) {
+            val destR = targetRow + item.rowOffset
+            val destC = targetCol + item.colOffset
+            if (destR in rows.indices && destC in headers.indices) {
+                rows[destR][destC] = item.value
+                newSelection.add(Pair(destR, destC))
+            }
+        }
+        markUpdated()
+        return newSelection
+    }
+
+    // --- BATCH CELL SHIFTING (Up, Down, Left, Right) ---
+    fun shiftCellsBatch(coords: Collection<Pair<Int, Int>>, direction: ShiftDirection): List<Pair<Int, Int>> {
+        if (coords.isEmpty()) return emptyList()
+
+        val dr = when (direction) {
+            ShiftDirection.UP -> -1
+            ShiftDirection.DOWN -> 1
+            else -> 0
+        }
+        val dc = when (direction) {
+            ShiftDirection.LEFT -> -1
+            ShiftDirection.RIGHT -> 1
+            else -> 0
+        }
+
+        // Validate boundary constraints for the entire block
+        val canMove = coords.all { (r, c) ->
+            val nr = r + dr
+            val nc = c + dc
+            nr in rows.indices && nc in headers.indices
+        }
+        if (!canMove) return coords.toList()
+
+        // Extract snapshot of values
+        val snapshot = coords.associateWith { (r, c) -> rows[r][c] }
+
+        // Clear existing coordinates
+        for ((r, c) in coords) {
+            rows[r][c] = ""
+        }
+
+        // Reassign shifted values
+        val newCoords = mutableListOf<Pair<Int, Int>>()
+        for ((orig, value) in snapshot) {
+            val nr = orig.first + dr
+            val nc = orig.second + dc
+            rows[nr][nc] = value
+            newCoords.add(Pair(nr, nc))
+        }
+
+        markUpdated()
+        return newCoords
+    }
+
+    // --- SNAPSHOT BACKUP & REVERT ---
     fun createSnapshot(): TableData {
         return TableData(
             id = this.id,
@@ -71,7 +184,7 @@ class TableData(
         }
     }
 
-    // --- TRANSPOSE / AXIS SWAP ---
+    // --- AXIS TRANSPOSE ---
     fun transposeTable() {
         if (rows.isEmpty() || headers.isEmpty()) return
         val oldColsCount = headers.size
@@ -98,28 +211,6 @@ class TableData(
         rows.clear()
         newGrid.forEach { rows.add(mutableStateListOf(*it.toTypedArray())) }
         markUpdated()
-    }
-
-    // --- INDIVIDUAL CELL SHIFTING ---
-    fun shiftIndividualCell(r: Int, c: Int, direction: ShiftDirection) {
-        if (r !in rows.indices || c !in headers.indices) return
-        val targetR = when (direction) {
-            ShiftDirection.UP -> r - 1
-            ShiftDirection.DOWN -> r + 1
-            else -> r
-        }
-        val targetC = when (direction) {
-            ShiftDirection.LEFT -> c - 1
-            ShiftDirection.RIGHT -> c + 1
-            else -> c
-        }
-
-        if (targetR in rows.indices && targetC in headers.indices) {
-            val temp = rows[r][c]
-            rows[r][c] = rows[targetR][targetC]
-            rows[targetR][targetC] = temp
-            markUpdated()
-        }
     }
 
     // --- ROW & COLUMN MUTATIONS ---
@@ -228,7 +319,7 @@ class TableData(
 
     private fun parseCsvLine(line: String): List<String> {
         val result = mutableListOf<String>()
-        val sb = StringBuilder()
+        val sb = java.lang.StringBuilder()
         var inQuotes = false
         for (ch in line) {
             when {
@@ -245,7 +336,7 @@ class TableData(
     }
 
     fun toTsvString(): String {
-        val sb = StringBuilder()
+        val sb = java.lang.StringBuilder()
         sb.append("# Title: ").append(tableName).append(" | Date: ").append(tableDateTime).append("\n")
         sb.append("Row Title\t").append(headers.joinToString("\t") { it.name }).append("\n")
         for ((idx, row) in rows.withIndex()) {

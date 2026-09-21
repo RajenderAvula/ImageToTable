@@ -1,11 +1,14 @@
 package com.example.imagetotable.ui
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,8 +35,9 @@ fun FullScreenCropperDialog(
     onDismiss: () -> Unit,
     onCropConfirmed: (Bitmap) -> Unit
 ) {
+    var workingBitmap by remember { mutableStateOf(sourceBitmap) }
     var startPoint by remember { mutableStateOf(Offset(80f, 80f)) }
-    var endPoint by remember { mutableStateOf(Offset(400f, 400f)) }
+    var endPoint by remember { mutableStateOf(Offset(420f, 420f)) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var previewCroppedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var showPreviewModal by remember { mutableStateOf(false) }
@@ -46,18 +50,34 @@ fun FullScreenCropperDialog(
         val top = min(startPoint.y, endPoint.y).coerceAtLeast(0f)
         val bottom = max(startPoint.y, endPoint.y).coerceAtMost(containerSize.height.toFloat())
 
-        val scaleX = sourceBitmap.width.toFloat() / containerSize.width
-        val scaleY = sourceBitmap.height.toFloat() / containerSize.height
+        val scaleX = workingBitmap.width.toFloat() / containerSize.width
+        val scaleY = workingBitmap.height.toFloat() / containerSize.height
 
-        val cropX = (left * scaleX).toInt().coerceIn(0, sourceBitmap.width - 1)
-        val cropY = (top * scaleY).toInt().coerceIn(0, sourceBitmap.height - 1)
+        val cropX = (left * scaleX).toInt().coerceIn(0, workingBitmap.width - 1)
+        val cropY = (top * scaleY).toInt().coerceIn(0, workingBitmap.height - 1)
         val cropW = ((right - left) * scaleX).toInt().coerceAtLeast(10)
         val cropH = ((bottom - top) * scaleY).toInt().coerceAtLeast(10)
 
-        val safeW = cropW.coerceAtMost(sourceBitmap.width - cropX)
-        val safeH = cropH.coerceAtMost(sourceBitmap.height - cropY)
+        val safeW = cropW.coerceAtMost(workingBitmap.width - cropX)
+        val safeH = cropH.coerceAtMost(workingBitmap.height - cropY)
 
-        return Bitmap.createBitmap(sourceBitmap, cropX, cropY, safeW, safeH)
+        return Bitmap.createBitmap(workingBitmap, cropX, cropY, safeW, safeH)
+    }
+
+    fun nudge(dx: Float, dy: Float) {
+        startPoint = Offset(startPoint.x + dx, startPoint.y + dy)
+        endPoint = Offset(endPoint.x + dx, endPoint.y + dy)
+    }
+
+    fun resizeBox(delta: Float) {
+        endPoint = Offset(endPoint.x + delta, endPoint.y + delta)
+    }
+
+    fun rotateImage() {
+        val matrix = Matrix().apply { postRotate(90f) }
+        workingBitmap = Bitmap.createBitmap(
+            workingBitmap, 0, 0, workingBitmap.width, workingBitmap.height, matrix, true
+        )
     }
 
     Dialog(
@@ -66,9 +86,9 @@ fun FullScreenCropperDialog(
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // Background Source Image
+                // Background Base Image
                 Image(
-                    bitmap = sourceBitmap.asImageBitmap(),
+                    bitmap = workingBitmap.asImageBitmap(),
                     contentDescription = "Full Screen Crop",
                     modifier = Modifier
                         .fillMaxSize()
@@ -76,7 +96,7 @@ fun FullScreenCropperDialog(
                     contentScale = ContentScale.FillBounds
                 )
 
-                // Drag Canvas Overlay
+                // Drag Canvas
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
@@ -98,15 +118,12 @@ fun FullScreenCropperDialog(
                     val rectWidth = kotlin.math.abs(endPoint.x - startPoint.x)
                     val rectHeight = kotlin.math.abs(endPoint.y - startPoint.y)
 
-                    // Dimmed backdrop
                     drawRect(color = Color.Black.copy(alpha = 0.45f))
-                    // Selected crop area cut out
                     drawRect(
                         color = Color.Transparent,
                         topLeft = Offset(rectLeft, rectTop),
                         size = Size(rectWidth, rectHeight)
                     )
-                    // High-contrast neon bounding border
                     drawRect(
                         color = Color(0xFF00E676),
                         topLeft = Offset(rectLeft, rectTop),
@@ -115,13 +132,53 @@ fun FullScreenCropperDialog(
                     )
                 }
 
-                // Control Bar
+                // Top Precision Nudge & Sizing Toolbar
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.8f))
+                        .horizontalScroll(rememberScrollState())
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Nudge:", color = Color.White, fontSize = 12.sp)
+                    Button(onClick = { nudge(-15f, 0f) }, contentPadding = PaddingValues(4.dp)) { Text("◀") }
+                    Button(onClick = { nudge(15f, 0f) }, contentPadding = PaddingValues(4.dp)) { Text("▶") }
+                    Button(onClick = { nudge(0f, -15f) }, contentPadding = PaddingValues(4.dp)) { Text("▲") }
+                    Button(onClick = { nudge(0f, 15f) }, contentPadding = PaddingValues(4.dp)) { Text("▼") }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Size:", color = Color.White, fontSize = 12.sp)
+                    Button(onClick = { resizeBox(-20f) }, contentPadding = PaddingValues(4.dp)) { Text("−") }
+                    Button(onClick = { resizeBox(20f) }, contentPadding = PaddingValues(4.dp)) { Text("+") }
+
+                    Button(
+                        onClick = { rotateImage() },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100))
+                    ) {
+                        Text("⟳ Rotate 90°", color = Color.White, fontSize = 11.sp)
+                    }
+
+                    Button(
+                        onClick = {
+                            startPoint = Offset(20f, 20f)
+                            endPoint = Offset(containerSize.width.toFloat() - 20f, containerSize.height.toFloat() - 20f)
+                        },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF616161))
+                    ) {
+                        Text("Select All", color = Color.White, fontSize = 11.sp)
+                    }
+                }
+
+                // Bottom Action Bar
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                         .background(Color.Black.copy(alpha = 0.85f))
-                        .padding(16.dp),
+                        .padding(14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -162,7 +219,7 @@ fun FullScreenCropperDialog(
                             Box(modifier = Modifier.fillMaxWidth().height(220.dp)) {
                                 Image(
                                     bitmap = previewCroppedBitmap!!.asImageBitmap(),
-                                    contentDescription = "Preview",
+                                    contentDescription = "Crop Preview",
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -177,7 +234,7 @@ fun FullScreenCropperDialog(
                         },
                         dismissButton = {
                             TextButton(onClick = { showPreviewModal = false }) {
-                                Text("Back to Crop")
+                                Text("Back")
                             }
                         }
                     )

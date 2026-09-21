@@ -21,14 +21,13 @@ object TableExporter {
             color = Color.BLACK
         }
 
-        // Table Metadata Header
         val titlePaint = Paint().apply {
             isAntiAlias = true
             textSize = 14f
             isFakeBoldText = true
             color = Color.rgb(30, 136, 229)
         }
-        canvas.drawText("Extracted Table", 30f, 35f, titlePaint)
+        canvas.drawText(tableData.tableName, 30f, 35f, titlePaint)
 
         val metaPaint = Paint().apply {
             isAntiAlias = true
@@ -42,18 +41,15 @@ object TableExporter {
         val colWidth = ((pageInfo.pageWidth - 60f) / (tableData.headers.size + 1)).coerceAtLeast(60f)
         val rowHeight = 24f
 
-        // Header Background
         paint.color = Color.rgb(232, 238, 245)
         canvas.drawRect(startX, startY, startX + (colWidth * (tableData.headers.size + 1)), startY + rowHeight, paint)
 
-        // Header Text
         textPaint.isFakeBoldText = true
         canvas.drawText("Row Name", startX + 5f, startY + 16f, textPaint)
         tableData.headers.forEachIndexed { idx, h ->
-            canvas.drawText(h.take(12), startX + ((idx + 1) * colWidth) + 5f, startY + 16f, textPaint)
+            canvas.drawText(h.name.take(12), startX + ((idx + 1) * colWidth) + 5f, startY + 16f, textPaint)
         }
 
-        // Rows
         textPaint.isFakeBoldText = false
         paint.style = Paint.Style.STROKE
         paint.color = Color.LTGRAY
@@ -80,8 +76,8 @@ object TableExporter {
 
     fun exportToCsv(tableData: TableData, outputStream: OutputStream) {
         val sb = StringBuilder()
-        sb.append("# Table Timestamp: ${tableData.tableDateTime}\r\n")
-        val allHeaders = listOf("Row Title") + tableData.headers
+        sb.append("# Title: ${tableData.tableName} | Date: ${tableData.tableDateTime}\r\n")
+        val allHeaders = listOf("Row Title") + tableData.headers.map { it.name }
         sb.append(allHeaders.joinToString(",") { escapeCsv(it) }).append("\r\n")
 
         for (rIdx in tableData.rows.indices) {
@@ -95,13 +91,13 @@ object TableExporter {
     fun exportToWordHtmlDoc(tableData: TableData, outputStream: OutputStream) {
         val sb = StringBuilder()
         sb.append("<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'>")
-        sb.append("<head><meta charset='utf-8'><title>Table Export</title></head><body>")
-        sb.append("<h2>Table Export</h2>")
-        sb.append("<p><strong>Bound Date & Time:</strong> ").append(tableData.tableDateTime).append("</p>")
+        sb.append("<head><meta charset='utf-8'><title>${escapeHtml(tableData.tableName)}</title></head><body>")
+        sb.append("<h2>${escapeHtml(tableData.tableName)}</h2>")
+        sb.append("<p><strong>Bound Date & Time:</strong> ${tableData.tableDateTime}</p>")
         sb.append("<table border='1' style='border-collapse:collapse; font-family:sans-serif; width:100%;'>")
         sb.append("<tr style='background-color:#E8EEF5;'><th>Row Title</th>")
         for (h in tableData.headers) {
-            sb.append("<th>").append(escapeHtml(h)).append("</th>")
+            sb.append("<th>").append(escapeHtml(h.name)).append("</th>")
         }
         sb.append("</tr>")
 

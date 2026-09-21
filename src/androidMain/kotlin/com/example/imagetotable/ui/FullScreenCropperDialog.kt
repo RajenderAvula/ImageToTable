@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -123,7 +124,7 @@ fun FullScreenCropperDialog(
                     )
                 }
 
-                // INDEPENDENT EDGE NUDGE CONTROLS
+                // Independent Edge Nudge Controls
                 Card(
                     modifier = Modifier
                         .align(Alignment.TopCenter)

@@ -87,7 +87,7 @@ fun MobileTableEditorScreen() {
     var currentTable by remember { mutableStateOf(initialTable) }
     var tableSnapshot by remember { mutableStateOf(initialTable.createSnapshot()) }
 
-    // --- MULTI-CELL SELECTION & CLIPBOARD STATE ---
+    // Multi-Cell Selection & Clipboard
     var isMultiSelectMode by remember { mutableStateOf(false) }
     val selectedCells = remember { mutableStateListOf<Pair<Int, Int>>(Pair(0, 0)) }
     var anchorCell by remember { mutableStateOf(Pair(0, 0)) }
@@ -97,7 +97,7 @@ fun MobileTableEditorScreen() {
     var isProcessing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Ready") }
 
-    // View Modes & Modals
+    // Screen Modes
     var isFullScreen by remember { mutableStateOf(false) }
     var showComparisonView by remember { mutableStateOf(false) }
     var showCropperDialog by remember { mutableStateOf(false) }
@@ -154,7 +154,6 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // Image Picker
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -215,21 +214,36 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Row Editor Dialog
+    // =========================================================================
+    // ROW EDITOR DIALOG (Supports Table Name, Calendar Picker, & Save All)
+    // =========================================================================
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
         AdvancedRowEditorDialog(
+            initialTableName = currentTable.tableName,
+            initialTableDateTime = currentTable.tableDateTime,
             currentRowIndex = safeIndex,
             totalRows = currentTable.rows.size,
             rowName = currentTable.rowNames.getOrElse(safeIndex) { "" },
             headers = currentTable.headers,
             rowValues = currentTable.rows.getOrElse(safeIndex) { emptyList() },
             onDismiss = { showRowEditorDialog = false },
-            onSaveRow = { name, values ->
-                currentTable.rowNames[safeIndex] = name
+            onSaveRowAndTable = { newName, newDateTime, updatedRowName, updatedValues ->
+                // Update Table metadata
+                currentTable.tableName = newName
+                currentTable.tableDateTime = newDateTime
+                // Update Row data
+                currentTable.rowNames[safeIndex] = updatedRowName
                 currentTable.rows[safeIndex].clear()
-                currentTable.rows[safeIndex].addAll(values)
+                currentTable.rows[safeIndex].addAll(updatedValues)
                 currentTable.markUpdated()
+
+                // Save to repository & refresh snapshot
+                TableRepository.saveOrUpdate(currentTable)
+                tableSnapshot = currentTable.createSnapshot()
+
+                statusMessage = "Saved Row #${safeIndex + 1} and updated '${currentTable.tableName}'!"
+                showRowEditorDialog = false
             },
             onNavigateRow = { target -> editingRowIndex = target },
             onAddNewColumn = { name, type -> currentTable.addColumn(name, type) },
@@ -305,7 +319,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Filter computation
+    // Visible columns & filtered rows
     val visibleColIndices = currentTable.headers.indices.filter { !hiddenColumns.contains(it) }
     val filteredRowIndices = currentTable.rows.indices.filter { rIdx ->
         val globalNameMatch = currentTable.rowNames.getOrElse(rIdx) { "" }.contains(rowSearchQuery, ignoreCase = true)
@@ -361,41 +375,93 @@ fun MobileTableEditorScreen() {
                 .fillMaxSize()
                 .padding(if (isFullScreen) 4.dp else paddingValues.calculateBottomPadding() + 4.dp)
         ) {
-            // Full Screen Top Banner
+            // =========================================================================
+            // FULL-SCREEN MODE TOP BAR (Table Name, Calendar Picker, Save & Cancel)
+            // =========================================================================
             if (isFullScreen) {
-                Row(
+                Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    backgroundColor = Color(0xFFE8EEF5),
+                    shape = RoundedCornerShape(6.dp),
+                    elevation = 2.dp
                 ) {
-                    Text(
-                        "${currentTable.tableName} (Full Screen Mode)",
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1E88E5),
-                        fontSize = 13.sp
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Editable Table Name Input in Full Screen
+                        OutlinedTextField(
+                            value = currentTable.tableName,
+                            onValueChange = {
+                                currentTable.tableName = it
+                                currentTable.markUpdated()
+                            },
+                            label = { Text("Table Name (Full Screen)") },
+                            singleLine = true,
+                            textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                            modifier = Modifier.width(200.dp).height(50.dp)
+                        )
+
+                        // Calendar & Time Picker Button in Full Screen
+                        Button(
+                            onClick = {
+                                CalendarPickerUtil.pickDateTime(context) { newDateTime ->
+                                    currentTable.tableDateTime = newDateTime
+                                    currentTable.markUpdated()
+                                    TableRepository.saveOrUpdate(currentTable)
+                                    statusMessage = "Bound table to: $newDateTime"
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                            modifier = Modifier.height(42.dp)
+                        ) {
+                            Text("📅 ${currentTable.tableDateTime.take(16)}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        // Save Table in Full Screen
                         Button(
                             onClick = {
                                 TableRepository.saveOrUpdate(currentTable)
                                 tableSnapshot = currentTable.createSnapshot()
-                                statusMessage = "Saved!"
+                                statusMessage = "Saved table '${currentTable.tableName}'!"
                             },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                            modifier = Modifier.height(42.dp)
                         ) {
-                            Text("Save", color = Color.White, fontSize = 11.sp)
+                            Text("💾 Save", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
+
+                        // Cancel Changes in Full Screen
+                        Button(
+                            onClick = {
+                                currentTable.revertToSnapshot(tableSnapshot)
+                                selectedCells.clear()
+                                selectedCells.add(Pair(0, 0))
+                                statusMessage = "Changes reverted to last saved state."
+                            },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
+                            modifier = Modifier.height(42.dp)
+                        ) {
+                            Text("↩ Cancel", color = Color.White, fontSize = 12.sp)
+                        }
+
+                        // Exit Full Screen Button
                         Button(
                             onClick = { isFullScreen = false },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color.DarkGray)
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color.DarkGray),
+                            modifier = Modifier.height(42.dp)
                         ) {
-                            Text("Exit ✕", color = Color.White, fontSize = 11.sp)
+                            Text("Exit Full Screen ✕", color = Color.White, fontSize = 11.sp)
                         }
                     }
                 }
             }
 
-            // Normal Screen Menus & Table Actions
+            // Normal Screen Menu Bar
             if (!isFullScreen) {
                 Row(
                     modifier = Modifier
@@ -495,210 +561,161 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // ==========================================
-            // MULTI-CELL SELECTION & MOVE / COPY CONTROL BAR
-            // ==========================================
+            // Multi-Cell Selection Bar
             Card(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                 backgroundColor = if (isMultiSelectMode) Color(0xFFF3E5F5) else Color(0xFFF0F4F8),
                 shape = RoundedCornerShape(6.dp),
-                elevation = 2.dp
+                elevation = 1.dp
             ) {
-                Column(modifier = Modifier.padding(6.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = { isMultiSelectMode = !isMultiSelectMode },
+                        colors = ButtonDefaults.buttonColors(
+                            backgroundColor = if (isMultiSelectMode) Color(0xFF7B1FA2) else Color(0xFF546E7A)
+                        )
                     ) {
-                        // Multi-Select Mode Toggle
-                        Button(
-                            onClick = { isMultiSelectMode = !isMultiSelectMode },
-                            colors = ButtonDefaults.buttonColors(
-                                backgroundColor = if (isMultiSelectMode) Color(0xFF7B1FA2) else Color(0xFF546E7A)
-                            )
-                        ) {
-                            Text(
-                                text = if (isMultiSelectMode) "✓ Multi-Select ON (${selectedCells.size})" else "☐ Multi-Select OFF",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        // COPY SELECTED CELLS
-                        Button(
-                            onClick = {
-                                cellClipboard = currentTable.copyCells(selectedCells, isCut = false)
-                                statusMessage = "Copied ${selectedCells.size} cell(s)!"
-                            },
-                            enabled = selectedCells.isNotEmpty(),
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1E88E5))
-                        ) {
-                            Text("📋 Copy", color = Color.White, fontSize = 11.sp)
-                        }
-
-                        // CUT / MOVE SELECTED CELLS
-                        Button(
-                            onClick = {
-                                cellClipboard = currentTable.copyCells(selectedCells, isCut = true)
-                                statusMessage = "Cut ${selectedCells.size} cell(s). Select target & tap Paste!"
-                            },
-                            enabled = selectedCells.isNotEmpty(),
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315))
-                        ) {
-                            Text("✂ Cut / Move", color = Color.White, fontSize = 11.sp)
-                        }
-
-                        // PASTE / MOVE TO TARGET
-                        Button(
-                            onClick = {
-                                cellClipboard?.let { clip ->
-                                    val (targetR, targetC) = anchorCell
-                                    val newSelected = currentTable.pasteCells(targetR, targetC, clip)
-                                    selectedCells.clear()
-                                    selectedCells.addAll(newSelected)
-                                    statusMessage = if (clip.isCut) {
-                                        "Moved ${newSelected.size} cell(s) to ($targetR, $targetC)!"
-                                    } else {
-                                        "Pasted ${newSelected.size} cell(s) to ($targetR, $targetC)!"
-                                    }
-                                    if (clip.isCut) cellClipboard = null // Consume cut clipboard
-                                }
-                            },
-                            enabled = cellClipboard != null,
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
-                        ) {
-                            Text(
-                                text = if (cellClipboard?.isCut == true) "📌 Move Here" else "📌 Paste Here",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        // SELECT ALL
-                        OutlinedButton(
-                            onClick = {
-                                selectedCells.clear()
-                                for (r in currentTable.rows.indices) {
-                                    for (c in currentTable.headers.indices) {
-                                        selectedCells.add(Pair(r, c))
-                                    }
-                                }
-                                isMultiSelectMode = true
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Text("All", fontSize = 11.sp)
-                        }
-
-                        // DESELECT
-                        OutlinedButton(
-                            onClick = {
-                                selectedCells.clear()
-                                selectedCells.add(anchorCell)
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Text("Clear", fontSize = 11.sp)
-                        }
-
-                        // BATCH DIRECTIONAL SHIFT FOR ALL SELECTED CELLS
-                        Text("Shift Selection:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        Button(
-                            onClick = {
-                                val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.LEFT)
-                                selectedCells.clear()
-                                selectedCells.addAll(updated)
-                            },
-                            enabled = selectedCells.isNotEmpty(),
-                            modifier = Modifier.size(width = 36.dp, height = 32.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text("◀", fontSize = 12.sp) }
-
-                        Button(
-                            onClick = {
-                                val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.RIGHT)
-                                selectedCells.clear()
-                                selectedCells.addAll(updated)
-                            },
-                            enabled = selectedCells.isNotEmpty(),
-                            modifier = Modifier.size(width = 36.dp, height = 32.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text("▶", fontSize = 12.sp) }
-
-                        Button(
-                            onClick = {
-                                val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.UP)
-                                selectedCells.clear()
-                                selectedCells.addAll(updated)
-                            },
-                            enabled = selectedCells.isNotEmpty(),
-                            modifier = Modifier.size(width = 36.dp, height = 32.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text("▲", fontSize = 12.sp) }
-
-                        Button(
-                            onClick = {
-                                val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.DOWN)
-                                selectedCells.clear()
-                                selectedCells.addAll(updated)
-                            },
-                            enabled = selectedCells.isNotEmpty(),
-                            modifier = Modifier.size(width = 36.dp, height = 32.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text("▼", fontSize = 12.sp) }
+                        Text(
+                            text = if (isMultiSelectMode) "✓ Multi-Select ON (${selectedCells.size})" else "☐ Multi-Select OFF",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
+
+                    Button(
+                        onClick = {
+                            cellClipboard = currentTable.copyCells(selectedCells, isCut = false)
+                            statusMessage = "Copied ${selectedCells.size} cell(s)!"
+                        },
+                        enabled = selectedCells.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1E88E5))
+                    ) {
+                        Text("📋 Copy", color = Color.White, fontSize = 11.sp)
+                    }
+
+                    Button(
+                        onClick = {
+                            cellClipboard = currentTable.copyCells(selectedCells, isCut = true)
+                            statusMessage = "Cut ${selectedCells.size} cell(s). Select target & tap Move Here!"
+                        },
+                        enabled = selectedCells.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315))
+                    ) {
+                        Text("✂ Cut / Move", color = Color.White, fontSize = 11.sp)
+                    }
+
+                    Button(
+                        onClick = {
+                            cellClipboard?.let { clip ->
+                                val (targetR, targetC) = anchorCell
+                                val newSelected = currentTable.pasteCells(targetR, targetC, clip)
+                                selectedCells.clear()
+                                selectedCells.addAll(newSelected)
+                                statusMessage = if (clip.isCut) {
+                                    "Moved ${newSelected.size} cell(s) to ($targetR, $targetC)!"
+                                } else {
+                                    "Pasted ${newSelected.size} cell(s) to ($targetR, $targetC)!"
+                                }
+                                if (clip.isCut) cellClipboard = null
+                            }
+                        },
+                        enabled = cellClipboard != null,
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                    ) {
+                        Text(
+                            text = if (cellClipboard?.isCut == true) "📌 Move Here" else "📌 Paste Here",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            selectedCells.clear()
+                            for (r in currentTable.rows.indices) {
+                                for (c in currentTable.headers.indices) {
+                                    selectedCells.add(Pair(r, c))
+                                }
+                            }
+                            isMultiSelectMode = true
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) { Text("All", fontSize = 11.sp) }
+
+                    OutlinedButton(
+                        onClick = {
+                            selectedCells.clear()
+                            selectedCells.add(anchorCell)
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) { Text("Clear", fontSize = 11.sp) }
+
+                    Text("Shift:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Button(
+                        onClick = {
+                            val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.LEFT)
+                            selectedCells.clear()
+                            selectedCells.addAll(updated)
+                        },
+                        enabled = selectedCells.isNotEmpty(),
+                        modifier = Modifier.size(width = 36.dp, height = 30.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) { Text("◀", fontSize = 11.sp) }
+
+                    Button(
+                        onClick = {
+                            val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.RIGHT)
+                            selectedCells.clear()
+                            selectedCells.addAll(updated)
+                        },
+                        enabled = selectedCells.isNotEmpty(),
+                        modifier = Modifier.size(width = 36.dp, height = 30.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) { Text("▶", fontSize = 11.sp) }
+
+                    Button(
+                        onClick = {
+                            val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.UP)
+                            selectedCells.clear()
+                            selectedCells.addAll(updated)
+                        },
+                        enabled = selectedCells.isNotEmpty(),
+                        modifier = Modifier.size(width = 36.dp, height = 30.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) { Text("▲", fontSize = 11.sp) }
+
+                    Button(
+                        onClick = {
+                            val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.DOWN)
+                            selectedCells.clear()
+                            selectedCells.addAll(updated)
+                        },
+                        enabled = selectedCells.isNotEmpty(),
+                        modifier = Modifier.size(width = 36.dp, height = 30.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) { Text("▼", fontSize = 11.sp) }
                 }
             }
 
-            // Global Filter Input
+            // Global Filter Field
             if (!isFullScreen) {
                 OutlinedTextField(
                     value = rowSearchQuery,
                     onValueChange = { rowSearchQuery = it },
                     placeholder = { Text("Filter rows by text...") },
-                    modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 2.dp),
-                    textStyle = TextStyle(fontSize = 13.sp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp).padding(bottom = 2.dp),
+                    textStyle = TextStyle(fontSize = 12.sp),
                     singleLine = true
                 )
-            }
-
-            // Side-by-Side Verification Panel
-            if (showComparisonView && selectedBitmap != null && !isFullScreen) {
-                Card(
-                    modifier = Modifier.fillMaxWidth().height(140.dp).padding(vertical = 4.dp),
-                    elevation = 4.dp,
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(modifier = Modifier.fillMaxSize().padding(4.dp)) {
-                        Column(modifier = Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Source Image", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Image(
-                                bitmap = selectedBitmap!!.asImageBitmap(),
-                                contentDescription = "Original",
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        Divider(modifier = Modifier.fillMaxHeight().width(1.dp).padding(horizontal = 4.dp))
-                        Column(modifier = Modifier.weight(1f).padding(4.dp)) {
-                            Text("Verification Info", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Text("Selected: ${selectedCells.size} cells", fontSize = 11.sp, color = Color(0xFF7B1FA2), fontWeight = FontWeight.Bold)
-                            Text("Anchor Cell: (${anchorCell.first}, ${anchorCell.second})", fontSize = 11.sp)
-                            cellClipboard?.let {
-                                Text(
-                                    if (it.isCut) "✂ ${it.items.size} cells staged for MOVE"
-                                    else "📋 ${it.items.size} cells in COPY buffer",
-                                    fontSize = 11.sp,
-                                    color = if (it.isCut) Color(0xFFD84315) else Color(0xFF1E88E5),
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-                    }
-                }
             }
 
             // Status Bar
@@ -708,7 +725,7 @@ fun MobileTableEditorScreen() {
                     Spacer(modifier = Modifier.width(6.dp))
                 }
                 Text(
-                    text = "${filteredRowIndices.size}/${currentTable.rows.size} rows • Target: (${anchorCell.first}, ${anchorCell.second}) • $statusMessage",
+                    text = "${filteredRowIndices.size}/${currentTable.rows.size} rows • ${currentTable.tableName} (${currentTable.tableDateTime}) • $statusMessage",
                     fontSize = 11.sp,
                     color = Color.DarkGray
                 )
@@ -716,9 +733,9 @@ fun MobileTableEditorScreen() {
 
             Divider()
 
-            // ==========================================
-            // MAIN INTERACTIVE TABLE CANVAS
-            // ==========================================
+            // =========================================================================
+            // MAIN INTERACTIVE TABLE CANVAS (Active in Normal & Full-Screen)
+            // =========================================================================
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -763,25 +780,25 @@ fun MobileTableEditorScreen() {
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(32.dp)
+                                            .size(28.dp)
                                             .clickable(enabled = colIdx > 0) { currentTable.moveColumn(colIdx, colIdx - 1) },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("◀", fontSize = 15.sp, color = if (colIdx > 0) Color.Black else Color.LightGray)
+                                        Text("◀", fontSize = 14.sp, color = if (colIdx > 0) Color.Black else Color.LightGray)
                                     }
                                     Box(
                                         modifier = Modifier
-                                            .size(32.dp)
+                                            .size(28.dp)
                                             .clickable(enabled = colIdx < currentTable.headers.size - 1) { currentTable.moveColumn(colIdx, colIdx + 1) },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("▶", fontSize = 15.sp, color = if (colIdx < currentTable.headers.size - 1) Color.Black else Color.LightGray)
+                                        Text("▶", fontSize = 14.sp, color = if (colIdx < currentTable.headers.size - 1) Color.Black else Color.LightGray)
                                     }
                                     Box(
-                                        modifier = Modifier.size(32.dp).clickable { currentTable.deleteColumn(colIdx) },
+                                        modifier = Modifier.size(28.dp).clickable { currentTable.deleteColumn(colIdx) },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("✕", fontSize = 16.sp, color = Color.Red, fontWeight = FontWeight.Bold)
+                                        Text("✕", fontSize = 15.sp, color = Color.Red, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -823,7 +840,7 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Body Rows with Dynamic Multi-Cell Selection Highlighting
+                    // Body Rows
                     LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         itemsIndexed(filteredRowIndices) { _, origRIdx ->
                             val rowData = currentTable.rows[origRIdx]
@@ -831,7 +848,7 @@ fun MobileTableEditorScreen() {
                                 modifier = Modifier.fillMaxWidth().border(0.5.dp, Color(0xFFE0E0E0)),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Row Actions
+                                // Row Action Panel
                                 Row(
                                     modifier = Modifier
                                         .width(actionColWidth)
@@ -842,23 +859,25 @@ fun MobileTableEditorScreen() {
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(28.dp)
+                                            .size(26.dp)
                                             .clickable(enabled = origRIdx > 0) { currentTable.moveRow(origRIdx, origRIdx - 1) },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("▲", fontSize = 14.sp, color = if (origRIdx > 0) Color.Black else Color.LightGray)
+                                        Text("▲", fontSize = 13.sp, color = if (origRIdx > 0) Color.Black else Color.LightGray)
                                     }
                                     Box(
                                         modifier = Modifier
-                                            .size(28.dp)
+                                            .size(26.dp)
                                             .clickable(enabled = origRIdx < currentTable.rows.size - 1) { currentTable.moveRow(origRIdx, origRIdx + 1) },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("▼", fontSize = 14.sp, color = if (origRIdx < currentTable.rows.size - 1) Color.Black else Color.LightGray)
+                                        Text("▼", fontSize = 13.sp, color = if (origRIdx < currentTable.rows.size - 1) Color.Black else Color.LightGray)
                                     }
+
+                                    // Open Advanced Row Editor (Includes Table Name, Date Picker, Save)
                                     Box(
                                         modifier = Modifier
-                                            .size(28.dp)
+                                            .size(26.dp)
                                             .clickable {
                                                 editingRowIndex = origRIdx
                                                 showRowEditorDialog = true
@@ -867,13 +886,14 @@ fun MobileTableEditorScreen() {
                                     ) {
                                         Text("✎", fontSize = 15.sp, color = Color(0xFF1E88E5), fontWeight = FontWeight.Bold)
                                     }
+
                                     Box(
                                         modifier = Modifier
-                                            .size(28.dp)
+                                            .size(26.dp)
                                             .clickable { currentTable.deleteRow(origRIdx) },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("✕", fontSize = 15.sp, color = Color.Red, fontWeight = FontWeight.Bold)
+                                        Text("✕", fontSize = 14.sp, color = Color.Red, fontWeight = FontWeight.Bold)
                                     }
 
                                     BasicTextField(
@@ -887,7 +907,7 @@ fun MobileTableEditorScreen() {
                                     )
                                 }
 
-                                // Cells
+                                // Interactive Cells
                                 visibleColIndices.forEach { colIdx ->
                                     val cellCoord = Pair(origRIdx, colIdx)
                                     val cellValue = rowData.getOrElse(colIdx) { "" }
@@ -897,15 +917,15 @@ fun MobileTableEditorScreen() {
 
                                     val cellBg = when {
                                         isStagedForCut -> Color(0xFFFFEBEE)
-                                        isSelected && isMultiSelectMode -> Color(0xFFE1BEE7) // Light Purple
-                                        isSelected -> Color(0xFFBBDEFB) // Light Blue
+                                        isSelected && isMultiSelectMode -> Color(0xFFE1BEE7)
+                                        isSelected -> Color(0xFFBBDEFB)
                                         else -> Color.White
                                     }
 
                                     val cellBorderColor = when {
-                                        isAnchor -> Color(0xFF00E676) // Green Anchor Target
-                                        isStagedForCut -> Color(0xFFD32F2F) // Red Cut Outline
-                                        isSelected && isMultiSelectMode -> Color(0xFF7B1FA2) // Deep Purple
+                                        isAnchor -> Color(0xFF00E676)
+                                        isStagedForCut -> Color(0xFFD32F2F)
+                                        isSelected && isMultiSelectMode -> Color(0xFF7B1FA2)
                                         isSelected -> Color(0xFF1976D2)
                                         else -> Color.LightGray
                                     }

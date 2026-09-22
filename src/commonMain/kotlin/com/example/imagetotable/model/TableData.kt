@@ -81,6 +81,23 @@ class TableData(
         markUpdated()
     }
 
+    // --- CLEAR / DELETE CELL VALUES ---
+    fun clearCells(coords: Collection<Pair<Int, Int>>) {
+        for ((r, c) in coords) {
+            setCellValue(r, c, "")
+        }
+        markUpdated()
+    }
+
+    fun clearAllValues() {
+        for (r in rows.indices) {
+            for (c in headers.indices) {
+                rows[r][c] = ""
+            }
+        }
+        markUpdated()
+    }
+
     // --- CREATE NEW TABLE FROM ACTIVE FILTERS ---
     fun createSubTable(
         newTableName: String,
@@ -146,8 +163,10 @@ class TableData(
             newGrid.add(newRow)
         }
 
-        headers.clear(); headers.addAll(newHeaders)
-        rowNames.clear(); rowNames.addAll(newRowNames)
+        headers.clear()
+        headers.addAll(newHeaders)
+        rowNames.clear()
+        rowNames.addAll(newRowNames)
         rows.clear()
         newGrid.forEach { rows.add(mutableStateListOf(*it.toTypedArray())) }
         markUpdated()
@@ -210,7 +229,8 @@ class TableData(
         } else {
             paired.sortedByDescending { it.second.getOrElse(colIndex) { "" } }
         }
-        rowNames.clear(); rows.clear()
+        rowNames.clear()
+        rows.clear()
         sorted.forEach {
             rowNames.add(it.first)
             rows.add(it.second)
@@ -302,8 +322,10 @@ class TableData(
         val hasRowTitle = rawHeaders.firstOrNull()?.equals("Row Title", true) == true
         val actualHeaders = if (hasRowTitle) rawHeaders.drop(1) else rawHeaders
 
-        headers.clear(); headers.addAll(actualHeaders.map { ColumnDef(it) })
-        rowNames.clear(); rows.clear()
+        headers.clear()
+        headers.addAll(actualHeaders.map { ColumnDef(it) })
+        rowNames.clear()
+        rows.clear()
         for ((idx, line) in dataLines.withIndex()) {
             rowNames.add(if (hasRowTitle) line.getOrElse(0) { "Row ${idx + 1}" } else "Row ${idx + 1}")
             val cellVals = if (hasRowTitle) line.drop(1) else line
@@ -329,8 +351,10 @@ class TableData(
         this.tableName = snapshot.tableName
         this.tableDateTime = snapshot.tableDateTime
         this.cornerHeader = snapshot.cornerHeader
-        this.headers.clear(); this.headers.addAll(snapshot.headers.map { it.copy() })
-        this.rowNames.clear(); this.rowNames.addAll(snapshot.rowNames)
+        this.headers.clear()
+        this.headers.addAll(snapshot.headers.map { it.copy() })
+        this.rowNames.clear()
+        this.rowNames.addAll(snapshot.rowNames)
         this.rows.clear()
         snapshot.rows.forEach { r -> this.rows.add(mutableStateListOf(*r.toTypedArray())) }
     }

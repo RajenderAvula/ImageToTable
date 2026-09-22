@@ -330,28 +330,56 @@ fun MobileTableEditorScreen() {
             }
         )
     }
-
-    // 2. Extraction Preview Verification Dialog (Inspect zoomable crop & edit extracted data)
+    // 2. Extraction Preview Verification Dialog
     if (showExtractionPreviewDialog && previewCroppedBitmap != null) {
         ExtractionPreviewDialog(
             croppedBitmap = previewCroppedBitmap!!,
             initialHeaders = pendingExtractedHeaders,
             initialRows = pendingExtractedRows,
             onDismiss = { showExtractionPreviewDialog = false },
-            onConfirmAppend = { verifiedHeaders, verifiedRows ->
-                currentTable.appendExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
+            onConfirmAppend = { verifiedHeaders, verifiedRows, excludeHeaders, excludeRowNames ->
+                if (excludeHeaders) {
+                    val paddedRows = verifiedRows.map { r ->
+                        r + List((currentTable.headers.size - r.size).coerceAtLeast(0)) { "" }
+                    }
+                    val startR = currentTable.rows.size
+                    for ((idx, rData) in paddedRows.withIndex()) {
+                        currentTable.addRow("Row ${startR + idx + 1}")
+                        val targetRowIdx = currentTable.rows.size - 1
+                        rData.take(currentTable.headers.size).forEachIndexed { cIdx, v ->
+                            currentTable.setCellValue(targetRowIdx, cIdx, v)
+                        }
+                    }
+                } else {
+                    currentTable.appendExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
+                }
                 tableSnapshot = currentTable.createSnapshot()
                 showExtractionPreviewDialog = false
                 statusMessage = "Appended ${verifiedRows.size} verified rows to table!"
             },
-            onConfirmReplace = { verifiedHeaders, verifiedRows ->
-                currentTable.loadExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
+            onConfirmReplace = { verifiedHeaders, verifiedRows, excludeHeaders, excludeRowNames ->
+                if (excludeHeaders) {
+                    currentTable.rows.clear()
+                    currentTable.rowNames.clear()
+                    for ((idx, rData) in verifiedRows.withIndex()) {
+                        currentTable.addRow("Row ${idx + 1}")
+                        val targetRowIdx = currentTable.rows.size - 1
+                        rData.take(currentTable.headers.size).forEachIndexed { cIdx, v ->
+                            currentTable.setCellValue(targetRowIdx, cIdx, v)
+                        }
+                    }
+                } else {
+                    currentTable.loadExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
+                }
                 tableSnapshot = currentTable.createSnapshot()
                 showExtractionPreviewDialog = false
                 statusMessage = "Replaced table with ${verifiedRows.size} verified rows!"
             }
         )
     }
+
+    // 2. Extraction Preview Verification Dialog (Inspect zoomable crop & edit extracted data)
+    
 
     // 3. Dedicated Table Editor UI
     if (showDedicatedEditor) {

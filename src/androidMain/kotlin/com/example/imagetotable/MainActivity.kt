@@ -113,7 +113,6 @@ fun MobileTableEditorScreen() {
 
     val detectedWords = remember { mutableStateListOf<String>() }
     val selectedTokens = remember { mutableStateListOf<String>() }
-    var selectedWordText by remember { mutableStateOf("") }
     var isProcessing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Ready") }
 
@@ -133,8 +132,11 @@ fun MobileTableEditorScreen() {
     var showRowEditorDialog by remember { mutableStateOf(false) }
     var editingRowIndex by remember { mutableIntStateOf(0) }
 
-    var showReplaceOrAppendChoice by remember { mutableStateOf(false) }
-    var pendingExtractionPair by remember { mutableStateOf<Pair<List<String>, List<List<String>>>?>(null) }
+    // Extraction Preview Verification State
+    var showExtractionPreviewDialog by remember { mutableStateOf(false) }
+    var previewCroppedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var pendingExtractedHeaders by remember { mutableStateOf<List<ColumnDef>>(emptyList()) }
+    var pendingExtractedRows by remember { mutableStateOf<List<List<String>>>(emptyList()) }
 
     var showExportMenu by remember { mutableStateOf(false) }
     var activeExportFormat by remember { mutableStateOf(ExportFormat.PDF) }
@@ -149,7 +151,6 @@ fun MobileTableEditorScreen() {
     var activeRowDropdownIdx by remember { mutableStateOf<Int?>(null) }
     var drawerSearchQuery by remember { mutableStateOf("") }
 
-    // Column Distinct Value Filter Map: Map<ColumnIndex, Set<String>>
     val columnValueFilters = remember { mutableStateMapOf<Int, MutableSet<String>>() }
 
     fun rotatePreviewImage() {
@@ -243,7 +244,6 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // Launchers
     val csvImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
             try {
@@ -251,8 +251,7 @@ fun MobileTableEditorScreen() {
                     val content = stream.bufferedReader().use { it.readText() }
                     currentTable.importCsv(content)
                     tableSnapshot = currentTable.createSnapshot()
-                    selectedCells.clear()
-                    selectedCells.add(Pair(0, 0))
+                    selectedCells.clear(); selectedCells.add(Pair(0, 0))
                     statusMessage = "Imported CSV successfully!"
                 }
             } catch (e: Exception) {
@@ -289,7 +288,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // 1. Cropper Dialog (Pinch-to-zoom, rotate 90°, mode toggle)
+    // 1. Cropper Dialog (Zoom & pan with arrow controls)
     if (showCropperDialog && selectedBitmap != null) {
         FullScreenCropperDialog(
             sourceBitmap = selectedBitmap!!,
@@ -315,8 +314,11 @@ fun MobileTableEditorScreen() {
                                 h.forEach { detectedWords.add(it) }
                                 r.flatten().filter { it.isNotBlank() }.forEach { detectedWords.add(it) }
 
-                                pendingExtractionPair = Pair(h, r)
-                                showReplaceOrAppendChoice = true
+                                // Open the Pre-Commit Extraction Verification Dialog
+                                previewCroppedBitmap = cropped
+                                pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
+                                pendingExtractedRows = r
+                                showExtractionPreviewDialog = true
                             }
                         }
                     } catch (e: Exception) {
@@ -329,34 +331,24 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 2. Prompt: Replace vs Append Table
-    if (showReplaceOrAppendChoice && pendingExtractionPair != null) {
-        val (h, r) = pendingExtractionPair!!
-        AlertDialog(
-            onDismissRequest = { showReplaceOrAppendChoice = false },
-            title = { Text("Add Extracted Data", fontWeight = FontWeight.Bold) },
-            text = { Text("Parsed ${r.size} rows & ${h.size} columns (side-by-side positioning preserved). Would you like to append these rows to your table or replace the current table?") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        currentTable.appendExtractedData(h, r)
-                        tableSnapshot = currentTable.createSnapshot()
-                        showReplaceOrAppendChoice = false
-                        statusMessage = "Appended ${r.size} rows to current table!"
-                    },
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
-                ) { Text("Append to Table", color = Color.White) }
+    // 2. Extraction Preview Verification Dialog (Inspect zoomable crop & edit extracted data)
+    if (showExtractionPreviewDialog && previewCroppedBitmap != null) {
+        ExtractionPreviewDialog(
+            croppedBitmap = previewCroppedBitmap!!,
+            initialHeaders = pendingExtractedHeaders,
+            initialRows = pendingExtractedRows,
+            onDismiss = { showExtractionPreviewDialog = false },
+            onConfirmAppend = { verifiedHeaders, verifiedRows ->
+                currentTable.appendExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
+                tableSnapshot = currentTable.createSnapshot()
+                showExtractionPreviewDialog = false
+                statusMessage = "Appended ${verifiedRows.size} verified rows to table!"
             },
-            dismissButton = {
-                Button(
-                    onClick = {
-                        currentTable.loadExtractedData(h, r)
-                        tableSnapshot = currentTable.createSnapshot()
-                        showReplaceOrAppendChoice = false
-                        statusMessage = "Replaced table with ${r.size} rows!"
-                    },
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315))
-                ) { Text("Replace Table", color = Color.White) }
+            onConfirmReplace = { verifiedHeaders, verifiedRows ->
+                currentTable.loadExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
+                tableSnapshot = currentTable.createSnapshot()
+                showExtractionPreviewDialog = false
+                statusMessage = "Replaced table with ${verifiedRows.size} verified rows!"
             }
         )
     }
@@ -383,8 +375,7 @@ fun MobileTableEditorScreen() {
                 TableRepository.saveOrUpdate(newTable)
                 currentTable = newTable
                 tableSnapshot = newTable.createSnapshot()
-                selectedCells.clear()
-                selectedCells.add(Pair(0, 0))
+                selectedCells.clear(); selectedCells.add(Pair(0, 0))
                 showNewTableDialog = false
                 statusMessage = "Created table '${newTable.tableName}'!"
             }
@@ -404,9 +395,7 @@ fun MobileTableEditorScreen() {
                             currentTable.setCellValue(tr, tc, w)
                             if (tc < currentTable.headers.size - 1) tc++ else {
                                 if (tr < currentTable.rows.size - 1) { tr++; tc = 0 } else {
-                                    currentTable.addRow()
-                                    tr++
-                                    tc = 0
+                                    currentTable.addRow(); tr++; tc = 0
                                 }
                             }
                         }
@@ -442,7 +431,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 6. Advanced Row Editor Dialog (Preserved from original)
+    // 6. Advanced Row Editor Dialog
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
         AdvancedRowEditorDialog(
@@ -516,8 +505,7 @@ fun MobileTableEditorScreen() {
                         ).also { TableRepository.saveOrUpdate(it) }
                         currentTable = next
                         tableSnapshot = next.createSnapshot()
-                        selectedCells.clear()
-                        selectedCells.add(Pair(0, 0))
+                        selectedCells.clear(); selectedCells.add(Pair(0, 0))
                         showDeleteTableConfirm = false
                         statusMessage = "Table deleted."
                     },
@@ -528,7 +516,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Filter computation (Global Query + Column Specific Value Filters)
+    // Filter computation
     val visibleColIndices = currentTable.headers.indices.filter { !hiddenColumns.contains(it) }
     val filteredRowIndices = currentTable.rows.indices.filter { rIdx ->
         val nameMatch = currentTable.rowNames.getOrElse(rIdx) { "" }.contains(globalSearchQuery, ignoreCase = true)
@@ -663,8 +651,7 @@ fun MobileTableEditorScreen() {
                         Button(
                             onClick = {
                                 currentTable.revertToSnapshot(tableSnapshot)
-                                selectedCells.clear()
-                                selectedCells.add(Pair(0, 0))
+                                selectedCells.clear(); selectedCells.add(Pair(0, 0))
                                 statusMessage = "Reverted!"
                             },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828))
@@ -692,7 +679,7 @@ fun MobileTableEditorScreen() {
                         onClick = { showNewTableDialog = true },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) { Text("+ New Table (Date Bound)", color = Color.White, fontSize = 11.sp) }
+                    ) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
 
                     Button(
                         onClick = {
@@ -704,8 +691,7 @@ fun MobileTableEditorScreen() {
                             TableRepository.saveOrUpdate(subTable)
                             currentTable = subTable
                             tableSnapshot = subTable.createSnapshot()
-                            selectedCells.clear()
-                            selectedCells.add(Pair(0, 0))
+                            selectedCells.clear(); selectedCells.add(Pair(0, 0))
                             statusMessage = "Created new table from filtered view!"
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00ACC1)),
@@ -833,8 +819,7 @@ fun MobileTableEditorScreen() {
                     Button(
                         onClick = {
                             currentTable.revertToSnapshot(tableSnapshot)
-                            selectedCells.clear()
-                            selectedCells.add(Pair(0, 0))
+                            selectedCells.clear(); selectedCells.add(Pair(0, 0))
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
@@ -962,11 +947,9 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // Top Action Buttons inside Image Box
+                        // Floating Action Buttons inside Image Box
                         Row(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(6.dp),
+                            modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Button(
@@ -1043,9 +1026,7 @@ fun MobileTableEditorScreen() {
                                         currentTable.setCellValue(currR, currC, w)
                                         if (currC < currentTable.headers.size - 1) currC++ else {
                                             if (currR < currentTable.rows.size - 1) { currR++; currC = 0 } else {
-                                                currentTable.addRow()
-                                                currR++
-                                                currC = 0
+                                                currentTable.addRow(); currR++; currC = 0
                                             }
                                         }
                                     }
@@ -1210,7 +1191,6 @@ fun MobileTableEditorScreen() {
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) { Text("📌 Paste", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
 
-                    // DELETE / CLEAR SELECTED CELLS
                     Button(
                         onClick = {
                             currentTable.clearCells(selectedCells)
@@ -1220,7 +1200,6 @@ fun MobileTableEditorScreen() {
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) { Text("🗑 Clear Selection", color = Color.White, fontSize = 11.sp) }
 
-                    // CLEAR ALL CELLS
                     OutlinedButton(
                         onClick = { showClearTableConfirm = true },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
@@ -1286,7 +1265,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // UNIFIED PANE 4: MAIN INTERACTIVE TABLE CANVAS WITH INLINE FILTERS
+            // UNIFIED PANE 4: MAIN INTERACTIVE TABLE CANVAS WITH UNIFORM CONTROLS
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -1297,7 +1276,7 @@ fun MobileTableEditorScreen() {
                     }
             ) {
                 Column(modifier = Modifier.width(totalTableWidth).fillMaxHeight()) {
-                    // Header Row
+                    // Uniform Header Row (Rename, Type, Shift, Delete)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1341,7 +1320,7 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // 2. COLUMN HEADERS (-1, colIdx) WITH INLINE VALUE FILTERS
+                        // 2. UNIFORM COLUMN HEADERS (-1, colIdx)
                         visibleColIndices.forEach { colIdx ->
                             val colDef = currentTable.headers[colIdx]
                             val isColSelected = selectedCells.contains(Pair(-1, colIdx))
@@ -1358,6 +1337,7 @@ fun MobileTableEditorScreen() {
                                     .padding(6.dp)
                             ) {
                                 Column {
+                                    // Row 1: Direct Inline Text Rename & Delete
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -1379,92 +1359,46 @@ fun MobileTableEditorScreen() {
                                                 }
                                         )
 
-                                        // INLINE COLUMN DROPDOWN WITH VALUE FILTERS
-                                        Box {
-                                            IconButton(
-                                                onClick = { activeColDropdownIdx = colIdx },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Text(if (hasActiveValueFilter) "▼●" else "▼", fontSize = 11.sp, color = if (hasActiveValueFilter) Color(0xFFE65100) else Color(0xFF1976D2))
+                                        Text(
+                                            "✕",
+                                            color = Color.Red,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) {
+                                                currentTable.deleteColumn(colIdx)
                                             }
-
-                                            DropdownMenu(
-                                                expanded = activeColDropdownIdx == colIdx,
-                                                onDismissRequest = { activeColDropdownIdx = null }
-                                            ) {
-                                                Text("Column: ${colDef.name}", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
-                                                Divider()
-                                                DropdownMenuItem(onClick = {
-                                                    currentTable.sortRowsByColumn(colIdx, ascending = true)
-                                                    activeColDropdownIdx = null
-                                                }) { Text("Sort A ➔ Z") }
-                                                DropdownMenuItem(onClick = {
-                                                    currentTable.sortRowsByColumn(colIdx, ascending = false)
-                                                    activeColDropdownIdx = null
-                                                }) { Text("Sort Z ➔ A") }
-                                                Divider()
-                                                Text("Change Data Type:", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 8.dp))
-                                                ColumnType.values().forEach { cType ->
-                                                    DropdownMenuItem(onClick = {
-                                                        colDef.type = cType
-                                                        activeColDropdownIdx = null
-                                                    }) { Text((if (colDef.type == cType) "● " else "○ ") + cType.label) }
-                                                }
-                                                Divider()
-
-                                                // INLINE VALUE FILTERS
-                                                Text("Filter By Value:", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color(0xFF0D47A1), modifier = Modifier.padding(horizontal = 8.dp))
-                                                val distinctVals = currentTable.rows.map { it.getOrElse(colIdx) { "" } }.distinct().filter { it.isNotBlank() }
-
-                                                DropdownMenuItem(onClick = {
-                                                    columnValueFilters.remove(colIdx)
-                                                    activeColDropdownIdx = null
-                                                }) { Text("Clear Filter (Show All)", color = Color.Red, fontSize = 11.sp) }
-
-                                                distinctVals.forEach { dVal ->
-                                                    val isChecked = columnValueFilters[colIdx]?.contains(dVal) == true
-                                                    DropdownMenuItem(onClick = {
-                                                        val currentSet = columnValueFilters[colIdx] ?: mutableSetOf()
-                                                        if (currentSet.contains(dVal)) {
-                                                            currentSet.remove(dVal)
-                                                            if (currentSet.isEmpty()) columnValueFilters.remove(colIdx)
-                                                        } else {
-                                                            currentSet.add(dVal)
-                                                            columnValueFilters[colIdx] = currentSet
-                                                        }
-                                                    }) {
-                                                        Checkbox(checked = isChecked, onCheckedChange = null)
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text(dVal, fontSize = 12.sp)
-                                                    }
-                                                }
-
-                                                Divider()
-                                                DropdownMenuItem(onClick = {
-                                                    currentTable.deleteColumn(colIdx)
-                                                    activeColDropdownIdx = null
-                                                }) { Text("✕ Delete Column", color = Color.Red) }
-                                            }
-                                        }
+                                        )
                                     }
 
-                                    // Type Badge & Lateral Shift
+                                    // Row 2: Inline Data Type Selector, Lateral Shifts & Filter Dropdown
                                     Row(
                                         modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = "[${colDef.type.label.take(8)}]",
-                                            fontSize = 10.sp,
-                                            color = Color(0xFF0D47A1),
-                                            modifier = Modifier
-                                                .background(Color(0xFFE1F5FE), RoundedCornerShape(3.dp))
-                                                .clickable { activeColDropdownIdx = colIdx }
-                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                        )
+                                        var typeExpanded by remember { mutableStateOf(false) }
+                                        Box {
+                                            Text(
+                                                text = "[${colDef.type.label.take(7)} ▼]",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF0D47A1),
+                                                modifier = Modifier
+                                                    .background(Color(0xFFE1F5FE), RoundedCornerShape(3.dp))
+                                                    .clickable { typeExpanded = true }
+                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                            DropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
+                                                ColumnType.values().forEach { ct ->
+                                                    DropdownMenuItem(onClick = {
+                                                        colDef.type = ct
+                                                        currentTable.markUpdated()
+                                                        typeExpanded = false
+                                                    }) { Text(ct.label) }
+                                                }
+                                            }
+                                        }
 
-                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                                             Text(
                                                 "◀",
                                                 modifier = Modifier.clickable(enabled = colIdx > 0) {
@@ -1481,6 +1415,46 @@ fun MobileTableEditorScreen() {
                                                 fontSize = 12.sp,
                                                 color = if (colIdx < currentTable.headers.size - 1) Color.Black else Color.LightGray
                                             )
+
+                                            // Distinct Value Filter Trigger
+                                            Box {
+                                                Text(
+                                                    if (hasActiveValueFilter) "●" else "▾",
+                                                    fontSize = 11.sp,
+                                                    color = if (hasActiveValueFilter) Color(0xFFE65100) else Color.Gray,
+                                                    modifier = Modifier.clickable { activeColDropdownIdx = colIdx }.padding(start = 2.dp)
+                                                )
+                                                DropdownMenu(
+                                                    expanded = activeColDropdownIdx == colIdx,
+                                                    onDismissRequest = { activeColDropdownIdx = null }
+                                                ) {
+                                                    Text("Filter '${colDef.name}' values:", fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.padding(8.dp))
+                                                    val distinctVals = currentTable.rows.map { it.getOrElse(colIdx) { "" } }.distinct().filter { it.isNotBlank() }
+
+                                                    DropdownMenuItem(onClick = {
+                                                        columnValueFilters.remove(colIdx)
+                                                        activeColDropdownIdx = null
+                                                    }) { Text("Clear Filter (Show All)", color = Color.Red, fontSize = 11.sp) }
+
+                                                    distinctVals.forEach { dVal ->
+                                                        val isChecked = columnValueFilters[colIdx]?.contains(dVal) == true
+                                                        DropdownMenuItem(onClick = {
+                                                            val currentSet = columnValueFilters[colIdx] ?: mutableSetOf()
+                                                            if (currentSet.contains(dVal)) {
+                                                                currentSet.remove(dVal)
+                                                                if (currentSet.isEmpty()) columnValueFilters.remove(colIdx)
+                                                            } else {
+                                                                currentSet.add(dVal)
+                                                                columnValueFilters[colIdx] = currentSet
+                                                            }
+                                                        }) {
+                                                            Checkbox(checked = isChecked, onCheckedChange = null)
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                            Text(dVal, fontSize = 12.sp)
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1488,7 +1462,7 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Body Rows
+                    // Body Rows with Uniform Row Header Controls
                     LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         itemsIndexed(filteredRowIndices) { _, origRIdx ->
                             val rowData = currentTable.rows[origRIdx]
@@ -1498,7 +1472,7 @@ fun MobileTableEditorScreen() {
                                 modifier = Modifier.fillMaxWidth().border(0.5.dp, Color(0xFFE0E0E0)),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 1. ROW NAME (origRIdx, -1) WITH INLINE DROPDOWN & CONTROLS
+                                // 1. UNIFORM ROW TITLE: Inline Edit, Move Up/Down, Delete
                                 Box(
                                     modifier = Modifier
                                         .width(actionColWidth)
@@ -1530,39 +1504,6 @@ fun MobileTableEditorScreen() {
                                                 }
                                         )
 
-                                        // INLINE ROW DROPDOWN TRIGGER ▼
-                                        Box {
-                                            IconButton(
-                                                onClick = { activeRowDropdownIdx = origRIdx },
-                                                modifier = Modifier.size(24.dp)
-                                            ) { Text("▼", fontSize = 11.sp, color = Color.Gray) }
-
-                                            DropdownMenu(
-                                                expanded = activeRowDropdownIdx == origRIdx,
-                                                onDismissRequest = { activeRowDropdownIdx = null }
-                                            ) {
-                                                DropdownMenuItem(onClick = {
-                                                    currentTable.addRow("Row", index = origRIdx)
-                                                    activeRowDropdownIdx = null
-                                                }) { Text("+ Insert Row Above") }
-                                                DropdownMenuItem(onClick = {
-                                                    currentTable.addRow("Row", index = origRIdx + 1)
-                                                    activeRowDropdownIdx = null
-                                                }) { Text("+ Insert Row Below") }
-                                                Divider()
-                                                DropdownMenuItem(onClick = {
-                                                    editingRowIndex = origRIdx
-                                                    showRowEditorDialog = true
-                                                    activeRowDropdownIdx = null
-                                                }) { Text("✎ Open Row Editor") }
-                                                Divider()
-                                                DropdownMenuItem(onClick = {
-                                                    currentTable.deleteRow(origRIdx)
-                                                    activeRowDropdownIdx = null
-                                                }) { Text("✕ Delete Row", color = Color.Red) }
-                                            }
-                                        }
-
                                         Text(
                                             "▲",
                                             modifier = Modifier.clickable(enabled = origRIdx > 0) { currentTable.moveRow(origRIdx, origRIdx - 1) },
@@ -1575,6 +1516,14 @@ fun MobileTableEditorScreen() {
                                             modifier = Modifier.clickable(enabled = origRIdx < currentTable.rows.size - 1) { currentTable.moveRow(origRIdx, origRIdx + 1) },
                                             fontSize = 11.sp,
                                             color = if (origRIdx < currentTable.rows.size - 1) Color.Black else Color.LightGray
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            "✕",
+                                            color = Color.Red,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.clickable { currentTable.deleteRow(origRIdx) }
                                         )
                                     }
                                 }

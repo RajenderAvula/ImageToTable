@@ -60,7 +60,7 @@ class TableData(
         tableDateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
     }
 
-    // --- UNIFIED CELL ACCESS (Corner: -1,-1 | Header: -1,c | Row Name: r,-1 | Data Cell: r,c) ---
+    // --- UNIFIED CELL ACCESS (Corner: -1,-1 | Header: -1,c | Row Name: r,-1 | Cell: r,c) ---
     fun getCellValue(r: Int, c: Int): String {
         return when {
             r == -1 && c == -1 -> cornerHeader
@@ -79,6 +79,26 @@ class TableData(
             r in rows.indices && c in headers.indices -> rows[r][c] = value
         }
         markUpdated()
+    }
+
+    // --- CREATE NEW TABLE FROM ACTIVE FILTERS ---
+    fun createSubTable(
+        newTableName: String,
+        selectedRowIndices: List<Int>,
+        selectedColIndices: List<Int>
+    ): TableData {
+        val subHeaders = selectedColIndices.map { headers[it].copy() }
+        val subRowNames = selectedRowIndices.map { rowNames.getOrElse(it) { "Row" } }
+        val subRows = selectedRowIndices.map { rIdx ->
+            selectedColIndices.map { cIdx -> rows[rIdx].getOrElse(cIdx) { "" } }
+        }
+        return TableData(
+            initialName = newTableName,
+            initialHeaders = if (subHeaders.isEmpty()) listOf(ColumnDef("Col 1")) else subHeaders,
+            initialRows = if (subRows.isEmpty()) listOf(listOf("")) else subRows,
+            initialRowNames = subRowNames,
+            initialCorner = cornerHeader
+        )
     }
 
     // --- APPEND VS REPLACE EXTRACTIONS ---

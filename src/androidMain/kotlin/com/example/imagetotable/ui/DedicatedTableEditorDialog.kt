@@ -91,7 +91,7 @@ fun DedicatedTableEditorDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // TAB 0: DIRECT CELL VALUES EDITING GRID (Holding & Updating state)
+                // TAB 0: DIRECT CELL VALUES EDITING GRID (Uniform controls)
                 if (activeTab == 0) {
                     Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         Row(
@@ -99,7 +99,7 @@ fun DedicatedTableEditorDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Directly edit any cell value below:", fontSize = 11.sp, color = Color.Gray)
+                            Text("Directly edit text, move, or change column types inline:", fontSize = 11.sp, color = Color.Gray)
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Button(
                                     onClick = { tableData.addRow() },
@@ -121,11 +121,11 @@ fun DedicatedTableEditorDialog(
                                 .horizontalScroll(rememberScrollState())
                         ) {
                             val colW = 140.dp
-                            val rowNameW = 120.dp
+                            val rowNameW = 130.dp
                             val fullW = rowNameW + (colW * tableData.headers.size)
 
                             Column(modifier = Modifier.width(fullW).fillMaxHeight()) {
-                                // Header row
+                                // Header row with uniform rename, type dropdown, lateral shifts, and delete
                                 Row(modifier = Modifier.fillMaxWidth().background(Color(0xFFCFD8DC)).padding(vertical = 4.dp)) {
                                     Box(modifier = Modifier.width(rowNameW).padding(4.dp)) {
                                         BasicTextField(
@@ -135,17 +135,75 @@ fun DedicatedTableEditorDialog(
                                         )
                                     }
                                     tableData.headers.forEachIndexed { cIdx, colDef ->
-                                        Box(modifier = Modifier.width(colW).padding(4.dp)) {
-                                            BasicTextField(
-                                                value = colDef.name,
-                                                onValueChange = { colDef.name = it; tableData.markUpdated() },
-                                                textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                            )
+                                        Box(
+                                            modifier = Modifier.width(colW).border(0.5.dp, Color.LightGray).padding(4.dp)
+                                        ) {
+                                            Column {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    BasicTextField(
+                                                        value = colDef.name,
+                                                        onValueChange = { colDef.name = it; tableData.markUpdated() },
+                                                        textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp),
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    Text(
+                                                        "✕",
+                                                        color = Color.Red,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.clickable(enabled = tableData.headers.size > 1) {
+                                                            tableData.deleteColumn(cIdx)
+                                                        }
+                                                    )
+                                                }
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    var typeExpanded by remember { mutableStateOf(false) }
+                                                    Box {
+                                                        Text(
+                                                            "[${colDef.type.label.take(7)} ▼]",
+                                                            fontSize = 10.sp,
+                                                            color = Color(0xFF0D47A1),
+                                                            modifier = Modifier.clickable { typeExpanded = true }
+                                                        )
+                                                        DropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
+                                                            ColumnType.values().forEach { ct ->
+                                                                DropdownMenuItem(onClick = {
+                                                                    colDef.type = ct
+                                                                    tableData.markUpdated()
+                                                                    typeExpanded = false
+                                                                }) { Text(ct.label) }
+                                                            }
+                                                        }
+                                                    }
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                        Text(
+                                                            "◀",
+                                                            modifier = Modifier.clickable(enabled = cIdx > 0) { tableData.moveColumn(cIdx, cIdx - 1) },
+                                                            fontSize = 11.sp,
+                                                            color = if (cIdx > 0) Color.Black else Color.LightGray
+                                                        )
+                                                        Text(
+                                                            "▶",
+                                                            modifier = Modifier.clickable(enabled = cIdx < tableData.headers.size - 1) { tableData.moveColumn(cIdx, cIdx + 1) },
+                                                            fontSize = 11.sp,
+                                                            color = if (cIdx < tableData.headers.size - 1) Color.Black else Color.LightGray
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
 
-                                // Body rows holding cell values
+                                // Body rows with uniform row title rename, vertical shifts, delete, and editable cells
                                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                                     itemsIndexed(tableData.rows) { rIdx, rowList ->
                                         Row(
@@ -153,14 +211,26 @@ fun DedicatedTableEditorDialog(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Box(modifier = Modifier.width(rowNameW).background(Color(0xFFECEFF1)).padding(6.dp)) {
-                                                BasicTextField(
-                                                    value = tableData.rowNames.getOrElse(rIdx) { "Row ${rIdx + 1}" },
-                                                    onValueChange = {
-                                                        tableData.rowNames[rIdx] = it
-                                                        tableData.markUpdated()
-                                                    },
-                                                    textStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = Color(0xFF1565C0))
-                                                )
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    BasicTextField(
+                                                        value = tableData.rowNames.getOrElse(rIdx) { "Row ${rIdx + 1}" },
+                                                        onValueChange = {
+                                                            tableData.rowNames[rIdx] = it
+                                                            tableData.markUpdated()
+                                                        },
+                                                        textStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = Color(0xFF1565C0)),
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    Text("▲", modifier = Modifier.clickable(enabled = rIdx > 0) { tableData.moveRow(rIdx, rIdx - 1) }, fontSize = 11.sp, color = if (rIdx > 0) Color.Black else Color.LightGray)
+                                                    Spacer(modifier = Modifier.width(2.dp))
+                                                    Text("▼", modifier = Modifier.clickable(enabled = rIdx < tableData.rows.size - 1) { tableData.moveRow(rIdx, rIdx + 1) }, fontSize = 11.sp, color = if (rIdx < tableData.rows.size - 1) Color.Black else Color.LightGray)
+                                                    Spacer(modifier = Modifier.width(2.dp))
+                                                    Text("✕", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { tableData.deleteRow(rIdx) })
+                                                }
                                             }
 
                                             tableData.headers.indices.forEach { cIdx ->
@@ -173,9 +243,7 @@ fun DedicatedTableEditorDialog(
                                                 ) {
                                                     BasicTextField(
                                                         value = cellVal,
-                                                        onValueChange = {
-                                                            tableData.setCellValue(rIdx, cIdx, it)
-                                                        },
+                                                        onValueChange = { tableData.setCellValue(rIdx, cIdx, it) },
                                                         textStyle = TextStyle(fontSize = 12.sp),
                                                         modifier = Modifier.fillMaxWidth()
                                                     )
@@ -242,9 +310,11 @@ fun DedicatedTableEditorDialog(
                                             ) { Text(col.type.label.take(7), color = Color.White, fontSize = 10.sp) }
                                             DropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
                                                 ColumnType.values().forEach { ct ->
-                                                    DropdownMenuItem(onClick = { col.type = ct; typeExpanded = false }) {
-                                                        Text(ct.label)
-                                                    }
+                                                    DropdownMenuItem(onClick = {
+                                                        col.type = ct
+                                                        tableData.markUpdated()
+                                                        typeExpanded = false
+                                                    }) { Text(ct.label) }
                                                 }
                                             }
                                         }

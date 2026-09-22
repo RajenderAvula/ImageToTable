@@ -38,11 +38,15 @@ fun ExtractionPreviewDialog(
     initialHeaders: List<ColumnDef>,
     initialRows: List<List<String>>,
     onDismiss: () -> Unit,
-    onConfirmAppend: (headers: List<ColumnDef>, rows: List<List<String>>) -> Unit,
-    onConfirmReplace: (headers: List<ColumnDef>, rows: List<List<String>>) -> Unit
+    onConfirmAppend: (headers: List<ColumnDef>, rows: List<List<String>>, excludeHeaders: Boolean, excludeRowNames: Boolean) -> Unit,
+    onConfirmReplace: (headers: List<ColumnDef>, rows: List<List<String>>, excludeHeaders: Boolean, excludeRowNames: Boolean) -> Unit
 ) {
     var previewZoom by remember { mutableFloatStateOf(1f) }
     var previewPan by remember { mutableStateOf(Offset.Zero) }
+
+    // Toggles to exclude headers or row titles
+    var excludeHeaderRow by remember { mutableStateOf(false) }
+    var excludeRowNames by remember { mutableStateOf(true) }
 
     val previewHeaders = remember { mutableStateListOf(*initialHeaders.map { it.copy() }.toTypedArray()) }
     val previewRows = remember {
@@ -54,7 +58,7 @@ fun ExtractionPreviewDialog(
 
     val actionColWidth = 140.dp
     val dataColWidth = 140.dp
-    val totalWidth = actionColWidth + (dataColWidth * previewHeaders.size)
+    val totalWidth = (if (!excludeRowNames) actionColWidth else 0.dp) + (dataColWidth * previewHeaders.size)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -74,16 +78,16 @@ fun ExtractionPreviewDialog(
                 ) {
                     Column {
                         Text("Extraction Verification & Preview", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
-                        Text("Inspect cropped image & tweak recognized text before loading", fontSize = 11.sp, color = Color.Gray)
+                        Text("Inspect cropped snippet & adjust extracted grid before committing", fontSize = 11.sp, color = Color.Gray)
                     }
                     IconButton(onClick = onDismiss) { Text("✕", fontSize = 16.sp, color = Color.Gray) }
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
                 // TOP PANE: ZOOMABLE & PANNABLE PREVIEW OF CROPPED IMAGE
                 Card(
-                    modifier = Modifier.fillMaxWidth().height(180.dp),
+                    modifier = Modifier.fillMaxWidth().height(160.dp),
                     shape = RoundedCornerShape(8.dp),
                     backgroundColor = Color(0xFF263238),
                     elevation = 2.dp
@@ -146,9 +150,38 @@ fun ExtractionPreviewDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // BOTTOM PANE: INTERACTIVE EDITABLE TABLE PREVIEW
-                Text("Extracted Table (${previewRows.size} rows, ${previewHeaders.size} cols):", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                // EXCLUSION TOGGLES
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    backgroundColor = Color(0xFFF1F5F9),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = excludeHeaderRow,
+                                onCheckedChange = { excludeHeaderRow = it }
+                            )
+                            Text("Exclude Column Headers (Pure Data Rows)", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        }
 
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = excludeRowNames,
+                                onCheckedChange = { excludeRowNames = it }
+                            )
+                            Text("Exclude Row Names", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // BOTTOM PANE: INTERACTIVE EDITABLE TABLE PREVIEW
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -162,8 +195,10 @@ fun ExtractionPreviewDialog(
                             modifier = Modifier.fillMaxWidth().background(Color(0xFFE8EEF5)).padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(modifier = Modifier.width(actionColWidth).padding(6.dp)) {
-                                Text("Row Titles", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF0D47A1))
+                            if (!excludeRowNames) {
+                                Box(modifier = Modifier.width(actionColWidth).padding(6.dp)) {
+                                    Text("Row Titles", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF0D47A1))
+                                }
                             }
 
                             previewHeaders.forEachIndexed { colIdx, colDef ->
@@ -180,9 +215,10 @@ fun ExtractionPreviewDialog(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             BasicTextField(
-                                                value = colDef.name,
+                                                value = if (excludeHeaderRow) "Col ${colIdx + 1}" else colDef.name,
                                                 onValueChange = { previewHeaders[colIdx] = colDef.copy(name = it) },
                                                 textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp),
+                                                enabled = !excludeHeaderRow,
                                                 modifier = Modifier.weight(1f)
                                             )
                                             Text(
@@ -254,57 +290,59 @@ fun ExtractionPreviewDialog(
                             }
                         }
 
-                        // UNIFORM BODY ROWS
+                        // UNIFORM BODY ROWS (Multi-line content supported)
                         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                             itemsIndexed(previewRows) { rowIdx, rowCells ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth().border(0.5.dp, Color(0xFFEEEEEE)),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Box(
-                                        modifier = Modifier.width(actionColWidth).background(Color(0xFFF9FAFB)).padding(4.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
+                                    if (!excludeRowNames) {
+                                        Box(
+                                            modifier = Modifier.width(actionColWidth).background(Color(0xFFF9FAFB)).padding(4.dp)
                                         ) {
-                                            BasicTextField(
-                                                value = previewRowNames.getOrElse(rowIdx) { "Row ${rowIdx + 1}" },
-                                                onValueChange = { previewRowNames[rowIdx] = it },
-                                                textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)),
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            Text(
-                                                "▲",
-                                                modifier = Modifier.clickable(enabled = rowIdx > 0) {
-                                                    val n = previewRowNames.removeAt(rowIdx); previewRowNames.add(rowIdx - 1, n)
-                                                    val r = previewRows.removeAt(rowIdx); previewRows.add(rowIdx - 1, r)
-                                                },
-                                                fontSize = 11.sp,
-                                                color = if (rowIdx > 0) Color.Black else Color.LightGray
-                                            )
-                                            Spacer(modifier = Modifier.width(2.dp))
-                                            Text(
-                                                "▼",
-                                                modifier = Modifier.clickable(enabled = rowIdx < previewRows.size - 1) {
-                                                    val n = previewRowNames.removeAt(rowIdx); previewRowNames.add(rowIdx + 1, n)
-                                                    val r = previewRows.removeAt(rowIdx); previewRows.add(rowIdx + 1, r)
-                                                },
-                                                fontSize = 11.sp,
-                                                color = if (rowIdx < previewRows.size - 1) Color.Black else Color.LightGray
-                                            )
-                                            Spacer(modifier = Modifier.width(2.dp))
-                                            Text(
-                                                "✕",
-                                                color = Color.Red,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.clickable {
-                                                    previewRowNames.removeAt(rowIdx)
-                                                    previewRows.removeAt(rowIdx)
-                                                }
-                                            )
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                BasicTextField(
+                                                    value = previewRowNames.getOrElse(rowIdx) { "Row ${rowIdx + 1}" },
+                                                    onValueChange = { previewRowNames[rowIdx] = it },
+                                                    textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)),
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                Text(
+                                                    "▲",
+                                                    modifier = Modifier.clickable(enabled = rowIdx > 0) {
+                                                        val n = previewRowNames.removeAt(rowIdx); previewRowNames.add(rowIdx - 1, n)
+                                                        val r = previewRows.removeAt(rowIdx); previewRows.add(rowIdx - 1, r)
+                                                    },
+                                                    fontSize = 11.sp,
+                                                    color = if (rowIdx > 0) Color.Black else Color.LightGray
+                                                )
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Text(
+                                                    "▼",
+                                                    modifier = Modifier.clickable(enabled = rowIdx < previewRows.size - 1) {
+                                                        val n = previewRowNames.removeAt(rowIdx); previewRowNames.add(rowIdx + 1, n)
+                                                        val r = previewRows.removeAt(rowIdx); previewRows.add(rowIdx + 1, r)
+                                                    },
+                                                    fontSize = 11.sp,
+                                                    color = if (rowIdx < previewRows.size - 1) Color.Black else Color.LightGray
+                                                )
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Text(
+                                                    "✕",
+                                                    color = Color.Red,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.clickable {
+                                                        previewRowNames.removeAt(rowIdx)
+                                                        previewRows.removeAt(rowIdx)
+                                                    }
+                                                )
+                                            }
                                         }
                                     }
 
@@ -331,7 +369,7 @@ fun ExtractionPreviewDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Bottom Buttons: Append, Replace, or Cancel
+                // Bottom Action Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -342,7 +380,7 @@ fun ExtractionPreviewDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
                             onClick = {
-                                onConfirmAppend(previewHeaders.toList(), previewRows.map { it.toList() })
+                                onConfirmAppend(previewHeaders.toList(), previewRows.map { it.toList() }, excludeHeaderRow, excludeRowNames)
                             },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
                         ) {
@@ -351,7 +389,7 @@ fun ExtractionPreviewDialog(
 
                         Button(
                             onClick = {
-                                onConfirmReplace(previewHeaders.toList(), previewRows.map { it.toList() })
+                                onConfirmReplace(previewHeaders.toList(), previewRows.map { it.toList() }, excludeHeaderRow, excludeRowNames)
                             },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315))
                         ) {

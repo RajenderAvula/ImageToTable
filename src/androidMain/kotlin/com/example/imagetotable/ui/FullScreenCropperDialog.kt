@@ -2,7 +2,6 @@ package com.example.imagetotable.ui
 
 import android.graphics.Bitmap
 import android.graphics.Matrix
-import android.graphics.RectF
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -39,6 +38,11 @@ enum class CropExtractionMode {
     SINGLE_CELL_STEP
 }
 
+enum class CropperGestureMode {
+    PAN_ZOOM,
+    ADJUST_CROP
+}
+
 @Composable
 fun FullScreenCropperDialog(
     sourceBitmap: Bitmap,
@@ -47,32 +51,27 @@ fun FullScreenCropperDialog(
 ) {
     var workingBitmap by remember { mutableStateOf(sourceBitmap) }
     var extractionMode by remember { mutableStateOf(CropExtractionMode.FULL_TABLE) }
+    var gestureMode by remember { mutableStateOf(CropperGestureMode.ADJUST_CROP) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
 
     // Pinch-to-zoom & pan states
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
 
-    // Crop box coordinates stored directly in Bitmap Space
-    val initialLeft = workingBitmap.width * 0.08f
-    val initialTop = workingBitmap.height * 0.12f
-    val initialRight = workingBitmap.width * 0.92f
-    val initialBottom = workingBitmap.height * 0.88f
-
-    var cropBmpRect by remember(workingBitmap) {
-        mutableStateOf(RectF(initialLeft, initialTop, initialRight, initialBottom))
-    }
+    // Separate reactive states for crop coordinates in Bitmap Space (fixes nudge buttons)
+    var cropBmpLeft by remember(workingBitmap) { mutableFloatStateOf(workingBitmap.width * 0.08f) }
+    var cropBmpTop by remember(workingBitmap) { mutableFloatStateOf(workingBitmap.height * 0.12f) }
+    var cropBmpRight by remember(workingBitmap) { mutableFloatStateOf(workingBitmap.width * 0.92f) }
+    var cropBmpBottom by remember(workingBitmap) { mutableFloatStateOf(workingBitmap.height * 0.88f) }
     val minBmpGap = 15f
 
     fun rotateImage90() {
         val matrix = Matrix().apply { postRotate(90f) }
         workingBitmap = Bitmap.createBitmap(workingBitmap, 0, 0, workingBitmap.width, workingBitmap.height, matrix, true)
-        cropBmpRect = RectF(
-            workingBitmap.width * 0.08f,
-            workingBitmap.height * 0.12f,
-            workingBitmap.width * 0.92f,
-            workingBitmap.height * 0.88f
-        )
+        cropBmpLeft = workingBitmap.width * 0.08f
+        cropBmpTop = workingBitmap.height * 0.12f
+        cropBmpRight = workingBitmap.width * 0.92f
+        cropBmpBottom = workingBitmap.height * 0.88f
         zoomScale = 1f
         panOffset = Offset.Zero
     }
@@ -103,7 +102,7 @@ fun FullScreenCropperDialog(
         return Offset(sx, sy)
     }
 
-    // Convert current Screen coordinate to Bitmap pixel coordinate
+    // Convert Screen coordinate to Bitmap pixel coordinate
     fun screenToBmpCoord(sx: Float, sy: Float): Offset? {
         if (containerSize.width == 0 || containerSize.height == 0) return null
         val cw = containerSize.width.toFloat()
@@ -133,10 +132,10 @@ fun FullScreenCropperDialog(
     }
 
     fun calculateCroppedBitmap(): Bitmap? {
-        val l = min(cropBmpRect.left, cropBmpRect.right).toInt().coerceIn(0, workingBitmap.width - 1)
-        val t = min(cropBmpRect.top, cropBmpRect.bottom).toInt().coerceIn(0, workingBitmap.height - 1)
-        val r = max(cropBmpRect.left, cropBmpRect.right).toInt().coerceIn(0, workingBitmap.width)
-        val b = max(cropBmpRect.top, cropBmpRect.bottom).toInt().coerceIn(0, workingBitmap.height)
+        val l = min(cropBmpLeft, cropBmpRight).toInt().coerceIn(0, workingBitmap.width - 1)
+        val t = min(cropBmpTop, cropBmpBottom).toInt().coerceIn(0, workingBitmap.height - 1)
+        val r = max(cropBmpLeft, cropBmpRight).toInt().coerceIn(0, workingBitmap.width)
+        val b = max(cropBmpTop, cropBmpBottom).toInt().coerceIn(0, workingBitmap.height)
 
         val w = (r - l).coerceAtLeast(5).coerceAtMost(workingBitmap.width - l)
         val h = (b - t).coerceAtLeast(5).coerceAtMost(workingBitmap.height - t)
@@ -150,20 +149,22 @@ fun FullScreenCropperDialog(
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // Zoomable & Pannable Source Image Viewport
+                // Background Base Image with Zoom & Pan Gestures
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTransformGestures { _, pan, zoom, _ ->
-                                zoomScale = (zoomScale * zoom).coerceIn(0.5f, 6.0f)
-                                panOffset += pan
+                        .pointerInput(gestureMode) {
+                            if (gestureMode == CropperGestureMode.PAN_ZOOM) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    zoomScale = (zoomScale * zoom).coerceIn(0.5f, 6.0f)
+                                    panOffset += pan
+                                }
                             }
                         }
                 ) {
                     Image(
                         bitmap = workingBitmap.asImageBitmap(),
-                        contentDescription = "Cropping preview",
+                        contentDescription = "Cropping View",
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer {
@@ -177,40 +178,36 @@ fun FullScreenCropperDialog(
                     )
                 }
 
-                // Interactive Crop Overlay Rendered in Bitmap Space Projection
+                // Interactive Crop Bounding Box Overlay
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(zoomScale, panOffset, containerSize) {
-                            detectDragGestures(
-                                onDragStart = { startOffset ->
-                                    val bmpStart = screenToBmpCoord(startOffset.x, startOffset.y)
-                                    if (bmpStart != null) {
-                                        cropBmpRect = RectF(
-                                            bmpStart.x.coerceIn(0f, workingBitmap.width.toFloat()),
-                                            bmpStart.y.coerceIn(0f, workingBitmap.height.toFloat()),
-                                            (bmpStart.x + minBmpGap).coerceIn(0f, workingBitmap.width.toFloat()),
-                                            (bmpStart.y + minBmpGap).coerceIn(0f, workingBitmap.height.toFloat())
-                                        )
+                        .pointerInput(gestureMode, zoomScale, panOffset, containerSize) {
+                            if (gestureMode == CropperGestureMode.ADJUST_CROP) {
+                                detectDragGestures(
+                                    onDragStart = { startOffset ->
+                                        val bmpStart = screenToBmpCoord(startOffset.x, startOffset.y)
+                                        if (bmpStart != null) {
+                                            cropBmpLeft = bmpStart.x.coerceIn(0f, workingBitmap.width.toFloat())
+                                            cropBmpTop = bmpStart.y.coerceIn(0f, workingBitmap.height.toFloat())
+                                            cropBmpRight = (bmpStart.x + minBmpGap).coerceIn(0f, workingBitmap.width.toFloat())
+                                            cropBmpBottom = (bmpStart.y + minBmpGap).coerceIn(0f, workingBitmap.height.toFloat())
+                                        }
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        val bmpCurrent = screenToBmpCoord(change.position.x, change.position.y)
+                                        if (bmpCurrent != null) {
+                                            cropBmpRight = bmpCurrent.x.coerceIn(0f, workingBitmap.width.toFloat())
+                                            cropBmpBottom = bmpCurrent.y.coerceIn(0f, workingBitmap.height.toFloat())
+                                        }
                                     }
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    val bmpCurrent = screenToBmpCoord(change.position.x, change.position.y)
-                                    if (bmpCurrent != null) {
-                                        cropBmpRect = RectF(
-                                            cropBmpRect.left,
-                                            cropBmpRect.top,
-                                            bmpCurrent.x.coerceIn(0f, workingBitmap.width.toFloat()),
-                                            bmpCurrent.y.coerceIn(0f, workingBitmap.height.toFloat())
-                                        )
-                                    }
-                                }
-                            )
+                                )
+                            }
                         }
                 ) {
-                    val p1 = bmpToScreenCoord(min(cropBmpRect.left, cropBmpRect.right), min(cropBmpRect.top, cropBmpRect.bottom))
-                    val p2 = bmpToScreenCoord(max(cropBmpRect.left, cropBmpRect.right), max(cropBmpRect.top, cropBmpRect.bottom))
+                    val p1 = bmpToScreenCoord(min(cropBmpLeft, cropBmpRight), min(cropBmpTop, cropBmpBottom))
+                    val p2 = bmpToScreenCoord(max(cropBmpLeft, cropBmpRight), max(cropBmpTop, cropBmpBottom))
 
                     if (p1 != null && p2 != null) {
                         val sl = p1.x
@@ -229,13 +226,13 @@ fun FullScreenCropperDialog(
                     }
                 }
 
-                // Top Toolbar: Zoom & Rotate Controls, Mode Selector & Edge Nudges
+                // Top Toolbar: Zoom Controls, Gesture Mode Toggle & Nudge Controls
                 Card(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
                         .padding(6.dp),
-                    backgroundColor = Color.Black.copy(alpha = 0.88f),
+                    backgroundColor = Color.Black.copy(alpha = 0.90f),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Column(modifier = Modifier.padding(6.dp)) {
@@ -244,7 +241,7 @@ fun FullScreenCropperDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Zoom & Rotate Controls
+                            // Zoom, Rotate, and Gesture Mode Toggle
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Button(
                                     onClick = { rotateImage90() },
@@ -272,6 +269,24 @@ fun FullScreenCropperDialog(
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) { Text("Fit", color = Color.White, fontSize = 11.sp) }
+
+                                Button(
+                                    onClick = {
+                                        gestureMode = if (gestureMode == CropperGestureMode.PAN_ZOOM)
+                                            CropperGestureMode.ADJUST_CROP else CropperGestureMode.PAN_ZOOM
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        backgroundColor = if (gestureMode == CropperGestureMode.PAN_ZOOM) Color(0xFFE91E63) else Color(0xFF5E35B1)
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        if (gestureMode == CropperGestureMode.PAN_ZOOM) "🖐 Pinch/Pan" else "✂ Drag Crop",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
 
                             // Mode Selection
@@ -296,7 +311,7 @@ fun FullScreenCropperDialog(
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        // Edge Nudges (Adjusts in Bitmap Space directly)
+                        // Nudge Buttons (Reactive state assignment fixes button actions)
                         val stepX = (workingBitmap.width * 0.02f).coerceAtLeast(4f)
                         val stepY = (workingBitmap.height * 0.02f).coerceAtLeast(4f)
 
@@ -308,20 +323,20 @@ fun FullScreenCropperDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("Left Edge:", color = Color(0xFF81D4FA), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropBmpRect.left = (cropBmpRect.left - stepX).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
-                            Button(onClick = { cropBmpRect.left = (cropBmpRect.left + stepX).coerceAtMost(cropBmpRect.right - minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
+                            Button(onClick = { cropBmpLeft = (cropBmpLeft - stepX).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
+                            Button(onClick = { cropBmpLeft = (cropBmpLeft + stepX).coerceAtMost(cropBmpRight - minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
 
                             Text("Right Edge:", color = Color(0xFF81D4FA), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropBmpRect.right = (cropBmpRect.right - stepX).coerceAtLeast(cropBmpRect.left + minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
-                            Button(onClick = { cropBmpRect.right = (cropBmpRect.right + stepX).coerceAtMost(workingBitmap.width.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
+                            Button(onClick = { cropBmpRight = (cropBmpRight - stepX).coerceAtLeast(cropBmpLeft + minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
+                            Button(onClick = { cropBmpRight = (cropBmpRight + stepX).coerceAtMost(workingBitmap.width.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
 
                             Text("Top Edge:", color = Color(0xFFA5D6A7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropBmpRect.top = (cropBmpRect.top - stepY).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
-                            Button(onClick = { cropBmpRect.top = (cropBmpRect.top + stepY).coerceAtMost(cropBmpRect.bottom - minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
+                            Button(onClick = { cropBmpTop = (cropBmpTop - stepY).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
+                            Button(onClick = { cropBmpTop = (cropBmpTop + stepY).coerceAtMost(cropBmpBottom - minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
 
                             Text("Bottom Edge:", color = Color(0xFFA5D6A7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropBmpRect.bottom = (cropBmpRect.bottom - stepY).coerceAtLeast(cropBmpRect.top + minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
-                            Button(onClick = { cropBmpRect.bottom = (cropBmpRect.bottom + stepY).coerceAtMost(workingBitmap.height.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
+                            Button(onClick = { cropBmpBottom = (cropBmpBottom - stepY).coerceAtLeast(cropBmpTop + minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
+                            Button(onClick = { cropBmpBottom = (cropBmpBottom + stepY).coerceAtMost(workingBitmap.height.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
                         }
                     }
                 }

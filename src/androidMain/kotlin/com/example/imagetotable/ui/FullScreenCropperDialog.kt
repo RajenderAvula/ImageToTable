@@ -2,6 +2,7 @@ package com.example.imagetotable.ui
 
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.graphics.RectF
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -52,22 +53,32 @@ fun FullScreenCropperDialog(
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
 
-    // Crop box limits in screen coordinates
-    var cropLeft by remember { mutableFloatStateOf(60f) }
-    var cropTop by remember { mutableFloatStateOf(120f) }
-    var cropRight by remember { mutableFloatStateOf(340f) }
-    var cropBottom by remember { mutableFloatStateOf(460f) }
-    val minGap = 20f
+    // Crop box coordinates stored directly in Bitmap Space
+    val initialLeft = workingBitmap.width * 0.08f
+    val initialTop = workingBitmap.height * 0.12f
+    val initialRight = workingBitmap.width * 0.92f
+    val initialBottom = workingBitmap.height * 0.88f
+
+    var cropBmpRect by remember(workingBitmap) {
+        mutableStateOf(RectF(initialLeft, initialTop, initialRight, initialBottom))
+    }
+    val minBmpGap = 15f
 
     fun rotateImage90() {
         val matrix = Matrix().apply { postRotate(90f) }
         workingBitmap = Bitmap.createBitmap(workingBitmap, 0, 0, workingBitmap.width, workingBitmap.height, matrix, true)
+        cropBmpRect = RectF(
+            workingBitmap.width * 0.08f,
+            workingBitmap.height * 0.12f,
+            workingBitmap.width * 0.92f,
+            workingBitmap.height * 0.88f
+        )
         zoomScale = 1f
         panOffset = Offset.Zero
     }
 
-    // Inverse viewport projection: Maps screen coordinate to actual Bitmap pixel
-    fun screenToBitmapCoord(screenX: Float, screenY: Float): Offset? {
+    // Convert Bitmap pixel coordinate to current Screen coordinate
+    fun bmpToScreenCoord(bx: Float, by: Float): Offset? {
         if (containerSize.width == 0 || containerSize.height == 0) return null
         val cw = containerSize.width.toFloat()
         val ch = containerSize.height.toFloat()
@@ -83,31 +94,54 @@ fun FullScreenCropperDialog(
         val cx = cw / 2f
         val cy = ch / 2f
 
-        val unpannedX = screenX - panOffset.x
-        val unpannedY = screenY - panOffset.y
+        val unscaledX = x0 + (bx * baseScale)
+        val unscaledY = y0 + (by * baseScale)
+
+        val sx = (unscaledX - cx) * zoomScale + cx + panOffset.x
+        val sy = (unscaledY - cy) * zoomScale + cy + panOffset.y
+
+        return Offset(sx, sy)
+    }
+
+    // Convert current Screen coordinate to Bitmap pixel coordinate
+    fun screenToBmpCoord(sx: Float, sy: Float): Offset? {
+        if (containerSize.width == 0 || containerSize.height == 0) return null
+        val cw = containerSize.width.toFloat()
+        val ch = containerSize.height.toFloat()
+        val bw = workingBitmap.width.toFloat()
+        val bh = workingBitmap.height.toFloat()
+
+        val baseScale = minOf(cw / bw, ch / bh)
+        val w0 = bw * baseScale
+        val h0 = bh * baseScale
+        val x0 = (cw - w0) / 2f
+        val y0 = (ch - h0) / 2f
+
+        val cx = cw / 2f
+        val cy = ch / 2f
+
+        val unpannedX = sx - panOffset.x
+        val unpannedY = sy - panOffset.y
 
         val unscaledX = (unpannedX - cx) / zoomScale + cx
         val unscaledY = (unpannedY - cy) / zoomScale + cy
 
-        val bmpX = (unscaledX - x0) / baseScale
-        val bmpY = (unscaledY - y0) / baseScale
+        val bx = (unscaledX - x0) / baseScale
+        val by = (unscaledY - y0) / baseScale
 
-        return Offset(bmpX, bmpY)
+        return Offset(bx, by)
     }
 
     fun calculateCroppedBitmap(): Bitmap? {
-        val p1 = screenToBitmapCoord(min(cropLeft, cropRight), min(cropTop, cropBottom)) ?: return null
-        val p2 = screenToBitmapCoord(max(cropLeft, cropRight), max(cropTop, cropBottom)) ?: return null
+        val l = min(cropBmpRect.left, cropBmpRect.right).toInt().coerceIn(0, workingBitmap.width - 1)
+        val t = min(cropBmpRect.top, cropBmpRect.bottom).toInt().coerceIn(0, workingBitmap.height - 1)
+        val r = max(cropBmpRect.left, cropBmpRect.right).toInt().coerceIn(0, workingBitmap.width)
+        val b = max(cropBmpRect.top, cropBmpRect.bottom).toInt().coerceIn(0, workingBitmap.height)
 
-        val left = min(p1.x, p2.x).toInt().coerceIn(0, workingBitmap.width - 1)
-        val top = min(p1.y, p2.y).toInt().coerceIn(0, workingBitmap.height - 1)
-        val right = max(p1.x, p2.x).toInt().coerceIn(0, workingBitmap.width)
-        val bottom = max(p1.y, p2.y).toInt().coerceIn(0, workingBitmap.height)
+        val w = (r - l).coerceAtLeast(5).coerceAtMost(workingBitmap.width - l)
+        val h = (b - t).coerceAtLeast(5).coerceAtMost(workingBitmap.height - t)
 
-        val width = (right - left).coerceAtLeast(5).coerceAtMost(workingBitmap.width - left)
-        val height = (bottom - top).coerceAtLeast(5).coerceAtMost(workingBitmap.height - top)
-
-        return Bitmap.createBitmap(workingBitmap, left, top, width, height)
+        return Bitmap.createBitmap(workingBitmap, l, t, w, h)
     }
 
     Dialog(
@@ -143,42 +177,59 @@ fun FullScreenCropperDialog(
                     )
                 }
 
-                // Interactive Crop Bounding Box Overlay
+                // Interactive Crop Overlay Rendered in Bitmap Space Projection
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
+                        .pointerInput(zoomScale, panOffset, containerSize) {
                             detectDragGestures(
-                                onDragStart = { offset ->
-                                    cropLeft = offset.x
-                                    cropTop = offset.y
-                                    cropRight = offset.x + minGap
-                                    cropBottom = offset.y + minGap
+                                onDragStart = { startOffset ->
+                                    val bmpStart = screenToBmpCoord(startOffset.x, startOffset.y)
+                                    if (bmpStart != null) {
+                                        cropBmpRect = RectF(
+                                            bmpStart.x.coerceIn(0f, workingBitmap.width.toFloat()),
+                                            bmpStart.y.coerceIn(0f, workingBitmap.height.toFloat()),
+                                            (bmpStart.x + minBmpGap).coerceIn(0f, workingBitmap.width.toFloat()),
+                                            (bmpStart.y + minBmpGap).coerceIn(0f, workingBitmap.height.toFloat())
+                                        )
+                                    }
                                 },
                                 onDrag = { change, _ ->
                                     change.consume()
-                                    cropRight = change.position.x
-                                    cropBottom = change.position.y
+                                    val bmpCurrent = screenToBmpCoord(change.position.x, change.position.y)
+                                    if (bmpCurrent != null) {
+                                        cropBmpRect = RectF(
+                                            cropBmpRect.left,
+                                            cropBmpRect.top,
+                                            bmpCurrent.x.coerceIn(0f, workingBitmap.width.toFloat()),
+                                            bmpCurrent.y.coerceIn(0f, workingBitmap.height.toFloat())
+                                        )
+                                    }
                                 }
                             )
                         }
                 ) {
-                    val l = min(cropLeft, cropRight)
-                    val r = max(cropLeft, cropRight)
-                    val t = min(cropTop, cropBottom)
-                    val b = max(cropTop, cropBottom)
+                    val p1 = bmpToScreenCoord(min(cropBmpRect.left, cropBmpRect.right), min(cropBmpRect.top, cropBmpRect.bottom))
+                    val p2 = bmpToScreenCoord(max(cropBmpRect.left, cropBmpRect.right), max(cropBmpRect.top, cropBmpRect.bottom))
 
-                    drawRect(color = Color.Black.copy(alpha = 0.45f))
-                    drawRect(color = Color.Transparent, topLeft = Offset(l, t), size = Size(r - l, b - t))
-                    drawRect(
-                        color = if (extractionMode == CropExtractionMode.FULL_TABLE) Color(0xFF00E676) else Color(0xFFFF9100),
-                        topLeft = Offset(l, t),
-                        size = Size(r - l, b - t),
-                        style = Stroke(width = 3.dp.toPx())
-                    )
+                    if (p1 != null && p2 != null) {
+                        val sl = p1.x
+                        val st = p1.y
+                        val sr = p2.x
+                        val sb = p2.y
+
+                        drawRect(color = Color.Black.copy(alpha = 0.45f))
+                        drawRect(color = Color.Transparent, topLeft = Offset(sl, st), size = Size(sr - sl, sb - st))
+                        drawRect(
+                            color = if (extractionMode == CropExtractionMode.FULL_TABLE) Color(0xFF00E676) else Color(0xFFFF9100),
+                            topLeft = Offset(sl, st),
+                            size = Size(sr - sl, sb - st),
+                            style = Stroke(width = 3.dp.toPx())
+                        )
+                    }
                 }
 
-                // Top Toolbar: Zoom Controls, 90° Rotate, Mode Selector & Edge Nudges
+                // Top Toolbar: Zoom & Rotate Controls, Mode Selector & Edge Nudges
                 Card(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -245,7 +296,10 @@ fun FullScreenCropperDialog(
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        // Directional Edge Selection Arrow Controls
+                        // Edge Nudges (Adjusts in Bitmap Space directly)
+                        val stepX = (workingBitmap.width * 0.02f).coerceAtLeast(4f)
+                        val stepY = (workingBitmap.height * 0.02f).coerceAtLeast(4f)
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -254,20 +308,20 @@ fun FullScreenCropperDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("Left Edge:", color = Color(0xFF81D4FA), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropLeft = (cropLeft - 12f).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
-                            Button(onClick = { cropLeft = (cropLeft + 12f).coerceAtMost(cropRight - minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
+                            Button(onClick = { cropBmpRect.left = (cropBmpRect.left - stepX).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
+                            Button(onClick = { cropBmpRect.left = (cropBmpRect.left + stepX).coerceAtMost(cropBmpRect.right - minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
 
                             Text("Right Edge:", color = Color(0xFF81D4FA), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropRight = (cropRight - 12f).coerceAtLeast(cropLeft + minGap) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
-                            Button(onClick = { cropRight = (cropRight + 12f).coerceAtMost(containerSize.width.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
+                            Button(onClick = { cropBmpRect.right = (cropBmpRect.right - stepX).coerceAtLeast(cropBmpRect.left + minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
+                            Button(onClick = { cropBmpRect.right = (cropBmpRect.right + stepX).coerceAtMost(workingBitmap.width.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
 
                             Text("Top Edge:", color = Color(0xFFA5D6A7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropTop = (cropTop - 12f).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
-                            Button(onClick = { cropTop = (cropTop + 12f).coerceAtMost(cropBottom - minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
+                            Button(onClick = { cropBmpRect.top = (cropBmpRect.top - stepY).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
+                            Button(onClick = { cropBmpRect.top = (cropBmpRect.top + stepY).coerceAtMost(cropBmpRect.bottom - minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
 
                             Text("Bottom Edge:", color = Color(0xFFA5D6A7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropBottom = (cropBottom - 12f).coerceAtLeast(cropTop + minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
-                            Button(onClick = { cropBottom = (cropBottom + 12f).coerceAtMost(containerSize.height.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
+                            Button(onClick = { cropBmpRect.bottom = (cropBmpRect.bottom - stepY).coerceAtLeast(cropBmpRect.top + minBmpGap) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
+                            Button(onClick = { cropBmpRect.bottom = (cropBmpRect.bottom + stepY).coerceAtMost(workingBitmap.height.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
                         }
                     }
                 }

@@ -52,11 +52,11 @@ fun FullScreenCropperDialog(
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
 
-    // Crop box limits
+    // Crop box limits in screen coordinates
     var cropLeft by remember { mutableFloatStateOf(60f) }
-    var cropTop by remember { mutableFloatStateOf(100f) }
+    var cropTop by remember { mutableFloatStateOf(120f) }
     var cropRight by remember { mutableFloatStateOf(340f) }
-    var cropBottom by remember { mutableFloatStateOf(440f) }
+    var cropBottom by remember { mutableFloatStateOf(460f) }
     val minGap = 20f
 
     fun rotateImage90() {
@@ -66,22 +66,48 @@ fun FullScreenCropperDialog(
         panOffset = Offset.Zero
     }
 
-    fun calculateCroppedBitmap(): Bitmap? {
+    // Inverse viewport projection: Maps screen coordinate to actual Bitmap pixel
+    fun screenToBitmapCoord(screenX: Float, screenY: Float): Offset? {
         if (containerSize.width == 0 || containerSize.height == 0) return null
-        val left = min(cropLeft, cropRight).coerceIn(0f, containerSize.width.toFloat())
-        val right = max(cropLeft, cropRight).coerceIn(0f, containerSize.width.toFloat())
-        val top = min(cropTop, cropBottom).coerceIn(0f, containerSize.height.toFloat())
-        val bottom = max(cropTop, cropBottom).coerceIn(0f, containerSize.height.toFloat())
+        val cw = containerSize.width.toFloat()
+        val ch = containerSize.height.toFloat()
+        val bw = workingBitmap.width.toFloat()
+        val bh = workingBitmap.height.toFloat()
 
-        val scaleX = workingBitmap.width.toFloat() / containerSize.width
-        val scaleY = workingBitmap.height.toFloat() / containerSize.height
+        val baseScale = minOf(cw / bw, ch / bh)
+        val w0 = bw * baseScale
+        val h0 = bh * baseScale
+        val x0 = (cw - w0) / 2f
+        val y0 = (ch - h0) / 2f
 
-        val cropX = (left * scaleX).toInt().coerceIn(0, workingBitmap.width - 1)
-        val cropY = (top * scaleY).toInt().coerceIn(0, workingBitmap.height - 1)
-        val cropW = ((right - left) * scaleX).toInt().coerceAtLeast(5).coerceAtMost(workingBitmap.width - cropX)
-        val cropH = ((bottom - top) * scaleY).toInt().coerceAtLeast(5).coerceAtMost(workingBitmap.height - cropY)
+        val cx = cw / 2f
+        val cy = ch / 2f
 
-        return Bitmap.createBitmap(workingBitmap, cropX, cropY, cropW, cropH)
+        val unpannedX = screenX - panOffset.x
+        val unpannedY = screenY - panOffset.y
+
+        val unscaledX = (unpannedX - cx) / zoomScale + cx
+        val unscaledY = (unpannedY - cy) / zoomScale + cy
+
+        val bmpX = (unscaledX - x0) / baseScale
+        val bmpY = (unscaledY - y0) / baseScale
+
+        return Offset(bmpX, bmpY)
+    }
+
+    fun calculateCroppedBitmap(): Bitmap? {
+        val p1 = screenToBitmapCoord(min(cropLeft, cropRight), min(cropTop, cropBottom)) ?: return null
+        val p2 = screenToBitmapCoord(max(cropLeft, cropRight), max(cropTop, cropBottom)) ?: return null
+
+        val left = min(p1.x, p2.x).toInt().coerceIn(0, workingBitmap.width - 1)
+        val top = min(p1.y, p2.y).toInt().coerceIn(0, workingBitmap.height - 1)
+        val right = max(p1.x, p2.x).toInt().coerceIn(0, workingBitmap.width)
+        val bottom = max(p1.y, p2.y).toInt().coerceIn(0, workingBitmap.height)
+
+        val width = (right - left).coerceAtLeast(5).coerceAtMost(workingBitmap.width - left)
+        val height = (bottom - top).coerceAtLeast(5).coerceAtMost(workingBitmap.height - top)
+
+        return Bitmap.createBitmap(workingBitmap, left, top, width, height)
     }
 
     Dialog(
@@ -90,13 +116,13 @@ fun FullScreenCropperDialog(
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // Zoomable & Pannable Source Image
+                // Zoomable & Pannable Source Image Viewport
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoom, _ ->
-                                zoomScale = (zoomScale * zoom).coerceIn(0.5f, 5.0f)
+                                zoomScale = (zoomScale * zoom).coerceIn(0.5f, 6.0f)
                                 panOffset += pan
                             }
                         }
@@ -117,7 +143,7 @@ fun FullScreenCropperDialog(
                     )
                 }
 
-                // Interactive Crop Overlay
+                // Interactive Crop Bounding Box Overlay
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
@@ -142,7 +168,7 @@ fun FullScreenCropperDialog(
                     val t = min(cropTop, cropBottom)
                     val b = max(cropTop, cropBottom)
 
-                    drawRect(color = Color.Black.copy(alpha = 0.50f))
+                    drawRect(color = Color.Black.copy(alpha = 0.45f))
                     drawRect(color = Color.Transparent, topLeft = Offset(l, t), size = Size(r - l, b - t))
                     drawRect(
                         color = if (extractionMode == CropExtractionMode.FULL_TABLE) Color(0xFF00E676) else Color(0xFFFF9100),
@@ -152,13 +178,13 @@ fun FullScreenCropperDialog(
                     )
                 }
 
-                // Top Controls: Rotate 90°, Mode Selection & Edge Nudges
+                // Top Toolbar: Zoom Controls, 90° Rotate, Mode Selector & Edge Nudges
                 Card(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
                         .padding(6.dp),
-                    backgroundColor = Color.Black.copy(alpha = 0.85f),
+                    backgroundColor = Color.Black.copy(alpha = 0.88f),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Column(modifier = Modifier.padding(6.dp)) {
@@ -167,12 +193,25 @@ fun FullScreenCropperDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            // Zoom & Rotate Controls
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Button(
                                     onClick = { rotateImage90() },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0288D1)),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) { Text("🔄 90°", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+
+                                Button(
+                                    onClick = { zoomScale = (zoomScale * 1.25f).coerceAtMost(6.0f) },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF37474F)),
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) { Text("🔍+", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+
+                                Button(
+                                    onClick = { zoomScale = (zoomScale / 1.25f).coerceAtLeast(0.5f) },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF37474F)),
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) { Text("🔍-", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
 
                                 Button(
                                     onClick = {
@@ -180,10 +219,11 @@ fun FullScreenCropperDialog(
                                         panOffset = Offset.Zero
                                     },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) { Text("Fit", color = Color.White, fontSize = 11.sp) }
                             }
 
+                            // Mode Selection
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Button(
                                     onClick = { extractionMode = CropExtractionMode.FULL_TABLE },
@@ -205,7 +245,7 @@ fun FullScreenCropperDialog(
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        // Edge Nudges
+                        // Directional Edge Selection Arrow Controls
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -214,30 +254,30 @@ fun FullScreenCropperDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("Left Edge:", color = Color(0xFF81D4FA), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropLeft = (cropLeft - 10f).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
-                            Button(onClick = { cropLeft = (cropLeft + 10f).coerceAtMost(cropRight - minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
+                            Button(onClick = { cropLeft = (cropLeft - 12f).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
+                            Button(onClick = { cropLeft = (cropLeft + 12f).coerceAtMost(cropRight - minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
 
                             Text("Right Edge:", color = Color(0xFF81D4FA), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropRight = (cropRight - 10f).coerceAtLeast(cropLeft + minGap) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
-                            Button(onClick = { cropRight = (cropRight + 10f).coerceAtMost(containerSize.width.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
+                            Button(onClick = { cropRight = (cropRight - 12f).coerceAtLeast(cropLeft + minGap) }, contentPadding = PaddingValues(2.dp)) { Text("◀") }
+                            Button(onClick = { cropRight = (cropRight + 12f).coerceAtMost(containerSize.width.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▶") }
 
                             Text("Top Edge:", color = Color(0xFFA5D6A7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropTop = (cropTop - 10f).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
-                            Button(onClick = { cropTop = (cropTop + 10f).coerceAtMost(cropBottom - minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
+                            Button(onClick = { cropTop = (cropTop - 12f).coerceAtLeast(0f) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
+                            Button(onClick = { cropTop = (cropTop + 12f).coerceAtMost(cropBottom - minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
 
                             Text("Bottom Edge:", color = Color(0xFFA5D6A7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Button(onClick = { cropBottom = (cropBottom - 10f).coerceAtLeast(cropTop + minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
-                            Button(onClick = { cropBottom = (cropBottom + 10f).coerceAtMost(containerSize.height.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
+                            Button(onClick = { cropBottom = (cropBottom - 12f).coerceAtLeast(cropTop + minGap) }, contentPadding = PaddingValues(2.dp)) { Text("▲") }
+                            Button(onClick = { cropBottom = (cropBottom + 12f).coerceAtMost(containerSize.height.toFloat()) }, contentPadding = PaddingValues(2.dp)) { Text("▼") }
                         }
                     }
                 }
 
-                // Bottom Bar
+                // Bottom Action Buttons
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.85f))
+                        .background(Color.Black.copy(alpha = 0.88f))
                         .padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -254,7 +294,7 @@ fun FullScreenCropperDialog(
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
                     ) {
                         Text(
-                            if (extractionMode == CropExtractionMode.FULL_TABLE) "Extract Full Table" else "Extract to Active Cell",
+                            if (extractionMode == CropExtractionMode.FULL_TABLE) "Proceed to Preview & Extract" else "Extract to Active Cell",
                             color = Color.White,
                             fontWeight = FontWeight.Bold
                         )

@@ -60,7 +60,7 @@ class TableData(
         tableDateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
     }
 
-    // --- UNIFIED CELL ACCESS (Corner: -1,-1 | Header: -1,c | RowName: r,-1 | Cell: r,c) ---
+    // --- UNIFIED CELL ACCESS (Corner: -1,-1 | Header: -1,c | Row Name: r,-1 | Data Cell: r,c) ---
     fun getCellValue(r: Int, c: Int): String {
         return when {
             r == -1 && c == -1 -> cornerHeader
@@ -81,152 +81,55 @@ class TableData(
         markUpdated()
     }
 
-    // --- TRANSPOSE ROWS AND COLUMNS ---
+    // --- APPEND VS REPLACE EXTRACTIONS ---
+    fun appendExtractedData(newHeaders: List<String>, newRows: List<List<String>>) {
+        while (headers.size < newHeaders.size) {
+            val newColIdx = headers.size
+            headers.add(ColumnDef(newHeaders.getOrElse(newColIdx) { "Col ${newColIdx + 1}" }))
+            rows.forEach { it.add("") }
+        }
+        val startRowIdx = rows.size
+        for ((idx, rData) in newRows.withIndex()) {
+            rowNames.add("Row ${startRowIdx + idx + 1}")
+            val padded = rData + List((headers.size - rData.size).coerceAtLeast(0)) { "" }
+            rows.add(mutableStateListOf(*padded.take(headers.size).toTypedArray()))
+        }
+        markUpdated()
+    }
+
+    fun loadExtractedData(newHeaders: List<String>, newRows: List<List<String>>) {
+        headers.clear()
+        headers.addAll(newHeaders.map { ColumnDef(it, ColumnType.TEXT) })
+        rowNames.clear()
+        rows.clear()
+        for ((idx, r) in newRows.withIndex()) {
+            rowNames.add("Row ${idx + 1}")
+            rows.add(mutableStateListOf(*r.toTypedArray()))
+        }
+        markUpdated()
+    }
+
     fun transposeTable() {
         if (rows.isEmpty() || headers.isEmpty()) return
-        val oldColsCount = headers.size
-        val oldRowsCount = rows.size
+        val oldCols = headers.size
+        val oldRows = rows.size
 
-        val newHeaders = (1..oldRowsCount).map {
-            ColumnDef(rowNames.getOrElse(it - 1) { "Col $it" }, ColumnType.TEXT)
-        }
+        val newHeaders = (1..oldRows).map { ColumnDef(rowNames.getOrElse(it - 1) { "Col $it" }) }
         val newRowNames = headers.map { it.name }
 
         val newGrid = mutableListOf<MutableList<String>>()
-        for (c in 0 until oldColsCount) {
+        for (c in 0 until oldCols) {
             val newRow = mutableListOf<String>()
-            for (r in 0 until oldRowsCount) {
+            for (r in 0 until oldRows) {
                 newRow.add(rows[r].getOrElse(c) { "" })
             }
             newGrid.add(newRow)
         }
 
-        headers.clear()
-        headers.addAll(newHeaders)
-        rowNames.clear()
-        rowNames.addAll(newRowNames)
+        headers.clear(); headers.addAll(newHeaders)
+        rowNames.clear(); rowNames.addAll(newRowNames)
         rows.clear()
         newGrid.forEach { rows.add(mutableStateListOf(*it.toTypedArray())) }
-        markUpdated()
-    }
-
-    // --- CREATE NEW TABLE FROM ACTIVE FILTERS ---
-    fun createSubTable(
-        newTableName: String,
-        selectedRowIndices: List<Int>,
-        selectedColIndices: List<Int>
-    ): TableData {
-        val subHeaders = selectedColIndices.map { headers[it].copy() }
-        val subRowNames = selectedRowIndices.map { rowNames.getOrElse(it) { "Row" } }
-        val subRows = selectedRowIndices.map { rIdx ->
-            selectedColIndices.map { cIdx -> rows[rIdx].getOrElse(cIdx) { "" } }
-        }
-        return TableData(
-            initialName = newTableName,
-            initialHeaders = if (subHeaders.isEmpty()) listOf(ColumnDef("Col 1")) else subHeaders,
-            initialRows = if (subRows.isEmpty()) listOf(listOf("")) else subRows,
-            initialRowNames = subRowNames,
-            initialCorner = cornerHeader
-        )
-    }
-
-    // --- MULTI-CELL COPY ---
-    fun copyCells(coords: Collection<Pair<Int, Int>>, isCut: Boolean = false): CellClipboard? {
-        if (coords.isEmpty()) return null
-        val minR = coords.minOf { it.first }
-        val minC = coords.minOf { it.second }
-
-        val items = coords.map { (r, c) ->
-            CellOffsetValue(r - minR, c - minC, getCellValue(r, c))
-        }
-        return CellClipboard(items = items, isCut = isCut, sourceCoords = coords.toList())
-    }
-
-    // --- MULTI-CELL PASTE (Supports 1-to-Many Replications) ---
-    fun pasteCells(
-        targetCoords: List<Pair<Int, Int>>,
-        anchor: Pair<Int, Int>,
-        clipboard: CellClipboard
-    ): List<Pair<Int, Int>> {
-        if (clipboard.items.isEmpty()) return emptyList()
-
-        if (clipboard.isCut) {
-            for ((sr, sc) in clipboard.sourceCoords) {
-                setCellValue(sr, sc, "")
-            }
-        }
-
-        // 1 value copied + multiple cells targeted -> Replicate into all selected cells
-        if (clipboard.items.size == 1 && targetCoords.size > 1) {
-            val singleValue = clipboard.items.first().value
-            for ((r, c) in targetCoords) {
-                setCellValue(r, c, singleValue)
-            }
-            markUpdated()
-            return targetCoords
-        }
-
-        // Block Paste
-        val (startR, startC) = anchor
-        val maxReqRow = startR + (clipboard.items.maxOfOrNull { it.rowOffset } ?: 0)
-        val maxReqCol = startC + (clipboard.items.maxOfOrNull { it.colOffset } ?: 0)
-
-        while (headers.size <= maxReqCol) addColumn("Col ${headers.size + 1}")
-        while (rows.size <= maxReqRow) addRow()
-
-        val newSelection = mutableListOf<Pair<Int, Int>>()
-        for (item in clipboard.items) {
-            val destR = startR + item.rowOffset
-            val destC = startC + item.colOffset
-            setCellValue(destR, destC, item.value)
-            newSelection.add(Pair(destR, destC))
-        }
-        markUpdated()
-        return newSelection
-    }
-
-    // --- BATCH SHIFT ---
-    fun shiftCellsBatch(coords: Collection<Pair<Int, Int>>, direction: ShiftDirection): List<Pair<Int, Int>> {
-        if (coords.isEmpty()) return emptyList()
-        val dr = when (direction) { ShiftDirection.UP -> -1; ShiftDirection.DOWN -> 1; else -> 0 }
-        val dc = when (direction) { ShiftDirection.LEFT -> -1; ShiftDirection.RIGHT -> 1; else -> 0 }
-
-        val canMove = coords.all { (r, c) ->
-            (r + dr) in rows.indices && (c + dc) in headers.indices
-        }
-        if (!canMove) return coords.toList()
-
-        val snapshot = coords.associateWith { (r, c) -> getCellValue(r, c) }
-        for ((r, c) in coords) setCellValue(r, c, "")
-
-        val newCoords = mutableListOf<Pair<Int, Int>>()
-        for ((orig, value) in snapshot) {
-            val nr = orig.first + dr
-            val nc = orig.second + dc
-            setCellValue(nr, nc, value)
-            newCoords.add(Pair(nr, nc))
-        }
-        markUpdated()
-        return newCoords
-    }
-
-    // --- SORTING ---
-    fun sortRowsByColumn(colIndex: Int, ascending: Boolean) {
-        if (colIndex !in headers.indices || rows.isEmpty()) return
-        val paired = rows.indices.map { idx ->
-            Triple(rowNames.getOrElse(idx) { "" }, rows[idx], idx)
-        }
-        val sorted = if (ascending) {
-            paired.sortedBy { it.second.getOrElse(colIndex) { "" } }
-        } else {
-            paired.sortedByDescending { it.second.getOrElse(colIndex) { "" } }
-        }
-        rowNames.clear()
-        rows.clear()
-        sorted.forEach {
-            rowNames.add(it.first)
-            rows.add(it.second)
-        }
         markUpdated()
     }
 
@@ -279,52 +182,112 @@ class TableData(
         markUpdated()
     }
 
-    fun loadExtractedData(newHeaders: List<String>, newRows: List<List<String>>) {
-        headers.clear()
-        headers.addAll(newHeaders.map { ColumnDef(it, ColumnType.TEXT) })
-        rowNames.clear()
-        rows.clear()
-        for ((idx, r) in newRows.withIndex()) {
-            rowNames.add("Row ${idx + 1}")
-            rows.add(mutableStateListOf(*r.toTypedArray()))
+    fun sortRowsByColumn(colIndex: Int, ascending: Boolean) {
+        if (colIndex !in headers.indices || rows.isEmpty()) return
+        val paired = rows.indices.map { idx -> Triple(rowNames[idx], rows[idx], idx) }
+        val sorted = if (ascending) {
+            paired.sortedBy { it.second.getOrElse(colIndex) { "" } }
+        } else {
+            paired.sortedByDescending { it.second.getOrElse(colIndex) { "" } }
+        }
+        rowNames.clear(); rows.clear()
+        sorted.forEach {
+            rowNames.add(it.first)
+            rows.add(it.second)
         }
         markUpdated()
+    }
+
+    fun copyCells(coords: Collection<Pair<Int, Int>>, isCut: Boolean = false): CellClipboard? {
+        if (coords.isEmpty()) return null
+        val minR = coords.minOf { it.first }
+        val minC = coords.minOf { it.second }
+        val items = coords.map { (r, c) ->
+            CellOffsetValue(r - minR, c - minC, getCellValue(r, c))
+        }
+        return CellClipboard(items = items, isCut = isCut, sourceCoords = coords.toList())
+    }
+
+    fun pasteCells(
+        targetCoords: List<Pair<Int, Int>>,
+        anchor: Pair<Int, Int>,
+        clipboard: CellClipboard
+    ): List<Pair<Int, Int>> {
+        if (clipboard.items.isEmpty()) return emptyList()
+        if (clipboard.isCut) {
+            for ((sr, sc) in clipboard.sourceCoords) setCellValue(sr, sc, "")
+        }
+
+        if (clipboard.items.size == 1 && targetCoords.size > 1) {
+            val single = clipboard.items.first().value
+            for ((r, c) in targetCoords) setCellValue(r, c, single)
+            markUpdated()
+            return targetCoords
+        }
+
+        val (startR, startC) = anchor
+        val maxR = startR + (clipboard.items.maxOfOrNull { it.rowOffset } ?: 0)
+        val maxC = startC + (clipboard.items.maxOfOrNull { it.colOffset } ?: 0)
+
+        while (headers.size <= maxC) addColumn("Col ${headers.size + 1}")
+        while (rows.size <= maxR) addRow()
+
+        val results = mutableListOf<Pair<Int, Int>>()
+        for (item in clipboard.items) {
+            val dr = startR + item.rowOffset
+            val dc = startC + item.colOffset
+            setCellValue(dr, dc, item.value)
+            results.add(Pair(dr, dc))
+        }
+        markUpdated()
+        return results
+    }
+
+    fun shiftCellsBatch(coords: Collection<Pair<Int, Int>>, direction: ShiftDirection): List<Pair<Int, Int>> {
+        if (coords.isEmpty()) return emptyList()
+        val dr = when (direction) { ShiftDirection.UP -> -1; ShiftDirection.DOWN -> 1; else -> 0 }
+        val dc = when (direction) { ShiftDirection.LEFT -> -1; ShiftDirection.RIGHT -> 1; else -> 0 }
+        val canMove = coords.all { (r, c) -> (r + dr) in rows.indices && (c + dc) in headers.indices }
+        if (!canMove) return coords.toList()
+
+        val snapshot = coords.associateWith { (r, c) -> getCellValue(r, c) }
+        for ((r, c) in coords) setCellValue(r, c, "")
+
+        val newCoords = mutableListOf<Pair<Int, Int>>()
+        for ((orig, value) in snapshot) {
+            val nr = orig.first + dr
+            val nc = orig.second + dc
+            setCellValue(nr, nc, value)
+            newCoords.add(Pair(nr, nc))
+        }
+        markUpdated()
+        return newCoords
     }
 
     fun importCsv(content: String) {
         val lines = content.lines().map { it.trim() }.filter { it.isNotEmpty() }
         if (lines.isEmpty()) return
 
-        var dataStartIdx = 0
+        var dataStart = 0
         if (lines.first().startsWith("# Title:")) {
             tableName = lines.first().substringAfter("# Title:").substringBefore("|").trim()
-            dataStartIdx = 1
+            dataStart = 1
         }
-
-        val remainingLines = lines.drop(dataStartIdx)
-        if (remainingLines.isEmpty()) return
-
-        val parsed = remainingLines.map { line ->
-            val delimiter = if (line.contains("\t")) "\t" else ","
-            line.split(delimiter).map { it.trim().removeSurrounding("\"") }
+        val raw = lines.drop(dataStart).map { l ->
+            val delim = if (l.contains("\t")) "\t" else ","
+            l.split(delim).map { it.trim().removeSurrounding("\"") }
         }
-
-        val rawHeaders = parsed.first()
-        val dataLines = if (parsed.size > 1) parsed.drop(1) else emptyList()
-
-        val hasRowTitle = rawHeaders.firstOrNull()?.equals("Row Title", ignoreCase = true) == true
+        val rawHeaders = raw.first()
+        val dataLines = if (raw.size > 1) raw.drop(1) else emptyList()
+        val hasRowTitle = rawHeaders.firstOrNull()?.equals("Row Title", true) == true
         val actualHeaders = if (hasRowTitle) rawHeaders.drop(1) else rawHeaders
 
-        headers.clear()
-        headers.addAll(actualHeaders.map { ColumnDef(it, ColumnType.TEXT) })
-        rowNames.clear()
-        rows.clear()
-
+        headers.clear(); headers.addAll(actualHeaders.map { ColumnDef(it) })
+        rowNames.clear(); rows.clear()
         for ((idx, line) in dataLines.withIndex()) {
-            val rName = if (hasRowTitle) line.getOrElse(0) { "Row ${idx + 1}" } else "Row ${idx + 1}"
-            val cellValues = if (hasRowTitle) line.drop(1) else line
-            rowNames.add(rName)
-            val padded = cellValues + List((actualHeaders.size - cellValues.size).coerceAtLeast(0)) { "" }
+            rowNames.add(if (hasRowTitle) line.getOrElse(0) { "Row ${idx + 1}" } else "Row ${idx + 1}")
+            val cellVals = if (hasRowTitle) line.drop(1) else line
+            val padded = cellVals + List((actualHeaders.size - cellVals.size).coerceAtLeast(0)) { "" }
             rows.add(mutableStateListOf(*padded.take(actualHeaders.size).toTypedArray()))
         }
         markUpdated()
@@ -346,14 +309,10 @@ class TableData(
         this.tableName = snapshot.tableName
         this.tableDateTime = snapshot.tableDateTime
         this.cornerHeader = snapshot.cornerHeader
-        this.headers.clear()
-        this.headers.addAll(snapshot.headers.map { it.copy() })
-        this.rowNames.clear()
-        this.rowNames.addAll(snapshot.rowNames)
+        this.headers.clear(); this.headers.addAll(snapshot.headers.map { it.copy() })
+        this.rowNames.clear(); this.rowNames.addAll(snapshot.rowNames)
         this.rows.clear()
-        snapshot.rows.forEach { r ->
-            this.rows.add(mutableStateListOf(*r.toTypedArray()))
-        }
+        snapshot.rows.forEach { r -> this.rows.add(mutableStateListOf(*r.toTypedArray())) }
     }
 }
 
@@ -361,15 +320,11 @@ object TableRepository {
     val tables = mutableStateListOf<TableData>()
 
     fun saveOrUpdate(table: TableData) {
-        val existingIndex = tables.indexOfFirst { it.id == table.id }
-        if (existingIndex >= 0) {
-            tables[existingIndex] = table
-        } else {
-            tables.add(table)
-        }
+        val idx = tables.indexOfFirst { it.id == table.id }
+        if (idx >= 0) tables[idx] = table else tables.add(table)
     }
 
-    fun deleteTable(tableId: String) {
-        tables.removeAll { it.id == tableId }
+    fun deleteTable(id: String) {
+        tables.removeAll { it.id == id }
     }
 }

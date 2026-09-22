@@ -1,6 +1,7 @@
 package com.example.imagetotable.ui
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -43,6 +44,7 @@ fun FullScreenCropperDialog(
     onDismiss: () -> Unit,
     onCropConfirmed: (croppedBitmap: Bitmap, mode: CropExtractionMode) -> Unit
 ) {
+    var workingBitmap by remember { mutableStateOf(sourceBitmap) }
     var extractionMode by remember { mutableStateOf(CropExtractionMode.FULL_TABLE) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
 
@@ -57,6 +59,13 @@ fun FullScreenCropperDialog(
     var cropBottom by remember { mutableFloatStateOf(440f) }
     val minGap = 20f
 
+    fun rotateImage90() {
+        val matrix = Matrix().apply { postRotate(90f) }
+        workingBitmap = Bitmap.createBitmap(workingBitmap, 0, 0, workingBitmap.width, workingBitmap.height, matrix, true)
+        zoomScale = 1f
+        panOffset = Offset.Zero
+    }
+
     fun calculateCroppedBitmap(): Bitmap? {
         if (containerSize.width == 0 || containerSize.height == 0) return null
         val left = min(cropLeft, cropRight).coerceIn(0f, containerSize.width.toFloat())
@@ -64,15 +73,15 @@ fun FullScreenCropperDialog(
         val top = min(cropTop, cropBottom).coerceIn(0f, containerSize.height.toFloat())
         val bottom = max(cropTop, cropBottom).coerceIn(0f, containerSize.height.toFloat())
 
-        val scaleX = sourceBitmap.width.toFloat() / containerSize.width
-        val scaleY = sourceBitmap.height.toFloat() / containerSize.height
+        val scaleX = workingBitmap.width.toFloat() / containerSize.width
+        val scaleY = workingBitmap.height.toFloat() / containerSize.height
 
-        val cropX = (left * scaleX).toInt().coerceIn(0, sourceBitmap.width - 1)
-        val cropY = (top * scaleY).toInt().coerceIn(0, sourceBitmap.height - 1)
-        val cropW = ((right - left) * scaleX).toInt().coerceAtLeast(5).coerceAtMost(sourceBitmap.width - cropX)
-        val cropH = ((bottom - top) * scaleY).toInt().coerceAtLeast(5).coerceAtMost(sourceBitmap.height - cropY)
+        val cropX = (left * scaleX).toInt().coerceIn(0, workingBitmap.width - 1)
+        val cropY = (top * scaleY).toInt().coerceIn(0, workingBitmap.height - 1)
+        val cropW = ((right - left) * scaleX).toInt().coerceAtLeast(5).coerceAtMost(workingBitmap.width - cropX)
+        val cropH = ((bottom - top) * scaleY).toInt().coerceAtLeast(5).coerceAtMost(workingBitmap.height - cropY)
 
-        return Bitmap.createBitmap(sourceBitmap, cropX, cropY, cropW, cropH)
+        return Bitmap.createBitmap(workingBitmap, cropX, cropY, cropW, cropH)
     }
 
     Dialog(
@@ -81,7 +90,7 @@ fun FullScreenCropperDialog(
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // Zoomable Source Image
+                // Zoomable & Pannable Source Image
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -93,7 +102,7 @@ fun FullScreenCropperDialog(
                         }
                 ) {
                     Image(
-                        bitmap = sourceBitmap.asImageBitmap(),
+                        bitmap = workingBitmap.asImageBitmap(),
                         contentDescription = "Cropping preview",
                         modifier = Modifier
                             .fillMaxSize()
@@ -143,7 +152,7 @@ fun FullScreenCropperDialog(
                     )
                 }
 
-                // Top Controls: Mode Selection & Independent Edge Nudging
+                // Top Controls: Rotate 90°, Mode Selection & Edge Nudges
                 Card(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -158,12 +167,23 @@ fun FullScreenCropperDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Mode: ${if (extractionMode == CropExtractionMode.FULL_TABLE) "Full Table" else "Step-by-Step Cell"}",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Button(
+                                    onClick = { rotateImage90() },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0288D1)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) { Text("🔄 90°", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+
+                                Button(
+                                    onClick = {
+                                        zoomScale = 1f
+                                        panOffset = Offset.Zero
+                                    },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) { Text("Fit", color = Color.White, fontSize = 11.sp) }
+                            }
+
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Button(
                                     onClick = { extractionMode = CropExtractionMode.FULL_TABLE },

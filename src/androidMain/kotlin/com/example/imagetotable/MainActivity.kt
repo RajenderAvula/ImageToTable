@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,8 +32,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -44,8 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.example.imagetotable.model.*
 import com.example.imagetotable.ocr.AndroidOcrService
-import com.example.imagetotable.ui.AdvancedRowEditorDialog
-import com.example.imagetotable.ui.FullScreenCropperDialog
+import com.example.imagetotable.ui.*
 import com.example.imagetotable.util.CalendarPickerUtil
 import com.example.imagetotable.util.TableExporter
 import kotlinx.coroutines.Dispatchers
@@ -105,26 +107,35 @@ fun MobileTableEditorScreen() {
     var anchorCell by remember { mutableStateOf(Pair(0, 0)) }
     var cellClipboard by remember { mutableStateOf<CellClipboard?>(null) }
 
-    // OCR & Image Transfer State
+    // Image, Pinch Zoom & Token States
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var splitZoomScale by remember { mutableFloatStateOf(1f) }
+    var splitPanOffset by remember { mutableStateOf(Offset.Zero) }
+
     val detectedWords = remember { mutableStateListOf<String>() }
     var selectedWordText by remember { mutableStateOf("") }
     var isProcessing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Ready") }
 
-    // Screen Modes & Dialogs
+    // Dialog Visibilities
     var isFullScreen by remember { mutableStateOf(false) }
     var showComparisonView by remember { mutableStateOf(false) }
     var showCropperDialog by remember { mutableStateOf(false) }
+    var showDedicatedEditor by remember { mutableStateOf(false) }
+    var showNewTableDialog by remember { mutableStateOf(false) }
+    var showAllWordsDialog by remember { mutableStateOf(false) }
     var showTableHistoryDrawer by remember { mutableStateOf(false) }
     var showDeleteTableConfirm by remember { mutableStateOf(false) }
     var showRowEditorDialog by remember { mutableStateOf(false) }
     var editingRowIndex by remember { mutableIntStateOf(0) }
 
+    var showReplaceOrAppendChoice by remember { mutableStateOf(false) }
+    var pendingExtractionPair by remember { mutableStateOf<Pair<List<String>, List<List<String>>>?>(null) }
+
     var showExportMenu by remember { mutableStateOf(false) }
     var activeExportFormat by remember { mutableStateOf(ExportFormat.PDF) }
 
-    // Search & Filter
+    // Search & Filter States
     var globalSearchQuery by remember { mutableStateOf("") }
     val hiddenColumns = remember { mutableStateListOf<Int>() }
     var showColumnFilterDropdown by remember { mutableStateOf(false) }
@@ -134,7 +145,23 @@ fun MobileTableEditorScreen() {
     var activeRowDropdownIdx by remember { mutableStateOf<Int?>(null) }
     var drawerSearchQuery by remember { mutableStateOf("") }
 
-    // Printing
+    // Fast Next Row Navigation
+    fun jumpToNextRow() {
+        val (cr, cc) = anchorCell
+        if (cr >= 0 && cr < currentTable.rows.size - 1) {
+            anchorCell = Pair(cr + 1, cc)
+            selectedCells.clear()
+            selectedCells.add(Pair(cr + 1, cc))
+        } else {
+            currentTable.addRow("Row ${currentTable.rows.size + 1}")
+            anchorCell = Pair(currentTable.rows.size - 1, cc)
+            selectedCells.clear()
+            selectedCells.add(anchorCell)
+            statusMessage = "Added & jumped to new row!"
+        }
+    }
+
+    // Printing Handler
     fun printTablePdf() {
         try {
             val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
@@ -182,7 +209,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // Sharing
+    // Sharing Handler
     fun shareTablePdf() {
         try {
             val cacheFile = File(context.cacheDir, "${currentTable.tableName.replace(" ", "_")}.pdf")
@@ -208,7 +235,8 @@ fun MobileTableEditorScreen() {
                     val content = stream.bufferedReader().use { it.readText() }
                     currentTable.importCsv(content)
                     tableSnapshot = currentTable.createSnapshot()
-                    selectedCells.clear(); selectedCells.add(Pair(0, 0))
+                    selectedCells.clear()
+                    selectedCells.add(Pair(0, 0))
                     statusMessage = "Imported CSV successfully!"
                 }
             } catch (e: Exception) {
@@ -247,28 +275,35 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // Full Screen Cropper Dialog
+    // 1. Cropper Dialog (Full Table or Step-by-Step Single Cell)
     if (showCropperDialog && selectedBitmap != null) {
         FullScreenCropperDialog(
             sourceBitmap = selectedBitmap!!,
             onDismiss = { showCropperDialog = false },
-            onCropConfirmed = { cropped ->
-                selectedBitmap = cropped
+            onCropConfirmed = { cropped, mode ->
                 showCropperDialog = false
                 coroutineScope.launch {
                     isProcessing = true
-                    statusMessage = "Extracting table via OCR..."
                     try {
                         val service = AndroidOcrService(context) { msg -> statusMessage = msg }
-                        val (h, r) = service.extractTable(cropped)
-                        withContext(Dispatchers.Main) {
-                            currentTable.loadExtractedData(h, r)
-                            tableSnapshot = currentTable.createSnapshot()
-                            detectedWords.clear()
-                            h.forEach { detectedWords.add(it) }
-                            r.flatten().filter { it.isNotBlank() }.forEach { detectedWords.add(it) }
-                            selectedCells.clear(); selectedCells.add(Pair(0, 0))
-                            statusMessage = "Extracted ${r.size} rows & ${h.size} cols!"
+                        if (mode == CropExtractionMode.SINGLE_CELL_STEP) {
+                            val (h, r) = service.extractTable(cropped)
+                            val text = (h + r.flatten()).filter { it.isNotBlank() }.joinToString(" ")
+                            val (tr, tc) = anchorCell
+                            withContext(Dispatchers.Main) {
+                                currentTable.setCellValue(tr, tc, text)
+                                statusMessage = "Inserted '$text' into active cell ($tr, $tc)"
+                            }
+                        } else {
+                            val (h, r) = service.extractTable(cropped)
+                            withContext(Dispatchers.Main) {
+                                detectedWords.clear()
+                                h.forEach { detectedWords.add(it) }
+                                r.flatten().filter { it.isNotBlank() }.forEach { detectedWords.add(it) }
+
+                                pendingExtractionPair = Pair(h, r)
+                                showReplaceOrAppendChoice = true
+                            }
                         }
                     } catch (e: Exception) {
                         statusMessage = "OCR error: ${e.message}"
@@ -280,7 +315,120 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Advanced Row Editor Dialog
+    // 2. Prompt: Replace vs Append Table
+    if (showReplaceOrAppendChoice && pendingExtractionPair != null) {
+        val (h, r) = pendingExtractionPair!!
+        AlertDialog(
+            onDismissRequest = { showReplaceOrAppendChoice = false },
+            title = { Text("Add Extracted Data", fontWeight = FontWeight.Bold) },
+            text = { Text("Detected ${r.size} rows & ${h.size} columns. Would you like to append these rows to your current table or replace it completely?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        currentTable.appendExtractedData(h, r)
+                        tableSnapshot = currentTable.createSnapshot()
+                        showReplaceOrAppendChoice = false
+                        statusMessage = "Appended ${r.size} rows to current table!"
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
+                ) { Text("Append to Table", color = Color.White) }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        currentTable.loadExtractedData(h, r)
+                        tableSnapshot = currentTable.createSnapshot()
+                        showReplaceOrAppendChoice = false
+                        statusMessage = "Replaced table with ${r.size} rows!"
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315))
+                ) { Text("Replace Table", color = Color.White) }
+            }
+        )
+    }
+
+    // 3. Dedicated Table Editor UI
+    if (showDedicatedEditor) {
+        DedicatedTableEditorDialog(
+            tableData = currentTable,
+            onDismiss = { showDedicatedEditor = false },
+            onSave = {
+                tableSnapshot = currentTable.createSnapshot()
+                TableRepository.saveOrUpdate(currentTable)
+                showDedicatedEditor = false
+                statusMessage = "Dedicated table edits saved!"
+            }
+        )
+    }
+
+    // 4. New Table Dialog Bound to Calendar Date & Time
+    if (showNewTableDialog) {
+        NewTableDialog(
+            onDismiss = { showNewTableDialog = false },
+            onTableCreated = { newTable ->
+                TableRepository.saveOrUpdate(newTable)
+                currentTable = newTable
+                tableSnapshot = newTable.createSnapshot()
+                selectedCells.clear()
+                selectedCells.add(Pair(0, 0))
+                showNewTableDialog = false
+                statusMessage = "Created table '${newTable.tableName}'!"
+            }
+        )
+    }
+
+    // 5. All Words Retrieved Full Multi-Selection Dialog
+    if (showAllWordsDialog) {
+        AllWordsSelectorDialog(
+            detectedWords = detectedWords,
+            onDismiss = { showAllWordsDialog = false },
+            onTransferSelected = { words, mode ->
+                when (mode) {
+                    TokenPlacementMode.SEQUENCE_FROM_ACTIVE -> {
+                        var (tr, tc) = anchorCell
+                        for (w in words) {
+                            currentTable.setCellValue(tr, tc, w)
+                            if (tc < currentTable.headers.size - 1) tc++ else {
+                                if (tr < currentTable.rows.size - 1) { tr++; tc = 0 } else {
+                                    currentTable.addRow()
+                                    tr++
+                                    tc = 0
+                                }
+                            }
+                        }
+                    }
+                    TokenPlacementMode.FILL_MULTI_SELECTION -> {
+                        selectedCells.forEachIndexed { idx, (r, c) ->
+                            val text = words.getOrElse(idx % words.size) { "" }
+                            currentTable.setCellValue(r, c, text)
+                        }
+                    }
+                    TokenPlacementMode.APPEND_NEW_ROW -> {
+                        val rName = "Row ${currentTable.rows.size + 1}"
+                        currentTable.addRow(rName)
+                        val lastR = currentTable.rows.size - 1
+                        words.forEachIndexed { cIdx, w ->
+                            while (cIdx >= currentTable.headers.size) currentTable.addColumn("Col ${currentTable.headers.size + 1}")
+                            currentTable.setCellValue(lastR, cIdx, w)
+                        }
+                    }
+                    TokenPlacementMode.APPEND_NEW_COL -> {
+                        val colName = words.firstOrNull() ?: "New Col"
+                        currentTable.addColumn(colName)
+                        val lastC = currentTable.headers.size - 1
+                        words.drop(1).forEachIndexed { rIdx, w ->
+                            while (rIdx >= currentTable.rows.size) currentTable.addRow()
+                            currentTable.setCellValue(rIdx, lastC, w)
+                        }
+                    }
+                }
+                showAllWordsDialog = false
+                statusMessage = "Transferred ${words.size} words!"
+            }
+        )
+    }
+
+    // 6. Advanced Row Editor Dialog (Restored from your file)
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
         AdvancedRowEditorDialog(
@@ -317,7 +465,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Delete Table Dialog
+    // 7. Delete Entire Table Confirmation Dialog
     if (showDeleteTableConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteTableConfirm = false },
@@ -334,7 +482,8 @@ fun MobileTableEditorScreen() {
                         ).also { TableRepository.saveOrUpdate(it) }
                         currentTable = next
                         tableSnapshot = next.createSnapshot()
-                        selectedCells.clear(); selectedCells.add(Pair(0, 0))
+                        selectedCells.clear()
+                        selectedCells.add(Pair(0, 0))
                         showDeleteTableConfirm = false
                         statusMessage = "Table deleted."
                     },
@@ -375,6 +524,9 @@ fun MobileTableEditorScreen() {
                     },
                     backgroundColor = Color(0xFF1E88E5),
                     actions = {
+                        IconButton(onClick = { showDedicatedEditor = true }) {
+                            Text("🛠 Edit Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                         IconButton(onClick = { showComparisonView = !showComparisonView }) {
                             Text(if (showComparisonView) "✕ Split" else "🔍 Split", color = Color.White, fontSize = 11.sp)
                         }
@@ -392,18 +544,13 @@ fun MobileTableEditorScreen() {
             }
         }
     ) { paddingValues ->
-        // DISMISS KEYBOARD ON OUTSIDE TAP
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(if (isFullScreen) 4.dp else paddingValues.calculateBottomPadding() + 4.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = { focusManager.clearFocus() })
-                }
+                .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
         ) {
-            // =========================================================================
-            // 1. FULL-SCREEN MODE TOP BAR WITH EXIT BUTTON & CONTROLS
-            // =========================================================================
+            // FULL SCREEN MODE TOOLBAR
             if (isFullScreen) {
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
@@ -429,6 +576,12 @@ fun MobileTableEditorScreen() {
                         )
 
                         Button(
+                            onClick = { showDedicatedEditor = true },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)),
+                            modifier = Modifier.height(42.dp)
+                        ) { Text("🛠 Dedicated Editor", color = Color.White, fontSize = 11.sp) }
+
+                        Button(
                             onClick = {
                                 CalendarPickerUtil.pickDateTime(context) { newDateTime ->
                                     currentTable.tableDateTime = newDateTime
@@ -440,7 +593,6 @@ fun MobileTableEditorScreen() {
                             modifier = Modifier.height(42.dp)
                         ) { Text("📅 ${currentTable.tableDateTime.take(16)}", color = Color.White, fontSize = 11.sp) }
 
-                        // Transpose in Full Screen
                         Button(
                             onClick = { currentTable.transposeTable() },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100)),
@@ -458,6 +610,12 @@ fun MobileTableEditorScreen() {
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
                             modifier = Modifier.height(42.dp)
                         ) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
+
+                        Button(
+                            onClick = { jumpToNextRow() },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                            modifier = Modifier.height(42.dp)
+                        ) { Text("Next Row ➔", color = Color.White, fontSize = 11.sp) }
 
                         Button(
                             onClick = { showComparisonView = !showComparisonView },
@@ -478,14 +636,14 @@ fun MobileTableEditorScreen() {
                         Button(
                             onClick = {
                                 currentTable.revertToSnapshot(tableSnapshot)
-                                selectedCells.clear(); selectedCells.add(Pair(0, 0))
+                                selectedCells.clear()
+                                selectedCells.add(Pair(0, 0))
                                 statusMessage = "Reverted!"
                             },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
                             modifier = Modifier.height(42.dp)
                         ) { Text("↩ Cancel", color = Color.White, fontSize = 11.sp) }
 
-                        // PROMINENT EXIT FULL SCREEN BUTTON
                         Button(
                             onClick = { isFullScreen = false },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color.DarkGray),
@@ -495,9 +653,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // =========================================================================
-            // 2. MAIN TOOLBAR (Normal Screen Mode)
-            // =========================================================================
+            // NORMAL SCREEN TOOLBAR
             if (!isFullScreen) {
                 Row(
                     modifier = Modifier
@@ -507,24 +663,12 @@ fun MobileTableEditorScreen() {
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // NEW TABLE
                     Button(
-                        onClick = {
-                            val newTable = TableData(
-                                initialName = "Table ${TableRepository.tables.size + 1}",
-                                initialHeaders = listOf(ColumnDef("Col 1"), ColumnDef("Col 2")),
-                                initialRows = listOf(listOf("", ""), listOf("", ""))
-                            )
-                            TableRepository.saveOrUpdate(newTable)
-                            currentTable = newTable
-                            tableSnapshot = newTable.createSnapshot()
-                            selectedCells.clear(); selectedCells.add(Pair(0, 0))
-                        },
+                        onClick = { showNewTableDialog = true },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
+                    ) { Text("+ New Table (Date Bound)", color = Color.White, fontSize = 11.sp) }
 
-                    // NEW TABLE FROM FILTERS
                     Button(
                         onClick = {
                             val subTable = currentTable.createSubTable(
@@ -535,14 +679,116 @@ fun MobileTableEditorScreen() {
                             TableRepository.saveOrUpdate(subTable)
                             currentTable = subTable
                             tableSnapshot = subTable.createSnapshot()
-                            selectedCells.clear(); selectedCells.add(Pair(0, 0))
+                            selectedCells.clear()
+                            selectedCells.add(Pair(0, 0))
                             statusMessage = "Created new table from filtered view!"
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00ACC1)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) { Text("📋 New from Filters", color = Color.White, fontSize = 11.sp) }
 
-                    // TRANSPOSE BUTTON
+                    Button(
+                        onClick = { showDedicatedEditor = true },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00838F)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) { Text("🛠 Edit Table UI", color = Color.White, fontSize = 11.sp) }
+
+                    // COLUMNS FILTER DROPDOWN
+                    Box {
+                        Button(
+                            onClick = { showColumnFilterDropdown = true },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF37474F)),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Columns Filter (${visibleColIndices.size}) ▼", color = Color.White, fontSize = 11.sp)
+                        }
+                        DropdownMenu(
+                            expanded = showColumnFilterDropdown,
+                            onDismissRequest = { showColumnFilterDropdown = false }
+                        ) {
+                            DropdownMenuItem(onClick = { hiddenColumns.clear() }) {
+                                Text("✓ Select All Columns", fontWeight = FontWeight.Bold, color = Color(0xFF1E88E5))
+                            }
+                            DropdownMenuItem(onClick = {
+                                hiddenColumns.clear()
+                                hiddenColumns.addAll(currentTable.headers.indices.drop(1))
+                            }) {
+                                Text("✕ Hide Others (Keep 1st)", color = Color.Gray)
+                            }
+                            Divider()
+                            currentTable.headers.forEachIndexed { idx, h ->
+                                val isHidden = hiddenColumns.contains(idx)
+                                DropdownMenuItem(onClick = {
+                                    if (isHidden) hiddenColumns.remove(idx) else hiddenColumns.add(idx)
+                                }) {
+                                    Checkbox(checked = !isHidden, onCheckedChange = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(h.name, fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    // ROW VALUES FILTER DROPDOWN
+                    Box {
+                        Button(
+                            onClick = { showRowFilterDropdown = true },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00695C)),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Row Values Filter ▼", color = Color.White, fontSize = 11.sp)
+                        }
+                        DropdownMenu(
+                            expanded = showRowFilterDropdown,
+                            onDismissRequest = { showRowFilterDropdown = false }
+                        ) {
+                            Text(
+                                text = "Filter By Column Values:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Gray,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                            currentTable.headers.forEachIndexed { cIdx, col ->
+                                DropdownMenuItem(onClick = { selectedFilterColIndex = cIdx }) {
+                                    Text(
+                                        text = (if (selectedFilterColIndex == cIdx) "● " else "○ ") + col.name,
+                                        fontWeight = if (selectedFilterColIndex == cIdx) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                            Divider()
+                            DropdownMenuItem(onClick = {
+                                globalSearchQuery = ""
+                                showRowFilterDropdown = false
+                            }) { Text("✕ Clear Value Filter", color = Color.Red, fontSize = 12.sp) }
+
+                            val distinctValues = currentTable.rows.mapNotNull {
+                                it.getOrNull(selectedFilterColIndex)?.takeIf { s -> s.isNotBlank() }
+                            }.distinct()
+
+                            distinctValues.take(15).forEach { valItem ->
+                                DropdownMenuItem(onClick = {
+                                    globalSearchQuery = valItem
+                                    showRowFilterDropdown = false
+                                }) { Text("Match: \"$valItem\"", fontSize = 12.sp) }
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = { jumpToNextRow() },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) { Text("Next Row ➔", color = Color.White, fontSize = 11.sp) }
+
+                    Button(
+                        onClick = { showAllWordsDialog = true },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1565C0)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) { Text("View All Tokens (${detectedWords.size})", color = Color.White, fontSize = 11.sp) }
+
                     Button(
                         onClick = { currentTable.transposeTable() },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100)),
@@ -562,20 +808,19 @@ fun MobileTableEditorScreen() {
                     Button(
                         onClick = {
                             currentTable.revertToSnapshot(tableSnapshot)
-                            selectedCells.clear(); selectedCells.add(Pair(0, 0))
+                            selectedCells.clear()
+                            selectedCells.add(Pair(0, 0))
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) { Text("↩ Cancel", color = Color.White, fontSize = 11.sp) }
 
-                    // IMPORT CSV BUTTON
                     Button(
                         onClick = { csvImportLauncher.launch("text/*") },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) { Text("📥 Import CSV", color = Color.White, fontSize = 11.sp) }
 
-                    // PRINT & SHARE BUTTONS
                     Button(
                         onClick = { printTablePdf() },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0277BD)),
@@ -645,9 +890,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // =========================================================================
-            // 3. UNCONGESTED SEARCH BOX
-            // =========================================================================
+            // UNCONGESTED SEARCH BAR
             Card(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                 shape = RoundedCornerShape(8.dp),
@@ -679,9 +922,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // =========================================================================
-            // 4. SPLIT VIEW & ONE-BY-ONE TEXT TRANSFER (Works in Normal & Full-Screen)
-            // =========================================================================
+            // PINCH-TO-ZOOM IMAGE PREVIEW & SPLIT VIEW
             if (showComparisonView) {
                 Card(
                     modifier = Modifier.fillMaxWidth().height(260.dp).padding(4.dp),
@@ -689,20 +930,33 @@ fun MobileTableEditorScreen() {
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Row(modifier = Modifier.fillMaxSize().padding(6.dp)) {
-                        // High-visibility Image Box
+                        // Pinch to zoom image box
                         Box(
                             modifier = Modifier
                                 .weight(1.1f)
                                 .fillMaxHeight()
                                 .background(Color(0xFF212121), RoundedCornerShape(6.dp))
-                                .border(1.dp, Color.Gray, RoundedCornerShape(6.dp)),
+                                .border(1.dp, Color.Gray, RoundedCornerShape(6.dp))
+                                .pointerInput(Unit) {
+                                    detectTransformGestures { _, pan, zoom, _ ->
+                                        splitZoomScale = (splitZoomScale * zoom).coerceIn(0.5f, 6.0f)
+                                        splitPanOffset += pan
+                                    }
+                                },
                             contentAlignment = Alignment.Center
                         ) {
                             if (selectedBitmap != null) {
                                 Image(
                                     bitmap = selectedBitmap!!.asImageBitmap(),
-                                    contentDescription = "Source Image",
-                                    modifier = Modifier.fillMaxSize().padding(4.dp),
+                                    contentDescription = "Zoomable Preview",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer {
+                                            scaleX = splitZoomScale
+                                            scaleY = splitZoomScale
+                                            translationX = splitPanOffset.x
+                                            translationY = splitPanOffset.y
+                                        },
                                     contentScale = ContentScale.Fit
                                 )
                             } else {
@@ -719,7 +973,14 @@ fun MobileTableEditorScreen() {
                             modifier = Modifier.weight(1.2f).fillMaxHeight(),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Text("Extracted Tokens (Tap to Transfer):", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color(0xFF1565C0))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Tokens (${detectedWords.size}):", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color(0xFF1565C0))
+                                TextButton(onClick = { showAllWordsDialog = true }) { Text("View All ➔", fontSize = 11.sp) }
+                            }
 
                             LazyRow(
                                 modifier = Modifier.fillMaxWidth(),
@@ -728,8 +989,7 @@ fun MobileTableEditorScreen() {
                                 if (detectedWords.isEmpty()) {
                                     item { Text("No tokens yet. Load & crop image.", fontSize = 11.sp, color = Color.Gray) }
                                 }
-                                items(detectedWords.size) { idx ->
-                                    val word = detectedWords[idx]
+                                itemsIndexed(detectedWords) { _, word ->
                                     Box(
                                         modifier = Modifier
                                             .background(
@@ -765,7 +1025,6 @@ fun MobileTableEditorScreen() {
                                 Button(
                                     onClick = {
                                         currentTable.setCellValue(tr, tc, selectedWordText)
-                                        // Auto advance to next cell for fast data entry
                                         anchorCell = if (tc < currentTable.headers.size - 1) Pair(tr, tc + 1) else Pair((tr + 1).coerceAtMost(currentTable.rows.size - 1), 0)
                                         statusMessage = "Transferred to $targetLabel!"
                                     },
@@ -793,9 +1052,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // =========================================================================
-            // 5. MULTI-CELL SELECTION & 1-TO-MANY PASTE TOOLBAR
-            // =========================================================================
+            // MULTI-CELL SELECTION & 1-TO-MANY PASTE TOOLBAR
             Card(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                 backgroundColor = if (isMultiSelectMode) Color(0xFFF3E5F5) else Color(0xFFF1F5F9),
@@ -842,7 +1099,6 @@ fun MobileTableEditorScreen() {
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) { Text("✂ Cut", color = Color.White, fontSize = 11.sp) }
 
-                    // PASTE (1-to-many replication support)
                     Button(
                         onClick = {
                             cellClipboard?.let { clip ->
@@ -873,16 +1129,24 @@ fun MobileTableEditorScreen() {
 
                     OutlinedButton(
                         onClick = {
-                            selectedCells.clear(); selectedCells.add(anchorCell)
+                            selectedCells.clear()
+                            selectedCells.add(anchorCell)
                         },
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                     ) { Text("Clear", fontSize = 11.sp) }
+
+                    Button(
+                        onClick = { jumpToNextRow() },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) { Text("Next Row ➔", color = Color.White, fontSize = 11.sp) }
 
                     Text("Shift:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     Button(
                         onClick = {
                             val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.LEFT)
-                            selectedCells.clear(); selectedCells.addAll(updated)
+                            selectedCells.clear()
+                            selectedCells.addAll(updated)
                         },
                         modifier = Modifier.size(width = 32.dp, height = 28.dp),
                         contentPadding = PaddingValues(0.dp)
@@ -890,7 +1154,8 @@ fun MobileTableEditorScreen() {
                     Button(
                         onClick = {
                             val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.RIGHT)
-                            selectedCells.clear(); selectedCells.addAll(updated)
+                            selectedCells.clear()
+                            selectedCells.addAll(updated)
                         },
                         modifier = Modifier.size(width = 32.dp, height = 28.dp),
                         contentPadding = PaddingValues(0.dp)
@@ -898,7 +1163,8 @@ fun MobileTableEditorScreen() {
                     Button(
                         onClick = {
                             val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.UP)
-                            selectedCells.clear(); selectedCells.addAll(updated)
+                            selectedCells.clear()
+                            selectedCells.addAll(updated)
                         },
                         modifier = Modifier.size(width = 32.dp, height = 28.dp),
                         contentPadding = PaddingValues(0.dp)
@@ -906,7 +1172,8 @@ fun MobileTableEditorScreen() {
                     Button(
                         onClick = {
                             val updated = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.DOWN)
-                            selectedCells.clear(); selectedCells.addAll(updated)
+                            selectedCells.clear()
+                            selectedCells.addAll(updated)
                         },
                         modifier = Modifier.size(width = 32.dp, height = 28.dp),
                         contentPadding = PaddingValues(0.dp)
@@ -914,17 +1181,13 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // =========================================================================
-            // 6. MAIN TABLE CANVAS (Includes Corner (-1,-1), Headers & Row Names in Grid)
-            // =========================================================================
+            // MAIN GRID CANVAS
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .pointerInput(Unit) {
-                        detectTapGestures(onTap = { focusManager.clearFocus() })
-                    }
+                    .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
             ) {
                 Column(modifier = Modifier.width(totalTableWidth).fillMaxHeight()) {
                     // Header Row
@@ -962,7 +1225,8 @@ fun MobileTableEditorScreen() {
                                             if (it.isFocused) {
                                                 anchorCell = Pair(-1, -1)
                                                 if (!isMultiSelectMode) {
-                                                    selectedCells.clear(); selectedCells.add(Pair(-1, -1))
+                                                    selectedCells.clear()
+                                                    selectedCells.add(Pair(-1, -1))
                                                 }
                                             }
                                         }
@@ -1002,7 +1266,8 @@ fun MobileTableEditorScreen() {
                                                     if (it.isFocused) {
                                                         anchorCell = Pair(-1, colIdx)
                                                         if (!isMultiSelectMode) {
-                                                            selectedCells.clear(); selectedCells.add(Pair(-1, colIdx))
+                                                            selectedCells.clear()
+                                                            selectedCells.add(Pair(-1, colIdx))
                                                         }
                                                     }
                                                 }
@@ -1122,7 +1387,8 @@ fun MobileTableEditorScreen() {
                                                     if (it.isFocused) {
                                                         anchorCell = Pair(origRIdx, -1)
                                                         if (!isMultiSelectMode) {
-                                                            selectedCells.clear(); selectedCells.add(Pair(origRIdx, -1))
+                                                            selectedCells.clear()
+                                                            selectedCells.add(Pair(origRIdx, -1))
                                                         }
                                                     }
                                                 }
@@ -1204,7 +1470,8 @@ fun MobileTableEditorScreen() {
                                                     if (focusState.isFocused) {
                                                         anchorCell = cellCoord
                                                         if (!isMultiSelectMode) {
-                                                            selectedCells.clear(); selectedCells.add(cellCoord)
+                                                            selectedCells.clear()
+                                                            selectedCells.add(cellCoord)
                                                         }
                                                     }
                                                 }
@@ -1248,9 +1515,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // =========================================================================
-    // 7. SAVED TABLES DRAWER (WITH TIMESTAMP SEARCH & TABLE CREATION)
-    // =========================================================================
+    // SAVED TABLES DRAWER
     if (showTableHistoryDrawer) {
         AlertDialog(
             onDismissRequest = { showTableHistoryDrawer = false },
@@ -1293,7 +1558,8 @@ fun MobileTableEditorScreen() {
                                         .clickable {
                                             currentTable = t
                                             tableSnapshot = t.createSnapshot()
-                                            selectedCells.clear(); selectedCells.add(Pair(0, 0))
+                                            selectedCells.clear()
+                                            selectedCells.add(Pair(0, 0))
                                             showTableHistoryDrawer = false
                                             statusMessage = "Loaded: ${t.tableName}"
                                         }

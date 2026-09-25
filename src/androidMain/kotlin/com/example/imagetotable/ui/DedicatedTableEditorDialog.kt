@@ -31,17 +31,25 @@ fun DedicatedTableEditorDialog(
     onDismiss: () -> Unit,
     onSave: () -> Unit
 ) {
+    // Preserve local copy snapshot in case user cancels
+    val originalSnapshot = remember { tableData.createSnapshot() }
+
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            tableData.revertToSnapshot(originalSnapshot)
+            onDismiss()
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(0.98f).fillMaxHeight(0.96f),
+            modifier = Modifier
+                .fillMaxWidth(0.98f)
+                .fillMaxHeight(0.96f),
             shape = RoundedCornerShape(12.dp),
             elevation = 8.dp
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                // Top Header Strip
+                // TOP BAR with prominent Save & Cancel
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -50,7 +58,7 @@ fun DedicatedTableEditorDialog(
                     Column {
                         Text(
                             "Dedicated Table Grid Editor",
-                            fontSize = 16.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF1565C0)
                         )
@@ -74,20 +82,32 @@ fun DedicatedTableEditorDialog(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                         ) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
 
-                        TextButton(onClick = onDismiss) { Text("Cancel") }
+                        // Top Cancel Button
+                        OutlinedButton(
+                            onClick = {
+                                tableData.revertToSnapshot(originalSnapshot)
+                                onDismiss()
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                        ) {
+                            Text("Cancel", color = Color.Red, fontSize = 11.sp)
+                        }
 
+                        // Top Save Button
                         Button(
                             onClick = onSave,
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
-                        ) { Text("Save & Exit", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp) }
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
+                        ) {
+                            Text("Save", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
                 val colWidth = 140.dp
-                val rowActionWidth = 80.dp
+                val rowActionWidth = 90.dp
                 val totalWidth = rowActionWidth + (colWidth * tableData.headers.size)
 
                 // Scrollable Table Canvas
@@ -103,7 +123,7 @@ fun DedicatedTableEditorDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(Color(0xFFE3EDF7))
-                                .padding(vertical = 2.dp),
+                                .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
@@ -240,6 +260,41 @@ fun DedicatedTableEditorDialog(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Divider()
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // BOTTOM ACTION BAR: Redundant Save & Cancel for easy mobile reach
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${tableData.rows.size} Rows • ${tableData.headers.size} Columns",
+                        fontSize = 12.sp,
+                        color = Color.DarkGray
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                tableData.revertToSnapshot(originalSnapshot)
+                                onDismiss()
+                            }
+                        ) {
+                            Text("Discard & Cancel", color = Color.Red)
+                        }
+
+                        Button(
+                            onClick = onSave,
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                        ) {
+                            Text("Save Changes", color = Color.White, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

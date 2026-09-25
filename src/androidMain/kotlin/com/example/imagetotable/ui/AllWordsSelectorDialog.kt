@@ -1,7 +1,6 @@
 package com.example.imagetotable.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -18,26 +17,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-
-enum class TokenPlacementMode {
-    SEQUENCE_FROM_ACTIVE,
-    FILL_MULTI_SELECTION,
-    APPEND_NEW_ROW,
-    APPEND_NEW_COL
-}
+// Import single source of truth from model
+import com.example.imagetotable.model.TokenPlacementMode
 
 @Composable
 fun AllWordsSelectorDialog(
     detectedWords: List<String>,
     onDismiss: () -> Unit,
-    onTransferSelected: (selectedWords: List<String>, mode: TokenPlacementMode) -> Unit
+    onTransferSelected: (List<String>, TokenPlacementMode) -> Unit
 ) {
     val selectedWords = remember { mutableStateListOf<String>() }
-    var searchQuery by remember { mutableStateOf("") }
-
-    val filteredWords = detectedWords.filter {
-        searchQuery.isBlank() || it.contains(searchQuery, ignoreCase = true)
-    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -48,57 +37,51 @@ fun AllWordsSelectorDialog(
             shape = RoundedCornerShape(12.dp),
             elevation = 8.dp
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                Text(
-                    "All Words Retrieved from Image (${detectedWords.size})",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF1565C0)
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    label = { Text("Filter words...") },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    singleLine = true
-                )
-
+            Column(modifier = Modifier.padding(12.dp)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("${selectedWords.size} words selected", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        TextButton(onClick = {
-                            selectedWords.clear()
-                            selectedWords.addAll(filteredWords)
-                        }) { Text("Select All") }
-                        TextButton(onClick = { selectedWords.clear() }) { Text("Clear") }
+                    Column {
+                        Text(
+                            "OCR Word Token Inspector",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1565C0)
+                        )
+                        Text(
+                            "${selectedWords.size} of ${detectedWords.size} words selected",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { selectedWords.clear(); selectedWords.addAll(detectedWords) }) {
+                            Text("Select All", fontSize = 11.sp)
+                        }
+                        TextButton(onClick = { selectedWords.clear() }) {
+                            Text("Clear", fontSize = 11.sp)
+                        }
                     }
                 }
 
-                // Grid of all words
+                Spacer(modifier = Modifier.height(6.dp))
+
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 90.dp),
+                    columns = GridCells.Adaptive(minSize = 85.dp),
                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    itemsIndexed(filteredWords) { _, word ->
+                    itemsIndexed(detectedWords) { _, word ->
                         val isSelected = selectedWords.contains(word)
                         Box(
                             modifier = Modifier
                                 .background(
-                                    color = if (isSelected) Color(0xFF1976D2) else Color(0xFFE8EEF5),
-                                    shape = RoundedCornerShape(6.dp)
-                                )
-                                .border(
-                                    1.dp,
-                                    if (isSelected) Color(0xFF0D47A1) else Color.LightGray,
-                                    RoundedCornerShape(6.dp)
+                                    color = if (isSelected) Color(0xFF1976D2) else Color(0xFFECEFF1),
+                                    shape = RoundedCornerShape(4.dp)
                                 )
                                 .clickable {
                                     if (isSelected) selectedWords.remove(word) else selectedWords.add(word)
@@ -108,9 +91,8 @@ fun AllWordsSelectorDialog(
                         ) {
                             Text(
                                 text = word,
-                                fontSize = 12.sp,
-                                color = if (isSelected) Color.White else Color.Black,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                fontSize = 11.sp,
+                                color = if (isSelected) Color.White else Color.Black
                             )
                         }
                     }
@@ -120,9 +102,10 @@ fun AllWordsSelectorDialog(
                 Divider()
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Placement options
-                Text("Transfer Selected Words To:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text("Transfer Selected Words As:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+
                 Spacer(modifier = Modifier.height(4.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -131,32 +114,37 @@ fun AllWordsSelectorDialog(
                         onClick = { onTransferSelected(selectedWords.toList(), TokenPlacementMode.SEQUENCE_FROM_ACTIVE) },
                         enabled = selectedWords.isNotEmpty(),
                         modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
                         contentPadding = PaddingValues(2.dp)
-                    ) { Text("➔ Sequence", fontSize = 10.sp) }
+                    ) { Text("➔ Seq", fontSize = 10.sp, color = Color.White) }
 
                     Button(
                         onClick = { onTransferSelected(selectedWords.toList(), TokenPlacementMode.FILL_MULTI_SELECTION) },
                         enabled = selectedWords.isNotEmpty(),
                         modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF7B1FA2)),
                         contentPadding = PaddingValues(2.dp)
-                    ) { Text("➔ Multi-Cells", fontSize = 10.sp) }
+                    ) { Text("➔ Multi", fontSize = 10.sp, color = Color.White) }
 
                     Button(
                         onClick = { onTransferSelected(selectedWords.toList(), TokenPlacementMode.APPEND_NEW_ROW) },
                         enabled = selectedWords.isNotEmpty(),
                         modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3949AB)),
                         contentPadding = PaddingValues(2.dp)
-                    ) { Text("+ As Row", fontSize = 10.sp) }
+                    ) { Text("+ Row", fontSize = 10.sp, color = Color.White) }
 
                     Button(
                         onClick = { onTransferSelected(selectedWords.toList(), TokenPlacementMode.APPEND_NEW_COL) },
                         enabled = selectedWords.isNotEmpty(),
                         modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315)),
                         contentPadding = PaddingValues(2.dp)
-                    ) { Text("+ As Col", fontSize = 10.sp) }
+                    ) { Text("+ Col", fontSize = 10.sp, color = Color.White) }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
+
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("Close") }
                 }

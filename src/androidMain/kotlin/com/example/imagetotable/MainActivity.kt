@@ -98,7 +98,6 @@ fun MobileTableEditorScreen() {
     var currentTable by remember { mutableStateOf(initialTable) }
     var tableSnapshot by remember { mutableStateOf(initialTable.createSnapshot()) }
 
-    // 4 Clean Tabs: 0: Workspace (Table + Scan & Convert Merged), 1: PDF Studio, 2: History, 3: Settings
     var selectedTabIndex by remember { mutableIntStateOf(0) }
 
     var isMultiSelectMode by remember { mutableStateOf(false) }
@@ -106,7 +105,6 @@ fun MobileTableEditorScreen() {
     var anchorCell by remember { mutableStateOf(Pair(0, 0)) }
     var cellClipboard by remember { mutableStateOf<CellClipboard?>(null) }
 
-    // Image, OCR Word Bank & Status
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val detectedWords = remember { mutableStateListOf<String>() }
     val selectedTokens = remember { mutableStateListOf<String>() }
@@ -154,8 +152,6 @@ fun MobileTableEditorScreen() {
 
     // PDF Studio State
     val pdfPages = remember { mutableStateListOf<PdfPageItem>() }
-
-    // Cache Stats
     var cacheSizeText by remember { mutableStateOf(CacheManager.getFormattedCacheSize(context)) }
 
     fun jumpToNextRow() {
@@ -178,7 +174,6 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // Printing Handlers
     fun printTablePdf() {
         try {
             val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
@@ -186,12 +181,32 @@ fun MobileTableEditorScreen() {
             FileOutputStream(cacheFile).use { out -> TableExporter.exportToPdf(currentTable, out) }
             if (printManager != null) {
                 val printAdapter = object : android.print.PrintDocumentAdapter() {
-                    override fun onLayout(oldAttributes: PrintAttributes?, newAttributes: PrintAttributes?, cancellationSignal: android.os.CancellationSignal?, callback: LayoutResultCallback?, extras: Bundle?) {
-                        callback?.onLayoutFinished(android.print.PrintDocumentInfo.Builder("${currentTable.tableName}.pdf").setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build(), true)
+                    override fun onLayout(
+                        oldAttributes: PrintAttributes?,
+                        newAttributes: PrintAttributes?,
+                        cancellationSignal: android.os.CancellationSignal?,
+                        callback: LayoutResultCallback?,
+                        extras: Bundle?
+                    ) {
+                        callback?.onLayoutFinished(
+                            android.print.PrintDocumentInfo.Builder("${currentTable.tableName}.pdf")
+                                .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                                .build(),
+                            true
+                        )
                     }
-                    override fun onWrite(pages: Array<out android.print.PageRange>?, destination: android.os.ParcelFileDescriptor?, cancellationSignal: android.os.CancellationSignal?, callback: WriteResultCallback?) {
+                    override fun onWrite(
+                        pages: Array<out android.print.PageRange>?,
+                        destination: android.os.ParcelFileDescriptor?,
+                        cancellationSignal: android.os.CancellationSignal?,
+                        callback: WriteResultCallback?
+                    ) {
                         try {
-                            destination?.let { pfd -> FileOutputStream(pfd.fileDescriptor).use { output -> cacheFile.inputStream().use { input -> input.copyTo(output) } } }
+                            destination?.let { pfd ->
+                                FileOutputStream(pfd.fileDescriptor).use { output ->
+                                    cacheFile.inputStream().use { input -> input.copyTo(output) }
+                                }
+                            }
                             callback?.onWriteFinished(arrayOf(android.print.PageRange.ALL_PAGES))
                         } catch (e: Exception) {
                             callback?.onWriteFailed(e.message)
@@ -202,6 +217,23 @@ fun MobileTableEditorScreen() {
             }
         } catch (e: Exception) {
             Toast.makeText(context, "Print failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun shareTablePdf() {
+        try {
+            val cacheFile = File(context.cacheDir, "${currentTable.tableName.replace(" ", "_")}.pdf")
+            FileOutputStream(cacheFile).use { out -> TableExporter.exportToPdf(currentTable, out) }
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", cacheFile)
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/pdf"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, currentTable.tableName)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "Share Table PDF"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "Share failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -216,12 +248,32 @@ fun MobileTableEditorScreen() {
                 }
                 if (printManager != null) {
                     val printAdapter = object : android.print.PrintDocumentAdapter() {
-                        override fun onLayout(oldAttributes: PrintAttributes?, newAttributes: PrintAttributes?, cancellationSignal: android.os.CancellationSignal?, callback: LayoutResultCallback?, extras: Bundle?) {
-                            callback?.onLayoutFinished(android.print.PrintDocumentInfo.Builder("Studio_Document.pdf").setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build(), true)
+                        override fun onLayout(
+                            oldAttributes: PrintAttributes?,
+                            newAttributes: PrintAttributes?,
+                            cancellationSignal: android.os.CancellationSignal?,
+                            callback: LayoutResultCallback?,
+                            extras: Bundle?
+                        ) {
+                            callback?.onLayoutFinished(
+                                android.print.PrintDocumentInfo.Builder("Studio_Document.pdf")
+                                    .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                                    .build(),
+                                true
+                            )
                         }
-                        override fun onWrite(pages: Array<out android.print.PageRange>?, destination: android.os.ParcelFileDescriptor?, cancellationSignal: android.os.CancellationSignal?, callback: WriteResultCallback?) {
+                        override fun onWrite(
+                            pages: Array<out android.print.PageRange>?,
+                            destination: android.os.ParcelFileDescriptor?,
+                            cancellationSignal: android.os.CancellationSignal?,
+                            callback: WriteResultCallback?
+                        ) {
                             try {
-                                destination?.let { pfd -> FileOutputStream(pfd.fileDescriptor).use { output -> cacheFile.inputStream().use { input -> input.copyTo(output) } } }
+                                destination?.let { pfd ->
+                                    FileOutputStream(pfd.fileDescriptor).use { output ->
+                                        cacheFile.inputStream().use { input -> input.copyTo(output) }
+                                    }
+                                }
                                 callback?.onWriteFinished(arrayOf(android.print.PageRange.ALL_PAGES))
                             } catch (e: Exception) {
                                 callback?.onWriteFailed(e.message)
@@ -316,7 +368,6 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // Direct Camera Scanner for PDF Studio
     val pdfStudioCameraScanLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bmp: Bitmap? ->
@@ -352,7 +403,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // 1. Cropper Dialog (OCR or PDF Studio page borders)
+    // Cropper Dialog
     if (showCropperDialog && selectedBitmap != null) {
         FullScreenCropperDialog(
             sourceBitmap = selectedBitmap!!,
@@ -404,14 +455,14 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 2. Extraction Preview Verification Dialog
+    // Extraction Preview Verification Dialog
     if (showExtractionPreviewDialog && previewCroppedBitmap != null) {
         ExtractionPreviewDialog(
             croppedBitmap = previewCroppedBitmap!!,
             initialHeaders = pendingExtractedHeaders,
             initialRows = pendingExtractedRows,
             onDismiss = { showExtractionPreviewDialog = false },
-            onConfirmAppend = { verifiedHeaders, verifiedRows, excludeHeaders, excludeRowNames ->
+            onConfirmAppend = { verifiedHeaders, verifiedRows, excludeHeaders, _ ->
                 if (excludeHeaders) {
                     val paddedRows = verifiedRows.map { r ->
                         r + List((currentTable.headers.size - r.size).coerceAtLeast(0)) { "" }
@@ -431,7 +482,7 @@ fun MobileTableEditorScreen() {
                 showExtractionPreviewDialog = false
                 statusMessage = "Appended ${verifiedRows.size} verified rows to table!"
             },
-            onConfirmReplace = { verifiedHeaders, verifiedRows, excludeHeaders, excludeRowNames ->
+            onConfirmReplace = { verifiedHeaders, verifiedRows, excludeHeaders, _ ->
                 if (excludeHeaders) {
                     currentTable.rows.clear()
                     currentTable.rowNames.clear()
@@ -452,7 +503,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 3. Dedicated Table Editor UI
+    // Dedicated Table Editor UI
     if (showDedicatedEditor) {
         DedicatedTableEditorDialog(
             tableData = currentTable,
@@ -466,7 +517,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 4. New Table Dialog Bound to Calendar Date & Time
+    // New Table Dialog Bound to Calendar Date & Time
     if (showNewTableDialog) {
         NewTableDialog(
             onDismiss = { showNewTableDialog = false },
@@ -481,7 +532,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 5. All Words Inspector Full Modal
+    // All Words Inspector Full Modal
     if (showAllWordsDialog) {
         AllWordsSelectorDialog(
             detectedWords = detectedWords,
@@ -530,7 +581,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 6. Advanced Row Editor Dialog with Next / Prev Navigation[cite: 1]
+    // Advanced Row Editor Dialog with Next / Prev Navigation
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
         AdvancedRowEditorDialog(
@@ -572,7 +623,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 7. Post-Generation PDF Inspector Dialog (Zoom, Reorder Pages, Reduce Size)
+    // Post-Generation PDF Inspector Dialog
     if (showGeneratedPdfInspector) {
         GeneratedPdfInspectorDialog(
             pages = pdfPages,
@@ -592,14 +643,21 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // 8. Clear & Delete Confirmations
+    // Clear & Delete Confirmations
     if (showClearTableConfirm) {
         AlertDialog(
             onDismissRequest = { showClearTableConfirm = false },
             title = { Text("Clear All Cell Values?", fontWeight = FontWeight.Bold) },
             text = { Text("Are you sure you want to empty every cell in this table? Headers and rows will remain intact.") },
             confirmButton = {
-                Button(onClick = { currentTable.clearAllValues(); showClearTableConfirm = false; statusMessage = "Cleared cells." }, colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)) { Text("Clear All", color = Color.White) }
+                Button(
+                    onClick = {
+                        currentTable.clearAllValues()
+                        showClearTableConfirm = false
+                        statusMessage = "Cleared cells."
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
+                ) { Text("Clear All", color = Color.White) }
             },
             dismissButton = { TextButton(onClick = { showClearTableConfirm = false }) { Text("Cancel") } }
         )
@@ -684,28 +742,24 @@ fun MobileTableEditorScreen() {
         bottomBar = {
             if (!isFullScreen) {
                 BottomNavigation(backgroundColor = Color(0xFF1E88E5)) {
-                    // TAB 0: Merged Table and Scan & Convert
                     BottomNavigationItem(
                         selected = selectedTabIndex == 0,
                         onClick = { selectedTabIndex = 0 },
                         icon = { Text("🏠", fontSize = 18.sp) },
                         label = { Text("Table & Scan", fontSize = 10.sp) }
                     )
-                    // TAB 1: PDF Studio
                     BottomNavigationItem(
                         selected = selectedTabIndex == 1,
                         onClick = { selectedTabIndex = 1 },
                         icon = { Text("📄", fontSize = 18.sp) },
                         label = { Text("PDF Studio", fontSize = 10.sp) }
                     )
-                    // TAB 2: History
                     BottomNavigationItem(
                         selected = selectedTabIndex == 2,
                         onClick = { selectedTabIndex = 2 },
                         icon = { Text("📂", fontSize = 18.sp) },
                         label = { Text("History", fontSize = 10.sp) }
                     )
-                    // TAB 3: Settings
                     BottomNavigationItem(
                         selected = selectedTabIndex == 3,
                         onClick = {
@@ -725,12 +779,9 @@ fun MobileTableEditorScreen() {
                 .padding(paddingValues)
                 .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
         ) {
-            // =========================================================================
             // TAB 0: MERGED TABLE AND SCAN & CONVERT WORKSPACE
-            // =========================================================================
             if (selectedTabIndex == 0 || isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // Top Conversion, Scan & Table Action Bar
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -750,7 +801,6 @@ fun MobileTableEditorScreen() {
                             statusMessage = "Created sub-table!"
                         }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00ACC1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("📋 New from Filters", color = Color.White, fontSize = 11.sp) }
 
-                        // Toggle OCR Scanner & Words Panel right inside Table View
                         Button(
                             onClick = { showScanWorkspaceInTable = !showScanWorkspaceInTable },
                             colors = ButtonDefaults.buttonColors(backgroundColor = if (showScanWorkspaceInTable) Color(0xFFE91E63) else Color(0xFF3949AB)),
@@ -760,7 +810,6 @@ fun MobileTableEditorScreen() {
                         Button(onClick = { jumpToNextRow() }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("Next Row ➔", color = Color.White, fontSize = 11.sp) }
                         Button(onClick = { currentTable.transposeTable() }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("⇄ Transpose", color = Color.White, fontSize = 11.sp) }
 
-                        // Export Options
                         Button(onClick = { activeExportFormat = ExportFormat.PDF; fileSaveLauncher.launch("${currentTable.tableName}.pdf") }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("PDF", color = Color.White, fontSize = 11.sp) }
                         Button(onClick = { activeExportFormat = ExportFormat.EXCEL; fileSaveLauncher.launch("${currentTable.tableName}.csv") }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("CSV", color = Color.White, fontSize = 11.sp) }
                         Button(onClick = { activeExportFormat = ExportFormat.WORD; fileSaveLauncher.launch("${currentTable.tableName}.doc") }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1565C0)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("Word", color = Color.White, fontSize = 11.sp) }
@@ -773,7 +822,6 @@ fun MobileTableEditorScreen() {
                         Button(onClick = { currentTable.addColumn("Col ${currentTable.headers.size + 1}") }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                     }
 
-                    // Merged Embedded Scanner & Word Bank Section (Expandable within Table view)
                     if (showScanWorkspaceInTable) {
                         Card(
                             modifier = Modifier.fillMaxWidth().height(160.dp).padding(4.dp),
@@ -781,7 +829,6 @@ fun MobileTableEditorScreen() {
                             elevation = 3.dp
                         ) {
                             Row(modifier = Modifier.fillMaxSize().padding(4.dp)) {
-                                // Image / Camera Box
                                 Box(
                                     modifier = Modifier.weight(1f).fillMaxHeight().background(Color(0xFF263238), RoundedCornerShape(6.dp)),
                                     contentAlignment = Alignment.Center
@@ -800,7 +847,6 @@ fun MobileTableEditorScreen() {
 
                                 Spacer(modifier = Modifier.width(6.dp))
 
-                                // Word Bank & Instant Insertion into Table
                                 Column(modifier = Modifier.weight(1.3f).fillMaxHeight()) {
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                         Text("Tokens (${detectedWords.size})", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color(0xFF1565C0))
@@ -858,7 +904,6 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Search & Multi-Cell Controls Strip
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                         backgroundColor = if (isMultiSelectMode) Color(0xFFF3E5F5) else Color(0xFFF1F5F9),
@@ -886,7 +931,6 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Main Table Canvas with Scrollable Rows & Columns
                     Box(modifier = Modifier.weight(1f).fillMaxWidth().horizontalScroll(rememberScrollState())) {
                         Column(modifier = Modifier.width(totalTableWidth).fillMaxHeight()) {
                             Row(modifier = Modifier.fillMaxWidth().background(Color(0xFFE3EDF7)).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -952,12 +996,9 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // =========================================================================
             // TAB 1: PDF STUDIO (SCAN CAMERA, UPLOAD, BORDERS, POST-GEN INSPECTION)
-            // =========================================================================
             if (selectedTabIndex == 1 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
-                    // Top Actions: Camera Scan, Upload Images, Clear All
                     Card(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), shape = RoundedCornerShape(8.dp), backgroundColor = Color(0xFFF1F5F9)) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -965,7 +1006,6 @@ fun MobileTableEditorScreen() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                // Camera Scanner Option
                                 Button(
                                     onClick = { pdfStudioCameraScanLauncher.launch(null) },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315)),
@@ -989,7 +1029,6 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Pages List with Adjust Borders, Move Up/Down, Rotate, Delete
                     if (pdfPages.isEmpty()) {
                         Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1028,7 +1067,6 @@ fun MobileTableEditorScreen() {
                                             Spacer(modifier = Modifier.height(4.dp))
 
                                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                // Adjust Borders / Crop Trigger
                                                 Button(
                                                     onClick = {
                                                         selectedBitmap = pageItem.bitmap
@@ -1051,7 +1089,6 @@ fun MobileTableEditorScreen() {
                                             }
                                         }
 
-                                        // Move Page Up / Down / Delete
                                         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                             Button(
                                                 onClick = {
@@ -1089,7 +1126,6 @@ fun MobileTableEditorScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Generate & Open Post-Generation Inspector
                     Button(
                         onClick = {
                             coroutineScope.launch {
@@ -1124,9 +1160,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // =========================================================================
             // TAB 2: SAVED TABLES LIST & HISTORY
-            // =========================================================================
             if (selectedTabIndex == 2 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -1151,9 +1185,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // =========================================================================
             // TAB 3: SETTINGS & CACHE MANAGER
-            // =========================================================================
             if (selectedTabIndex == 3 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text("Settings & App Maintenance", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))

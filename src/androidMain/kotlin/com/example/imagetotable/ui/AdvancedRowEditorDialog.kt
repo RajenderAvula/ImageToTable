@@ -60,7 +60,7 @@ fun AdvancedRowEditorDialog(
     val editableHeaders = remember { mutableStateListOf<ColumnDef>() }
     val editableValues = remember { mutableStateListOf<String>() }
 
-    // Resynchronize when navigating to a new row
+    // Resynchronize state whenever currentRowIndex changes
     LaunchedEffect(currentRowIndex, rowName, rowValues, headers) {
         currentRowTitle = rowName
         editableHeaders.clear()
@@ -94,7 +94,7 @@ fun AdvancedRowEditorDialog(
             elevation = 8.dp
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                // Header with Row Navigation Arrows and Calendar Picker[cite: 1, 6]
+                // Top Header: Navigation (Prev / Next Row) & Calendar Picker
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -114,14 +114,16 @@ fun AdvancedRowEditorDialog(
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                         ) { Text("📅 ${tableDateTime.take(16)}", color = Color.White, fontSize = 10.sp) }
 
+                        // Next and Previous Row Options
                         Button(
                             onClick = {
                                 autoSaveCurrent()
                                 onNavigateRow(currentRowIndex - 1)
                             },
                             enabled = currentRowIndex > 0,
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                        ) { Text("◀ Prev") }
+                        ) { Text("◀ Prev Row", color = Color.White, fontSize = 11.sp) }
 
                         Button(
                             onClick = {
@@ -129,14 +131,15 @@ fun AdvancedRowEditorDialog(
                                 onNavigateRow(currentRowIndex + 1)
                             },
                             enabled = currentRowIndex < totalRows - 1,
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                        ) { Text("Next ▶") }
+                        ) { Text("Next Row ▶", color = Color.White, fontSize = 11.sp) }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Table Title & Row Name
+                // Table Title & Row Name Inputs
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -162,7 +165,7 @@ fun AdvancedRowEditorDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Action Bar: Add Row Above/Below & Move Row Vertically[cite: 1, 6]
+                // Row Mutation Controls (Add Row Above/Below & Shift Vertically)[cite: 1]
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -199,7 +202,7 @@ fun AdvancedRowEditorDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Add Column Field[cite: 2, 7]
+                // Add Column Field[cite: 2]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -249,7 +252,7 @@ fun AdvancedRowEditorDialog(
                 Spacer(modifier = Modifier.height(6.dp))
                 Divider()
 
-                // Column List with Renaming, Types, Lateral Move, and Cell Editing[cite: 1, 6]
+                // Column List with Renaming, Types, Lateral Move, and Cell Editing[cite: 1]
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     itemsIndexed(editableHeaders) { colIdx, colDef ->
                         Card(
@@ -264,7 +267,7 @@ fun AdvancedRowEditorDialog(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    // Column Rename Input[cite: 1, 6]
+                                    // Column Rename Input
                                     BasicTextField(
                                         value = colDef.name,
                                         onValueChange = { newName ->
@@ -274,7 +277,7 @@ fun AdvancedRowEditorDialog(
                                         modifier = Modifier.weight(1f)
                                     )
 
-                                    // Data Type Selector Chip[cite: 1, 6]
+                                    // Column Data Type Chip[cite: 1]
                                     var colTypeMenuOpen by remember { mutableStateOf(false) }
                                     Box {
                                         Text(
@@ -298,7 +301,7 @@ fun AdvancedRowEditorDialog(
 
                                     Spacer(modifier = Modifier.width(6.dp))
 
-                                    // Lateral Column Move Arrows[cite: 1, 6]
+                                    // Lateral Column Move Arrows[cite: 1]
                                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                         Text(
                                             "◀",
@@ -340,7 +343,7 @@ fun AdvancedRowEditorDialog(
 
                                 Spacer(modifier = Modifier.height(4.dp))
 
-                                // Cell Value Input[cite: 1, 6]
+                                // Cell Value Input[cite: 1]
                                 OutlinedTextField(
                                     value = editableValues.getOrElse(colIdx) { "" },
                                     onValueChange = {
@@ -358,7 +361,7 @@ fun AdvancedRowEditorDialog(
                 Divider()
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Bottom Action Bar[cite: 1, 6]
+                // Bottom Action Bar[cite: 1]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,

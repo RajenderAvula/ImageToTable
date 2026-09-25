@@ -55,16 +55,34 @@ fun AdvancedRowEditorDialog(
     val context = LocalContext.current
     var tableName by remember { mutableStateOf(initialTableName) }
     var tableDateTime by remember { mutableStateOf(initialTableDateTime) }
-    var currentRowTitle by remember(currentRowIndex, rowName) { mutableStateOf(rowName) }
 
-    // Fully editable headers and cell values
-    val editableHeaders = remember(headers) { mutableStateListOf(*headers.map { it.copy() }.toTypedArray()) }
-    val editableValues = remember(currentRowIndex, rowValues) {
-        mutableStateListOf(*headers.indices.map { idx -> rowValues.getOrElse(idx) { "" } }.toTypedArray())
+    var currentRowTitle by remember { mutableStateOf(rowName) }
+    val editableHeaders = remember { mutableStateListOf<ColumnDef>() }
+    val editableValues = remember { mutableStateListOf<String>() }
+
+    // Resynchronize when navigating to a new row
+    LaunchedEffect(currentRowIndex, rowName, rowValues, headers) {
+        currentRowTitle = rowName
+        editableHeaders.clear()
+        editableHeaders.addAll(headers.map { it.copy() })
+        editableValues.clear()
+        for (i in headers.indices) {
+            editableValues.add(rowValues.getOrElse(i) { "" })
+        }
     }
 
     var newColName by remember { mutableStateOf("") }
     var newColType by remember { mutableStateOf(ColumnType.TEXT) }
+
+    fun autoSaveCurrent() {
+        onSaveRowAndTable(
+            tableName,
+            tableDateTime,
+            currentRowTitle,
+            editableHeaders.toList(),
+            editableValues.toList()
+        )
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -76,7 +94,7 @@ fun AdvancedRowEditorDialog(
             elevation = 8.dp
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                // Top Header: Title, Calendar Date/Time Picker, and Row Navigation
+                // Header with Row Navigation Arrows and Calendar Picker[cite: 1, 6]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -90,25 +108,29 @@ fun AdvancedRowEditorDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(
                             onClick = {
-                                CalendarPickerUtil.pickDateTime(context) { newDt ->
-                                    tableDateTime = newDt
-                                }
+                                CalendarPickerUtil.pickDateTime(context) { newDt -> tableDateTime = newDt }
                             },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                         ) { Text("📅 ${tableDateTime.take(16)}", color = Color.White, fontSize = 10.sp) }
 
                         Button(
-                            onClick = { onNavigateRow(currentRowIndex - 1) },
+                            onClick = {
+                                autoSaveCurrent()
+                                onNavigateRow(currentRowIndex - 1)
+                            },
                             enabled = currentRowIndex > 0,
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                        ) { Text("◀") }
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) { Text("◀ Prev") }
 
                         Button(
-                            onClick = { onNavigateRow(currentRowIndex + 1) },
+                            onClick = {
+                                autoSaveCurrent()
+                                onNavigateRow(currentRowIndex + 1)
+                            },
                             enabled = currentRowIndex < totalRows - 1,
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                        ) { Text("▶") }
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) { Text("Next ▶") }
                     }
                 }
 
@@ -140,7 +162,7 @@ fun AdvancedRowEditorDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Row Action Toolbar: Add Row Above/Below & Move Row Up/Down
+                // Action Bar: Add Row Above/Below & Move Row Vertically[cite: 1, 6]
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -177,7 +199,7 @@ fun AdvancedRowEditorDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Add New Column Section
+                // Add Column Field[cite: 2, 7]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -227,7 +249,7 @@ fun AdvancedRowEditorDialog(
                 Spacer(modifier = Modifier.height(6.dp))
                 Divider()
 
-                // List of Columns with Name, Data Type Dropdown, Lateral Arrows & Cell Inputs
+                // Column List with Renaming, Types, Lateral Move, and Cell Editing[cite: 1, 6]
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     itemsIndexed(editableHeaders) { colIdx, colDef ->
                         Card(
@@ -242,7 +264,7 @@ fun AdvancedRowEditorDialog(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    // Column Rename Input
+                                    // Column Rename Input[cite: 1, 6]
                                     BasicTextField(
                                         value = colDef.name,
                                         onValueChange = { newName ->
@@ -252,7 +274,7 @@ fun AdvancedRowEditorDialog(
                                         modifier = Modifier.weight(1f)
                                     )
 
-                                    // Data Type Selector Dropdown
+                                    // Data Type Selector Chip[cite: 1, 6]
                                     var colTypeMenuOpen by remember { mutableStateOf(false) }
                                     Box {
                                         Text(
@@ -276,7 +298,7 @@ fun AdvancedRowEditorDialog(
 
                                     Spacer(modifier = Modifier.width(6.dp))
 
-                                    // Lateral Column Move Arrows
+                                    // Lateral Column Move Arrows[cite: 1, 6]
                                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                         Text(
                                             "◀",
@@ -318,7 +340,7 @@ fun AdvancedRowEditorDialog(
 
                                 Spacer(modifier = Modifier.height(4.dp))
 
-                                // Cell Value Input
+                                // Cell Value Input[cite: 1, 6]
                                 OutlinedTextField(
                                     value = editableValues.getOrElse(colIdx) { "" },
                                     onValueChange = {
@@ -336,7 +358,7 @@ fun AdvancedRowEditorDialog(
                 Divider()
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Bottom Action Bar
+                // Bottom Action Bar[cite: 1, 6]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -352,18 +374,10 @@ fun AdvancedRowEditorDialog(
                         TextButton(onClick = onDismiss) { Text("Cancel") }
 
                         Button(
-                            onClick = {
-                                onSaveRowAndTable(
-                                    tableName,
-                                    tableDateTime,
-                                    currentRowTitle,
-                                    editableHeaders.toList(),
-                                    editableValues.toList()
-                                )
-                            },
+                            onClick = { autoSaveCurrent(); onDismiss() },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                        ) { Text("Save Row", color = Color.White, fontWeight = FontWeight.Bold) }
+                        ) { Text("Save & Close", color = Color.White, fontWeight = FontWeight.Bold) }
                     }
                 }
             }

@@ -1,4 +1,5 @@
 package com.example.imagetotable
+import com.example.imagetotable.model.TokenPlacementMode
 
 import android.content.Context
 import android.content.Intent

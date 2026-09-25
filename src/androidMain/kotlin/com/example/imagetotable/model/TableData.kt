@@ -15,8 +15,8 @@ enum class ColumnType(val label: String) {
 }
 
 data class ColumnDef(
-    val name: String,
-    val type: ColumnType = ColumnType.TEXT
+    var name: String,
+    var type: ColumnType = ColumnType.TEXT
 )
 
 enum class ShiftDirection {
@@ -185,7 +185,6 @@ class TableData(
         if (clipboard.items.isEmpty()) return emptyList()
         val pasted = mutableListOf<Pair<Int, Int>>()
 
-        // Single cell copied -> Replicate across all selected cells
         if (clipboard.items.size == 1 && selectedCells.size > 1) {
             val singleValue = clipboard.items.first().value
             for ((r, c) in selectedCells) {

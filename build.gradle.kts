@@ -1,7 +1,8 @@
+// build.gradle.kts
 plugins {
-    id("com.android.application")
-    kotlin("android")
-    id("org.jetbrains.kotlin.plugin.compose")
+    id("com.android.application") version "8.5.2" apply true
+    id("org.jetbrains.kotlin.android") version "2.0.20" apply true
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply true
 }
 
 android {
@@ -40,6 +41,15 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // Points Android to your existing file locations
+    sourceSets {
+        getByName("main") {
+            java.srcDirs("src/androidMain/kotlin")
+            manifest.srcFile("src/androidMain/AndroidManifest.xml")
+            res.srcDirs("src/androidMain/res")
+        }
+    }
 }
 
 dependencies {
@@ -50,18 +60,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.activity:activity-compose:1.9.2")
 
-    // Jetpack Compose UI & Material
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material:material")
 
-    // ML Kit On-Device Text Recognition
     implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
-
-    // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

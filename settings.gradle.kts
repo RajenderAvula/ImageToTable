@@ -1,5 +1,5 @@
+// settings.gradle.kts
 rootProject.name = "ImageToTable"
-include(":app")
 
 pluginManagement {
     repositories {

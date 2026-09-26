@@ -1,6 +1,9 @@
 package com.example.imagetotable.model
 
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -59,9 +62,9 @@ class TableData(
     initialRows: List<List<String>> = emptyList(),
     initialRowNames: List<String> = emptyList()
 ) {
-    var tableName: String = initialName
-    var tableDateTime: String = initialDateTime
-    var cornerHeader: String = initialCorner
+    var tableName: String by mutableStateOf(initialName)
+    var tableDateTime: String by mutableStateOf(initialDateTime)
+    var cornerHeader: String by mutableStateOf(initialCorner)
 
     val headers: SnapshotStateList<ColumnDef> = mutableStateListOf(*initialHeaders.toTypedArray())
     val rowNames: SnapshotStateList<String> = mutableStateListOf(
@@ -81,8 +84,19 @@ class TableData(
         tableDateTime = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
     }
 
+    fun getCellValue(rowIndex: Int, colIndex: Int): String {
+        return if (rowIndex in rows.indices && colIndex in headers.indices) {
+            rows[rowIndex].getOrElse(colIndex) { "" }
+        } else {
+            ""
+        }
+    }
+
     fun setCellValue(rowIndex: Int, colIndex: Int, value: String) {
         if (rowIndex in rows.indices && colIndex in headers.indices) {
+            while (rows[rowIndex].size <= colIndex) {
+                rows[rowIndex].add("")
+            }
             rows[rowIndex][colIndex] = value
             markUpdated()
         }
@@ -151,7 +165,7 @@ class TableData(
         markUpdated()
     }
 
-    fun clearCells(cells: List<Pair<Int, Int>>) {
+    fun clearCells(cells: Collection<Pair<Int, Int>>) {
         for ((r, c) in cells) {
             if (r in rows.indices && c in headers.indices) {
                 rows[r][c] = ""
@@ -160,7 +174,7 @@ class TableData(
         markUpdated()
     }
 
-    fun copyCells(cells: List<Pair<Int, Int>>, isCut: Boolean): CellClipboard {
+    fun copyCells(cells: Collection<Pair<Int, Int>>, isCut: Boolean = false): CellClipboard {
         if (cells.isEmpty()) return CellClipboard(emptyList(), isCut)
         val validCells = cells.filter { (r, c) -> r in rows.indices && c in headers.indices }
         if (validCells.isEmpty()) return CellClipboard(emptyList(), isCut)
@@ -169,7 +183,7 @@ class TableData(
         val minC = validCells.minOf { it.second }
 
         val items = validCells.map { (r, c) ->
-            val v = rows[r][c]
+            val v = rows[r].getOrElse(c) { "" }
             if (isCut) rows[r][c] = ""
             ClipboardItem(r - minR, c - minC, v)
         }
@@ -178,23 +192,30 @@ class TableData(
     }
 
     fun pasteCells(
-        selectedCells: List<Pair<Int, Int>>,
+        selectedCells: Collection<Pair<Int, Int>>,
         anchor: Pair<Int, Int>,
         clipboard: CellClipboard
     ): List<Pair<Int, Int>> {
         if (clipboard.items.isEmpty()) return emptyList()
         val pasted = mutableListOf<Pair<Int, Int>>()
 
+        // CASE 1: 1 Copied Cell -> Replicate across all selected target cells
         if (clipboard.items.size == 1 && selectedCells.size > 1) {
             val singleValue = clipboard.items.first().value
             for ((r, c) in selectedCells) {
                 if (r in rows.indices && c in headers.indices) {
+                    while (rows[r].size <= c) rows[r].add("")
                     rows[r][c] = singleValue
                     pasted.add(Pair(r, c))
                 }
             }
         } else {
-            val (baseR, baseC) = if (anchor.first in rows.indices && anchor.second in headers.indices) {
+            // CASE 2: Multi-cell block paste or single cell placement
+            val (baseR, baseC) = if (selectedCells.isNotEmpty()) {
+                val minR = selectedCells.minOf { it.first }.coerceAtLeast(0)
+                val minC = selectedCells.minOf { it.second }.coerceAtLeast(0)
+                Pair(minR, minC)
+            } else if (anchor.first in rows.indices && anchor.second in headers.indices) {
                 anchor
             } else {
                 Pair(0, 0)
@@ -206,6 +227,7 @@ class TableData(
 
                 while (targetC >= headers.size) addColumn()
                 while (targetR >= rows.size) addRow()
+                while (rows[targetR].size <= targetC) rows[targetR].add("")
 
                 rows[targetR][targetC] = item.value
                 pasted.add(Pair(targetR, targetC))
@@ -216,11 +238,26 @@ class TableData(
     }
 
     fun shiftCellsBatch(
-        cells: List<Pair<Int, Int>>,
+        cells: Collection<Pair<Int, Int>>,
         direction: ShiftDirection
     ): List<Pair<Int, Int>> {
         val validCells = cells.filter { (r, c) -> r in rows.indices && c in headers.indices }
-        if (validCells.isEmpty()) return cells
+        if (validCells.isEmpty()) return cells.toList()
+
+        // Guard against shifting out-of-bounds at the top/left boundary
+        if (direction == ShiftDirection.LEFT && validCells.any { it.second == 0 }) return cells.toList()
+        if (direction == ShiftDirection.UP && validCells.any { it.first == 0 }) return cells.toList()
+
+        val dr = when (direction) {
+            ShiftDirection.UP -> -1
+            ShiftDirection.DOWN -> 1
+            else -> 0
+        }
+        val dc = when (direction) {
+            ShiftDirection.LEFT -> -1
+            ShiftDirection.RIGHT -> 1
+            else -> 0
+        }
 
         val cellMap = validCells.associateWith { (r, c) -> rows[r][c] }
         val updatedCoords = mutableListOf<Pair<Int, Int>>()
@@ -231,21 +268,12 @@ class TableData(
 
         for ((coord, value) in cellMap) {
             val (r, c) = coord
-            var newR = r
-            var newC = c
+            val newR = r + dr
+            val newC = c + dc
 
-            when (direction) {
-                ShiftDirection.LEFT -> newC = (c - 1).coerceAtLeast(0)
-                ShiftDirection.RIGHT -> {
-                    newC = c + 1
-                    while (newC >= headers.size) addColumn()
-                }
-                ShiftDirection.UP -> newR = (r - 1).coerceAtLeast(0)
-                ShiftDirection.DOWN -> {
-                    newR = r + 1
-                    while (newR >= rows.size) addRow()
-                }
-            }
+            while (newC >= headers.size) addColumn()
+            while (newR >= rows.size) addRow()
+            while (rows[newR].size <= newC) rows[newR].add("")
 
             rows[newR][newC] = value
             updatedCoords.add(Pair(newR, newC))
@@ -351,6 +379,41 @@ class TableData(
         }
     }
 
+    fun selectionToTsv(cells: Collection<Pair<Int, Int>>): String {
+        val valid = cells.filter { (r, c) -> r in rows.indices && c in headers.indices }
+        if (valid.isEmpty()) return ""
+        val minR = valid.minOf { it.first }
+        val maxR = valid.maxOf { it.first }
+        val minC = valid.minOf { it.second }
+        val maxC = valid.maxOf { it.second }
+
+        val cellSet = valid.toSet()
+        val sb = StringBuilder()
+        for (r in minR..maxR) {
+            val rowVals = mutableListOf<String>()
+            for (c in minC..maxC) {
+                if (cellSet.contains(Pair(r, c))) {
+                    rowVals.add(rows[r].getOrElse(c) { "" })
+                } else {
+                    rowVals.add("")
+                }
+            }
+            sb.append(rowVals.joinToString("\t"))
+            if (r < maxR) sb.append("\n")
+        }
+        return sb.toString()
+    }
+
+    fun toTsvString(): String {
+        val sb = StringBuilder()
+        sb.append(cornerHeader).append("\t").append(headers.joinToString("\t") { it.name }).append("\n")
+        for (r in rows.indices) {
+            sb.append(rowNames.getOrElse(r) { "Row ${r + 1}" }).append("\t")
+            sb.append(rows[r].joinToString("\t")).append("\n")
+        }
+        return sb.toString().trimEnd()
+    }
+
     fun createSnapshot(): TableSnapshot {
         return TableSnapshot(
             tableName = tableName,
@@ -367,13 +430,14 @@ class TableData(
         tableDateTime = snapshot.tableDateTime
         cornerHeader = snapshot.cornerHeader
         headers.clear()
-        headers.addAll(snapshot.headers)
+        headers.addAll(snapshot.headers.map { it.copy() })
         rowNames.clear()
         rowNames.addAll(snapshot.rowNames)
         rows.clear()
         for (r in snapshot.rows) {
             rows.add(mutableStateListOf(*r.toTypedArray()))
         }
+        markUpdated()
     }
 }
 

@@ -385,7 +385,7 @@ fun MobileTableEditorScreen() {
                                 android.print.PrintDocumentInfo.Builder("Studio_Document.pdf")
                                     .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
                                     .build(),
-                                true
+                            true
                             )
                         }
                         override fun onWrite(
@@ -1932,6 +1932,7 @@ fun MobileTableEditorScreen() {
                                                 val isSelected = selectedCells.contains(cellCoord)
                                                 val isAnchor = anchorCell == cellCoord
 
+                                                val isDateCol = colDef.type == ColumnType.DATE || parseDateFromHeader(colDef.name) != null
                                                 val isPresent = isAttendancePresent(cellValue)
                                                 val isAbsent = isAttendanceAbsent(cellValue)
 
@@ -1956,7 +1957,6 @@ fun MobileTableEditorScreen() {
                                                         .background(cellBg)
                                                         .padding(horizontal = 6.dp, vertical = 4.dp)
                                                 ) {
-                                                    // TYPE-DRIVEN CELL CONTENT
                                                     when (colDef.type) {
                                                         ColumnType.DATE -> {
                                                             Row(
@@ -1993,7 +1993,6 @@ fun MobileTableEditorScreen() {
                                                                 )
 
                                                                 Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                                    // Native Calendar Picker Button
                                                                     Box(
                                                                         modifier = Modifier
                                                                             .background(Color(0xFFE3F2FD), RoundedCornerShape(3.dp))
@@ -2003,7 +2002,6 @@ fun MobileTableEditorScreen() {
                                                                         Text("📅", fontSize = 11.sp)
                                                                     }
 
-                                                                    // Quick Attendance P / A Chips
                                                                     Box(
                                                                         modifier = Modifier
                                                                             .background(
@@ -2036,67 +2034,6 @@ fun MobileTableEditorScreen() {
                                                                             .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                     ) {
                                                                         Text("A", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-
-                                                        ColumnType.BOOLEAN -> {
-                                                            val isTrue = cellValue.equals("true", ignoreCase = true) || cellValue.equals("yes", ignoreCase = true) || cellValue.equals("1", ignoreCase = true)
-                                                            val isFalse = cellValue.equals("false", ignoreCase = true) || cellValue.equals("no", ignoreCase = true) || cellValue.equals("0", ignoreCase = true)
-
-                                                            Row(
-                                                                modifier = Modifier.fillMaxWidth(),
-                                                                verticalAlignment = Alignment.CenterVertically,
-                                                                horizontalArrangement = Arrangement.SpaceBetween
-                                                            ) {
-                                                                BasicTextField(
-                                                                    value = cellValue,
-                                                                    onValueChange = {
-                                                                        currentTable.setCellValue(origRIdx, colIdx, it)
-                                                                        currentTable.markUpdated()
-                                                                        TableRepository.saveOrUpdate(currentTable)
-                                                                    },
-                                                                    enabled = !isMultiSelectMode,
-                                                                    textStyle = TextStyle(fontSize = 11.sp, color = Color.Black),
-                                                                    modifier = Modifier
-                                                                        .weight(1f)
-                                                                        .onFocusChanged {
-                                                                            if (it.isFocused && !isMultiSelectMode) {
-                                                                                anchorCell = cellCoord
-                                                                                selectedCells.clear()
-                                                                                selectedCells.add(cellCoord)
-                                                                            }
-                                                                        }
-                                                                )
-
-                                                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                                    Box(
-                                                                        modifier = Modifier
-                                                                            .background(if (isTrue) Color(0xFF2E7D32) else Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
-                                                                            .clickable {
-                                                                                val newVal = if (isTrue) "" else "true"
-                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                                currentTable.markUpdated()
-                                                                                TableRepository.saveOrUpdate(currentTable)
-                                                                            }
-                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                    ) {
-                                                                        Text("True", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = if (isTrue) Color.White else Color(0xFF2E7D32))
-                                                                    }
-
-                                                                    Box(
-                                                                        modifier = Modifier
-                                                                            .background(if (isFalse) Color(0xFFC62828) else Color(0xFFFFEBEE), RoundedCornerShape(3.dp))
-                                                                            .clickable {
-                                                                                val newVal = if (isFalse) "" else "false"
-                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                                currentTable.markUpdated()
-                                                                                TableRepository.saveOrUpdate(currentTable)
-                                                                            }
-                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                    ) {
-                                                                        Text("False", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = if (isFalse) Color.White else Color(0xFFC62828))
                                                                     }
                                                                 }
                                                             }

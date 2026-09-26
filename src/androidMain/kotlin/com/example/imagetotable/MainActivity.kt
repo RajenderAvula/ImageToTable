@@ -18,6 +18,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -110,6 +111,8 @@ fun isAttendanceAbsent(value: String): Boolean {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Initialize persistent repository from app files storage
+        TableRepository.init(applicationContext)
         setContent {
             MaterialTheme {
                 MobileTableEditorScreen()
@@ -126,8 +129,9 @@ fun MobileTableEditorScreen() {
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
+    // Load active table from persistent storage
     val initialTable = remember {
-        TableData(
+        TableRepository.tables.firstOrNull() ?: TableData(
             initialName = "Invoice & Attendance",
             initialHeaders = listOf(
                 ColumnDef("Employee / SKU", ColumnType.TEXT),
@@ -174,6 +178,7 @@ fun MobileTableEditorScreen() {
     var showTableHistoryDrawer by remember { mutableStateOf(false) }
     var tablePendingDelete by remember { mutableStateOf<TableData?>(null) }
     var showClearTableConfirm by remember { mutableStateOf(false) }
+    var showCancelConfirmDialog by remember { mutableStateOf(false) }
     var showRowEditorDialog by remember { mutableStateOf(false) }
     var editingRowIndex by remember { mutableIntStateOf(0) }
     var showAddDateColumnDialog by remember { mutableStateOf(false) }
@@ -207,6 +212,24 @@ fun MobileTableEditorScreen() {
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
+
+    // Track unsaved modifications against the snapshot in real-time
+    val hasUnsavedChanges = remember(
+        currentTable.tableName,
+        currentTable.tableDateTime,
+        currentTable.cornerHeader,
+        currentTable.headers.map { it.name to it.type },
+        currentTable.rowNames.toList(),
+        currentTable.rows.map { it.toList() },
+        tableSnapshot
+    ) {
+        currentTable.tableName != tableSnapshot.tableName ||
+        currentTable.tableDateTime != tableSnapshot.tableDateTime ||
+        currentTable.cornerHeader != tableSnapshot.cornerHeader ||
+        currentTable.headers.map { it.name to it.type } != tableSnapshot.headers.map { it.name to it.type } ||
+        currentTable.rowNames.toList() != tableSnapshot.rowNames ||
+        currentTable.rows.map { it.toList() } != tableSnapshot.rows
+    }
 
     // Reset zoom when a fresh cropped snippet arrives
     LaunchedEffect(previewCroppedBitmap) {
@@ -247,7 +270,6 @@ fun MobileTableEditorScreen() {
                         val formatted = outFormat.format(cal.time)
                         currentTable.setCellValue(rIdx, cIdx, formatted)
                         currentTable.markUpdated()
-                        TableRepository.saveOrUpdate(currentTable)
                     },
                     cal.get(Calendar.HOUR_OF_DAY),
                     cal.get(Calendar.MINUTE),
@@ -308,7 +330,6 @@ fun MobileTableEditorScreen() {
         } else {
             currentTable.addRow("Row ${currentTable.rows.size + 1}")
             currentTable.markUpdated()
-            TableRepository.saveOrUpdate(currentTable)
             anchorCell = Pair(currentTable.rows.size - 1, targetCol)
             selectedCells.clear()
             selectedCells.add(anchorCell)
@@ -460,11 +481,9 @@ fun MobileTableEditorScreen() {
                     val content = stream.bufferedReader().use { it.readText() }
                     currentTable.importCsv(content)
                     currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
                     columnValueFilters.clear()
                     selectedCells.clear(); selectedCells.add(Pair(0, 0))
-                    statusMessage = "Imported CSV successfully!"
+                    statusMessage = "Imported CSV! Click 'Save Changes' to commit to storage."
                 }
             } catch (e: Exception) {
                 statusMessage = "Import error: ${e.message}"
@@ -621,7 +640,6 @@ fun MobileTableEditorScreen() {
                                 withContext(Dispatchers.Main) {
                                     currentTable.setCellValue(tr, tc, text)
                                     currentTable.markUpdated()
-                                    TableRepository.saveOrUpdate(currentTable)
                                     statusMessage = "Inserted '$text' into active cell ($tr, $tc)"
                                 }
                             } else {
@@ -671,10 +689,8 @@ fun MobileTableEditorScreen() {
                     currentTable.appendExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
                 }
                 currentTable.markUpdated()
-                TableRepository.saveOrUpdate(currentTable)
-                tableSnapshot = currentTable.createSnapshot()
                 showExtractionPreviewDialog = false
-                statusMessage = "Appended ${verifiedRows.size} verified rows to table!"
+                statusMessage = "Appended ${verifiedRows.size} verified rows! Click 'Save Changes' to persist."
             },
             onConfirmReplace = { verifiedHeaders, verifiedRows, excludeHeaders, _ ->
                 if (excludeHeaders) {
@@ -691,11 +707,9 @@ fun MobileTableEditorScreen() {
                     currentTable.loadExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
                 }
                 currentTable.markUpdated()
-                TableRepository.saveOrUpdate(currentTable)
-                tableSnapshot = currentTable.createSnapshot()
                 columnValueFilters.clear()
                 showExtractionPreviewDialog = false
-                statusMessage = "Replaced table with ${verifiedRows.size} verified rows!"
+                statusMessage = "Replaced table with ${verifiedRows.size} verified rows! Click 'Save Changes' to persist."
             }
         )
     }
@@ -711,7 +725,7 @@ fun MobileTableEditorScreen() {
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
                     showDedicatedEditor = false
-                    statusMessage = "Dedicated table edits saved!"
+                    statusMessage = "Dedicated table edits saved to storage!"
                 }
             )
         }
@@ -735,7 +749,7 @@ fun MobileTableEditorScreen() {
                 selectedBitmap = null
                 previewCroppedBitmap = null
                 showNewTableDialog = false
-                statusMessage = "Created table '${newTable.tableName}'!"
+                statusMessage = "Created table '${newTable.tableName}' and saved to storage!"
             }
         )
     }
@@ -784,10 +798,8 @@ fun MobileTableEditorScreen() {
                     }
                 }
                 currentTable.markUpdated()
-                TableRepository.saveOrUpdate(currentTable)
-                tableSnapshot = currentTable.createSnapshot()
                 showAllWordsDialog = false
-                statusMessage = "Transferred ${words.size} word tokens!"
+                statusMessage = "Transferred ${words.size} word tokens! Click 'Save Changes' to persist."
             }
         )
     }
@@ -826,7 +838,7 @@ fun MobileTableEditorScreen() {
                     currentTable.markUpdated()
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
-                    statusMessage = "Row ${safeIndex + 1} updated!"
+                    statusMessage = "Row ${safeIndex + 1} updated and saved to storage!"
                 },
                 onNavigateRow = { target -> editingRowIndex = target },
                 onAddNewColumn = { name, type ->
@@ -880,7 +892,7 @@ fun MobileTableEditorScreen() {
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
                     showRowEditorDialog = false
-                    statusMessage = "Row ${safeIndex + 1} deleted."
+                    statusMessage = "Row ${safeIndex + 1} deleted and updated in storage."
                 }
             )
         }
@@ -924,8 +936,9 @@ fun MobileTableEditorScreen() {
                             currentTable.addColumn(todayStr, ColumnType.DATE)
                             currentTable.markUpdated()
                             TableRepository.saveOrUpdate(currentTable)
+                            tableSnapshot = currentTable.createSnapshot()
                             showAddDateColumnDialog = false
-                            statusMessage = "Added column '$todayStr'"
+                            statusMessage = "Added column '$todayStr' and saved to storage"
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2))
@@ -946,7 +959,8 @@ fun MobileTableEditorScreen() {
                                     currentTable.addColumn(dateStr, ColumnType.DATE)
                                     currentTable.markUpdated()
                                     TableRepository.saveOrUpdate(currentTable)
-                                    statusMessage = "Added column '$dateStr'"
+                                    tableSnapshot = currentTable.createSnapshot()
+                                    statusMessage = "Added column '$dateStr' and saved to storage"
                                 },
                                 cal.get(Calendar.YEAR),
                                 cal.get(Calendar.MONTH),
@@ -978,7 +992,8 @@ fun MobileTableEditorScreen() {
                                     }
                                     currentTable.markUpdated()
                                     TableRepository.saveOrUpdate(currentTable)
-                                    statusMessage = "Generated $daysInMonth daily columns!"
+                                    tableSnapshot = currentTable.createSnapshot()
+                                    statusMessage = "Generated $daysInMonth daily columns in storage!"
                                 },
                                 cal.get(Calendar.YEAR),
                                 cal.get(Calendar.MONTH),
@@ -1012,15 +1027,46 @@ fun MobileTableEditorScreen() {
                     onClick = {
                         currentTable.clearAllValues()
                         currentTable.markUpdated()
-                        TableRepository.saveOrUpdate(currentTable)
-                        tableSnapshot = currentTable.createSnapshot()
                         showClearTableConfirm = false
-                        statusMessage = "Cleared all cells in table."
+                        statusMessage = "Cleared all cells. Click 'Save Changes' to persist to storage."
                     },
                     colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
                 ) { Text("Clear All", color = Color.White) }
             },
             dismissButton = { TextButton(onClick = { showClearTableConfirm = false }) { Text("Cancel") } }
+        )
+    }
+
+    // DISCARD / CANCEL CHANGES CONFIRMATION DIALOG
+    if (showCancelConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showCancelConfirmDialog = false },
+            title = { Text("Discard Unsaved Changes?", fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to revert all changes made since the last save? All uncommitted edits, row changes, and column updates will be discarded.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        // Revert directly from the baseline snapshot
+                        currentTable.tableName = tableSnapshot.tableName
+                        currentTable.tableDateTime = tableSnapshot.tableDateTime
+                        currentTable.cornerHeader = tableSnapshot.cornerHeader
+                        currentTable.headers.clear()
+                        currentTable.headers.addAll(tableSnapshot.headers.map { it.copy() })
+                        currentTable.rowNames.clear()
+                        currentTable.rowNames.addAll(tableSnapshot.rowNames)
+                        currentTable.rows.clear()
+                        tableSnapshot.rows.forEach { r ->
+                            currentTable.rows.add(r.toMutableList())
+                        }
+                        currentTable.markUpdated()
+                        showCancelConfirmDialog = false
+                        statusMessage = "Reverted changes to last saved state."
+                        Toast.makeText(context, "Changes reverted", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828))
+                ) { Text("Discard", color = Color.White) }
+            },
+            dismissButton = { TextButton(onClick = { showCancelConfirmDialog = false }) { Text("Keep Editing") } }
         )
     }
 
@@ -1037,7 +1083,7 @@ fun MobileTableEditorScreen() {
                 )
             },
             text = {
-                Text("Are you sure you want to delete '${targetTable.tableName}'? All data, rows, and cells will be completely deleted across the entire application.")
+                Text("Are you sure you want to delete '${targetTable.tableName}'? All data, rows, and cells will be completely deleted across the entire application and storage.")
             },
             confirmButton = {
                 Button(
@@ -1317,6 +1363,65 @@ fun MobileTableEditorScreen() {
                             .imePadding()
                             .verticalScroll(tab0VerticalScrollState)
                     ) {
+                        // EXPLICIT SAVE & CANCEL BAR (PERSISTENT DEVICE STORAGE ENGINE)
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            backgroundColor = if (hasUnsavedChanges) Color(0xFFFFF8E1) else Color(0xFFF1F8E9),
+                            shape = RoundedCornerShape(8.dp),
+                            elevation = 2.dp,
+                            border = BorderStroke(1.dp, if (hasUnsavedChanges) Color(0xFFFFB300) else Color(0xFF81C784))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = if (hasUnsavedChanges) "● Unsaved Changes" else "✓ Saved to Storage",
+                                        color = if (hasUnsavedChanges) Color(0xFFE65100) else Color(0xFF2E7D32),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        onClick = { showCancelConfirmDialog = true },
+                                        enabled = hasUnsavedChanges,
+                                        colors = ButtonDefaults.outlinedButtonColors(backgroundColor = Color.White),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            "↩ Cancel / Revert",
+                                            color = if (hasUnsavedChanges) Color(0xFFC62828) else Color.Gray,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            currentTable.markUpdated()
+                                            TableRepository.saveOrUpdate(currentTable)
+                                            tableSnapshot = currentTable.createSnapshot()
+                                            statusMessage = "Table '${currentTable.tableName}' saved to storage!"
+                                            Toast.makeText(context, "Saved successfully to device storage", Toast.LENGTH_SHORT).show()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                    ) {
+                                        Text("💾 Save Changes", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Toolbar Action Row
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1378,8 +1483,6 @@ fun MobileTableEditorScreen() {
                             Button(onClick = {
                                 currentTable.transposeTable()
                                 currentTable.markUpdated()
-                                TableRepository.saveOrUpdate(currentTable)
-                                tableSnapshot = currentTable.createSnapshot()
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("⇄ Transpose", color = Color.White, fontSize = 11.sp) }
 
                             Button(onClick = { activeExportFormat = ExportFormat.PDF; fileSaveLauncher.launch("${currentTable.tableName}.pdf") }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("PDF", color = Color.White, fontSize = 11.sp) }
@@ -1393,12 +1496,10 @@ fun MobileTableEditorScreen() {
                             Button(onClick = {
                                 currentTable.addRow()
                                 currentTable.markUpdated()
-                                TableRepository.saveOrUpdate(currentTable)
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Row", color = Color.White, fontSize = 11.sp) }
                             Button(onClick = {
                                 currentTable.addColumn("Col ${currentTable.headers.size + 1}")
                                 currentTable.markUpdated()
-                                TableRepository.saveOrUpdate(currentTable)
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                         }
 
@@ -1687,7 +1788,6 @@ fun MobileTableEditorScreen() {
                                                     if (selectedTokens.isNotEmpty()) {
                                                         currentTable.setCellValue(tr, tc, selectedTokens.joinToString(" "))
                                                         currentTable.markUpdated()
-                                                        TableRepository.saveOrUpdate(currentTable)
                                                         jumpToNextRow()
                                                     }
                                                 },
@@ -1707,7 +1807,6 @@ fun MobileTableEditorScreen() {
                                                         }
                                                     }
                                                     currentTable.markUpdated()
-                                                    TableRepository.saveOrUpdate(currentTable)
                                                 },
                                                 enabled = selectedTokens.isNotEmpty(),
                                                 modifier = Modifier.weight(1f),
@@ -1836,8 +1935,6 @@ fun MobileTableEditorScreen() {
                                             val tsv = currentTable.selectionToTsv(selectedCells)
                                             clipboardManager.setText(AnnotatedString(tsv))
                                             currentTable.markUpdated()
-                                            TableRepository.saveOrUpdate(currentTable)
-                                            tableSnapshot = currentTable.createSnapshot()
                                             statusMessage = "Cut ${selectedCells.size} cell(s)!"
                                         }
                                     },
@@ -1855,8 +1952,6 @@ fun MobileTableEditorScreen() {
                                                 selectedCells.addAll(pasted)
                                             }
                                             currentTable.markUpdated()
-                                            TableRepository.saveOrUpdate(currentTable)
-                                            tableSnapshot = currentTable.createSnapshot()
                                             statusMessage = if (clip.items.size == 1 && selectedCells.size > 1) {
                                                 "Replicated '${clip.items.first().value}' into ${selectedCells.size} cells!"
                                             } else {
@@ -1874,7 +1969,6 @@ fun MobileTableEditorScreen() {
                                     onClick = {
                                         currentTable.clearCells(selectedCells)
                                         currentTable.markUpdated()
-                                        TableRepository.saveOrUpdate(currentTable)
                                         statusMessage = "Cleared ${selectedCells.size} cell(s)!"
                                     },
                                     enabled = selectedCells.isNotEmpty(),
@@ -1889,25 +1983,21 @@ fun MobileTableEditorScreen() {
                                     val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.LEFT)
                                     selectedCells.clear(); selectedCells.addAll(u)
                                     currentTable.markUpdated()
-                                    TableRepository.saveOrUpdate(currentTable)
                                 }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("◀") }
                                 Button(onClick = {
                                     val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.RIGHT)
                                     selectedCells.clear(); selectedCells.addAll(u)
                                     currentTable.markUpdated()
-                                    TableRepository.saveOrUpdate(currentTable)
                                 }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("▶") }
                                 Button(onClick = {
                                     val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.UP)
                                     selectedCells.clear(); selectedCells.addAll(u)
                                     currentTable.markUpdated()
-                                    TableRepository.saveOrUpdate(currentTable)
                                 }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("▲") }
                                 Button(onClick = {
                                     val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.DOWN)
                                     selectedCells.clear(); selectedCells.addAll(u)
                                     currentTable.markUpdated()
-                                    TableRepository.saveOrUpdate(currentTable)
                                 }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("▼") }
                             }
                         }
@@ -1943,7 +2033,6 @@ fun MobileTableEditorScreen() {
                                                         currentTable.deleteColumn(colIdx)
                                                         columnValueFilters.remove(colIdx)
                                                         currentTable.markUpdated()
-                                                        TableRepository.saveOrUpdate(currentTable)
                                                     })
                                                 }
                                                 Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -1974,12 +2063,10 @@ fun MobileTableEditorScreen() {
                                                         Text("◀", modifier = Modifier.clickable(enabled = colIdx > 0) {
                                                             currentTable.moveColumn(colIdx, colIdx - 1)
                                                             currentTable.markUpdated()
-                                                            TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 12.sp)
                                                         Text("▶", modifier = Modifier.clickable(enabled = colIdx < currentTable.headers.size - 1) {
                                                             currentTable.moveColumn(colIdx, colIdx + 1)
                                                             currentTable.markUpdated()
-                                                            TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 12.sp)
                                                     }
                                                 }
@@ -1990,7 +2077,6 @@ fun MobileTableEditorScreen() {
                                         Button(onClick = {
                                             currentTable.addColumn("Col ${currentTable.headers.size + 1}")
                                             currentTable.markUpdated()
-                                            TableRepository.saveOrUpdate(currentTable)
                                         }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                                     }
                                 }
@@ -2028,17 +2114,14 @@ fun MobileTableEditorScreen() {
                                                         Text("▲", modifier = Modifier.clickable(enabled = origRIdx > 0) {
                                                             currentTable.moveRow(origRIdx, origRIdx - 1)
                                                             currentTable.markUpdated()
-                                                            TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 11.sp)
                                                         Text("▼", modifier = Modifier.clickable(enabled = origRIdx < currentTable.rows.size - 1) {
                                                             currentTable.moveRow(origRIdx, origRIdx + 1)
                                                             currentTable.markUpdated()
-                                                            TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 11.sp)
                                                         Text("✕", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable {
                                                             currentTable.deleteRow(origRIdx)
                                                             currentTable.markUpdated()
-                                                            TableRepository.saveOrUpdate(currentTable)
                                                         })
                                                     }
                                                 }
@@ -2087,7 +2170,6 @@ fun MobileTableEditorScreen() {
                                                                         onValueChange = {
                                                                             currentTable.setCellValue(origRIdx, colIdx, it)
                                                                             currentTable.markUpdated()
-                                                                            TableRepository.saveOrUpdate(currentTable)
                                                                         },
                                                                         enabled = !isMultiSelectMode,
                                                                         textStyle = TextStyle(
@@ -2130,7 +2212,6 @@ fun MobileTableEditorScreen() {
                                                                                     val newVal = if (isPresent) "" else "Present"
                                                                                     currentTable.setCellValue(origRIdx, colIdx, newVal)
                                                                                     currentTable.markUpdated()
-                                                                                    TableRepository.saveOrUpdate(currentTable)
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                         ) {
@@ -2147,7 +2228,6 @@ fun MobileTableEditorScreen() {
                                                                                     val newVal = if (isAbsent) "" else "Absent"
                                                                                     currentTable.setCellValue(origRIdx, colIdx, newVal)
                                                                                     currentTable.markUpdated()
-                                                                                    TableRepository.saveOrUpdate(currentTable)
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                         ) {
@@ -2155,7 +2235,7 @@ fun MobileTableEditorScreen() {
                                                                         }
                                                                     }
                                                                 }
-                            }
+                                                            }
 
                                                             ColumnType.NUMBER -> {
                                                                 Row(
@@ -2168,7 +2248,6 @@ fun MobileTableEditorScreen() {
                                                                         onValueChange = { newVal ->
                                                                             currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '-' })
                                                                             currentTable.markUpdated()
-                                                                            TableRepository.saveOrUpdate(currentTable)
                                                                         },
                                                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                                         enabled = !isMultiSelectMode,
@@ -2192,7 +2271,6 @@ fun MobileTableEditorScreen() {
                                                                                     val num = cellValue.toIntOrNull() ?: 0
                                                                                     currentTable.setCellValue(origRIdx, colIdx, (num - 1).toString())
                                                                                     currentTable.markUpdated()
-                                                                                    TableRepository.saveOrUpdate(currentTable)
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                         ) {
@@ -2206,8 +2284,7 @@ fun MobileTableEditorScreen() {
                                                                                     val num = cellValue.toIntOrNull() ?: 0
                                                                                     currentTable.setCellValue(origRIdx, colIdx, (num + 1).toString())
                                                                                     currentTable.markUpdated()
-                                                                                    TableRepository.saveOrUpdate(currentTable)
-                                                                        }
+                                                                                }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                         ) {
                                                                             Text("+", fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -2222,7 +2299,6 @@ fun MobileTableEditorScreen() {
                                                                     onValueChange = { newVal ->
                                                                         currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '.' || it == '-' })
                                                                         currentTable.markUpdated()
-                                                                        TableRepository.saveOrUpdate(currentTable)
                                                                     },
                                                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                                                     enabled = !isMultiSelectMode,
@@ -2245,7 +2321,6 @@ fun MobileTableEditorScreen() {
                                                                     onValueChange = {
                                                                         currentTable.setCellValue(origRIdx, colIdx, it)
                                                                         currentTable.markUpdated()
-                                                                        TableRepository.saveOrUpdate(currentTable)
                                                                     },
                                                                     enabled = !isMultiSelectMode,
                                                                     textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),

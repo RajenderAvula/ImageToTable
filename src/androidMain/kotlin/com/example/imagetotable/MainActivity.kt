@@ -1347,7 +1347,7 @@ fun MobileTableEditorScreen() {
                 .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
         ) {
             // MAIN UI SAVE / CANCEL CHANGES BAR (Appears whenever table is modified)
-            if (hasUnsavedChanges) {
+         /*   if (hasUnsavedChanges) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1394,7 +1394,65 @@ fun MobileTableEditorScreen() {
                         }
                     }
                 }
+            }*/
+                        // MAIN UI SAVE / CANCEL CHANGES BAR (Two-line layout: Warning on top, Buttons below)
+            if (hasUnsavedChanges) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFFFF8E1))
+                        .border(0.5.dp, Color(0xFFFFE082))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Line 1: Warning Message
+                    Text(
+                        text = "⚠ You have unsaved changes in '${currentTable.tableName}'.",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF8D6E63),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Line 2: Cancel & Save Buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = {
+                                currentTable.revertToSnapshot(tableSnapshot)
+                                hasUnsavedChanges = false
+                                statusMessage = "Changes cancelled and reverted."
+                            },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD32F2F)),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("✕ Cancel", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Button(
+                            onClick = {
+                                currentTable.markUpdated()
+                                TableRepository.saveOrUpdate(currentTable)
+                                tableSnapshot = currentTable.createSnapshot()
+                                hasUnsavedChanges = false
+                                statusMessage = "Changes saved successfully!"
+                            },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("💾 Save Changes", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
+
 
             if (selectedTabIndex == 0 || isFullScreen) {
                 key(currentTable.id) {

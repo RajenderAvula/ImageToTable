@@ -55,6 +55,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.example.imagetotable.model.*
 import com.example.imagetotable.ocr.AndroidOcrService
@@ -147,12 +149,9 @@ fun MobileTableEditorScreen() {
 
     var currentTable by remember { mutableStateOf(initialTable) }
     var tableSnapshot by remember { mutableStateOf(initialTable.createSnapshot()) }
-
-    // State for main UI Save / Cancel changes bar
     var hasUnsavedChanges by remember(currentTable.id) { mutableStateOf(false) }
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-
     var isMultiSelectMode by remember { mutableStateOf(false) }
     val selectedCells = remember { mutableStateListOf<Pair<Int, Int>>(Pair(0, 0)) }
     var anchorCell by remember { mutableStateOf(Pair(0, 0)) }
@@ -168,11 +167,9 @@ fun MobileTableEditorScreen() {
     var showScanWorkspaceInTable by remember { mutableStateOf(false) }
     var showAttendanceChart by remember { mutableStateOf(true) }
 
-    // Multiple Dates Chart Selector State (hidden/shown date column indices in attendance chart)
     val hiddenChartDateIndices = remember { mutableStateListOf<Int>() }
     var showChartDateSelectorDialog by remember { mutableStateOf(false) }
 
-    // Dialog Visibilities
     var showCropperDialog by remember { mutableStateOf(false) }
     var cropperTargetPageIndex by remember { mutableStateOf<Int?>(null) }
     var showDedicatedEditor by remember { mutableStateOf(false) }
@@ -186,7 +183,6 @@ fun MobileTableEditorScreen() {
     var showAddDateColumnDialog by remember { mutableStateOf(false) }
 
     var activeFilterColIdx by remember { mutableStateOf<Int?>(null) }
-
     var showGeneratedPdfInspector by remember { mutableStateOf(false) }
     var generatedPdfSizeBytes by remember { mutableLongStateOf(0L) }
 
@@ -196,7 +192,6 @@ fun MobileTableEditorScreen() {
     var pendingExtractedRows by remember { mutableStateOf<List<List<String>>>(emptyList()) }
 
     var activeExportFormat by remember { mutableStateOf(ExportFormat.PDF) }
-
     var globalSearchQuery by remember { mutableStateOf("") }
     val hiddenColumns = remember { mutableStateListOf<Int>() }
     var drawerSearchQuery by remember { mutableStateOf("") }
@@ -734,54 +729,338 @@ fun MobileTableEditorScreen() {
         )
     }
 
+    // FULLY EQUIPPED TOKEN STUDIO MODAL (Supports rich row exclusions & table replacement)
     if (showAllWordsDialog) {
-        AllWordsSelectorDialog(
-            detectedWords = detectedWords,
-            onDismiss = { showAllWordsDialog = false },
-            onTransferSelected = { words, mode ->
-                when (mode) {
-                    TokenPlacementMode.SEQUENCE_FROM_ACTIVE -> {
-                        var (tr, tc) = anchorCell
-                        for (w in words) {
-                            currentTable.setCellValue(tr, tc, w)
-                            if (tc < currentTable.headers.size - 1) tc++ else {
-                                if (tr < currentTable.rows.size - 1) { tr++; tc = 0 } else {
-                                    currentTable.addRow(); tr++; tc = 0
+        var studioSearchQuery by remember { mutableStateOf("") }
+        val studioSelectedTokens = remember { mutableStateListOf<String>().apply { addAll(detectedWords) } }
+        var studioMode by remember { mutableStateOf(TokenPlacementMode.APPEND_NEW_ROW) }
+        var studioColumnsCount by remember { mutableIntStateOf(currentTable.headers.size.coerceIn(1, 10)) }
+        var studioExcludeTopRows by remember { mutableIntStateOf(0) }
+        var studioFirstRowAsHeaders by remember { mutableStateOf(false) }
+        var studioFilterNoise by remember { mutableStateOf(false) }
+
+        val activeTokensPool = remember(studioSearchQuery, detectedWords, studioFilterNoise) {
+            detectedWords.filter { t ->
+                val matchSearch = studioSearchQuery.isBlank() || t.contains(studioSearchQuery, ignoreCase = true)
+                val matchNoise = if (studioFilterNoise) t.length > 1 && !t.matches(Regex("^[\\-_+=|~`*]+$")) else true
+                matchSearch && matchNoise
+            }
+        }
+
+        val liveGridPreview = remember(studioSelectedTokens.size, studioColumnsCount, studioExcludeTopRows, studioFirstRowAsHeaders) {
+            val chunked = studioSelectedTokens.chunked(studioColumnsCount.coerceAtLeast(1))
+            chunked.drop(studioExcludeTopRows.coerceAtMost(chunked.size))
+        }
+
+        Dialog(
+            onDismissRequest = { /* Keep active so selecting tokens in full screen never dismisses */ },
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF4F6F9)) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF1565C0))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Token Studio & Structured Transfer", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text("${studioSelectedTokens.size} of ${detectedWords.size} tokens selected", color = Color.White.copy(alpha = 0.85f), fontSize = 11.sp)
+                        }
+                        IconButton(onClick = { showAllWordsDialog = false }) {
+                            Text("✕", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Section 1: Token Selection
+                        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), elevation = 2.dp) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("1. Select Word Tokens", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF0D47A1))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                studioSelectedTokens.clear()
+                                                studioSelectedTokens.addAll(activeTokensPool)
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) { Text("Select All", fontSize = 10.sp) }
+                                        OutlinedButton(
+                                            onClick = { studioSelectedTokens.clear() },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) { Text("Clear", fontSize = 10.sp) }
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = studioSearchQuery,
+                                    onValueChange = { studioSearchQuery = it },
+                                    placeholder = { Text("Filter tokens by text...", fontSize = 11.sp) },
+                                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                                    singleLine = true
+                                )
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = studioFilterNoise, onCheckedChange = { studioFilterNoise = it }, modifier = Modifier.size(26.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Hide symbols & single-character noise tokens", fontSize = 11.sp, color = Color.DarkGray)
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 140.dp)
+                                        .background(Color(0xFFF8FAFC), RoundedCornerShape(6.dp))
+                                        .border(1.dp, Color(0xFFCFD8DC), RoundedCornerShape(6.dp))
+                                        .padding(6.dp)
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    if (activeTokensPool.isEmpty()) {
+                                        Text("No tokens found. Pick or crop an image first.", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(6.dp))
+                                    } else {
+                                        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            activeTokensPool.forEach { word ->
+                                                val isSel = studioSelectedTokens.contains(word)
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(if (isSel) Color(0xFF1976D2) else Color.White, RoundedCornerShape(6.dp))
+                                                        .border(1.dp, if (isSel) Color(0xFF0D47A1) else Color(0xFFB0BEC5), RoundedCornerShape(6.dp))
+                                                        .clickable { if (isSel) studioSelectedTokens.remove(word) else studioSelectedTokens.add(word) }
+                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text(word, color = if (isSel) Color.White else Color(0xFF263238), fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Section 2: Transfer Mode
+                        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), elevation = 2.dp) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("2. Transfer Action", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF0D47A1))
+
+                                val strategies = listOf(
+                                    Triple(TokenPlacementMode.APPEND_NEW_ROW, "➕ Append as Rows", "Distribute tokens across columns and append below current table"),
+                                    Triple(TokenPlacementMode.REPLACE_CURRENT_TABLE, "🔁 Replace Current Table", "Clear entire table and replace with structured token rows"),
+                                    Triple(TokenPlacementMode.SEQUENCE_FROM_ACTIVE, "➔ Flow from Active Cell", "Insert tokens consecutively starting from cell ($anchorCell)"),
+                                    Triple(TokenPlacementMode.FILL_MULTI_SELECTION, "⊞ Fill Selected Cells", "Replicate tokens across highlighted multi-select cells")
+                                )
+
+                                strategies.forEach { (mode, label, desc) ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { studioMode = mode }
+                                            .background(if (studioMode == mode) Color(0xFFE3F2FD) else Color.Transparent, RoundedCornerShape(6.dp))
+                                            .padding(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(selected = studioMode == mode, onClick = { studioMode = mode })
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Column {
+                                            Text(label, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            Text(desc, fontSize = 10.sp, color = Color.Gray)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Section 3: Formatting, Row Exclusions, and Live Preview
+                        if (studioMode == TokenPlacementMode.APPEND_NEW_ROW || studioMode == TokenPlacementMode.REPLACE_CURRENT_TABLE) {
+                            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), elevation = 2.dp) {
+                                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("3. Columns & Row Exclusions", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF0D47A1))
+
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Column {
+                                            Text("Columns per Row", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                            Text("Distribute tokens into $studioColumnsCount columns", fontSize = 10.sp, color = Color.Gray)
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Button(onClick = { if (studioColumnsCount > 1) studioColumnsCount-- }, enabled = studioColumnsCount > 1, modifier = Modifier.size(32.dp), contentPadding = PaddingValues(0.dp)) { Text("-", fontSize = 16.sp) }
+                                            Text("$studioColumnsCount", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
+                                            Button(onClick = { if (studioColumnsCount < 10) studioColumnsCount++ }, enabled = studioColumnsCount < 10, modifier = Modifier.size(32.dp), contentPadding = PaddingValues(0.dp)) { Text("+", fontSize = 16.sp) }
+                                        }
+                                    }
+
+                                    Divider()
+
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Column {
+                                            Text("Exclude Top Rows", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                            Text("Skips the first $studioExcludeTopRows row(s) (e.g. headers or junk)", fontSize = 10.sp, color = Color.Gray)
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Button(onClick = { if (studioExcludeTopRows > 0) studioExcludeTopRows-- }, enabled = studioExcludeTopRows > 0, modifier = Modifier.size(32.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFCFD8DC))) { Text("-", fontSize = 16.sp) }
+                                            Text("$studioExcludeTopRows", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
+                                            Button(onClick = { studioExcludeTopRows++ }, modifier = Modifier.size(32.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFCFD8DC))) { Text("+", fontSize = 16.sp) }
+                                        }
+                                    }
+
+                                    if (studioMode == TokenPlacementMode.REPLACE_CURRENT_TABLE) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(checked = studioFirstRowAsHeaders, onCheckedChange = { studioFirstRowAsHeaders = it }, modifier = Modifier.size(26.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Use first row of tokens as column header names", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                        }
+                                    }
+
+                                    Divider()
+
+                                    Text("Live Resulting Table Preview (${liveGridPreview.size} rows)", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF1565C0))
+                                    if (liveGridPreview.isEmpty()) {
+                                        Text("No tokens to preview with current exclusion settings.", fontSize = 11.sp, color = Color.Gray)
+                                    } else {
+                                        Box(modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp).horizontalScroll(rememberScrollState())) {
+                                            Column {
+                                                Row(modifier = Modifier.background(Color(0xFFE3F2FD))) {
+                                                    for (c in 1..studioColumnsCount) {
+                                                        val headerTitle = if (studioFirstRowAsHeaders && liveGridPreview.isNotEmpty()) liveGridPreview.first().getOrElse(c - 1) { "Col $c" } else "Col $c"
+                                                        Box(modifier = Modifier.width(105.dp).border(0.5.dp, Color(0xFF90CAF9)).padding(4.dp)) {
+                                                            Text(headerTitle, fontWeight = FontWeight.Bold, fontSize = 10.sp, color = Color(0xFF0D47A1))
+                                                        }
+                                                    }
+                                                }
+                                                val previewBody = if (studioFirstRowAsHeaders && liveGridPreview.isNotEmpty()) liveGridPreview.drop(1) else liveGridPreview
+                                                previewBody.take(6).forEachIndexed { rIdx, rowCells ->
+                                                    Row(modifier = Modifier.background(if (rIdx % 2 == 0) Color.White else Color(0xFFF8FAFC))) {
+                                                        for (c in 0 until studioColumnsCount) {
+                                                            Box(modifier = Modifier.width(105.dp).border(0.5.dp, Color(0xFFE0E0E0)).padding(4.dp)) {
+                                                                Text(rowCells.getOrElse(c) { "" }, fontSize = 10.sp, maxLines = 1)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    TokenPlacementMode.FILL_MULTI_SELECTION -> {
-                        selectedCells.forEachIndexed { idx, (r, c) ->
-                            val text = words.getOrElse(idx % words.size) { "" }
-                            currentTable.setCellValue(r, c, text)
-                        }
-                    }
-                    TokenPlacementMode.APPEND_NEW_ROW -> {
-                        val rName = "Row ${currentTable.rows.size + 1}"
-                        currentTable.addRow(rName)
-                        val lastR = currentTable.rows.size - 1
-                        words.forEachIndexed { cIdx, w ->
-                            while (cIdx >= currentTable.headers.size) currentTable.addColumn("Col ${currentTable.headers.size + 1}")
-                            currentTable.setCellValue(lastR, cIdx, w)
-                        }
-                    }
-                    TokenPlacementMode.APPEND_NEW_COL -> {
-                        val colName = words.firstOrNull() ?: "New Col"
-                        currentTable.addColumn(colName)
-                        val lastC = currentTable.headers.size - 1
-                        words.drop(1).forEachIndexed { rIdx, w ->
-                            while (rIdx >= currentTable.rows.size) currentTable.addRow()
-                            currentTable.setCellValue(rIdx, lastC, w)
+
+                    // Bottom Commit Bar
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.White)
+                            .border(0.5.dp, Color(0xFFCFD8DC))
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(onClick = { showAllWordsDialog = false }) { Text("Cancel", fontSize = 12.sp) }
+
+                        Button(
+                            onClick = {
+                                if (studioSelectedTokens.isNotEmpty()) {
+                                    when (studioMode) {
+                                        TokenPlacementMode.REPLACE_CURRENT_TABLE -> {
+                                            val colCount = studioColumnsCount.coerceAtLeast(1)
+                                            var chunked = studioSelectedTokens.chunked(colCount)
+                                            if (studioExcludeTopRows > 0) chunked = chunked.drop(studioExcludeTopRows.coerceAtMost(chunked.size))
+
+                                            currentTable.headers.clear()
+                                            currentTable.rows.clear()
+                                            currentTable.rowNames.clear()
+
+                                            if (studioFirstRowAsHeaders && chunked.isNotEmpty()) {
+                                                val headersRow = chunked.first()
+                                                for (c in 0 until colCount) {
+                                                    currentTable.addColumn(headersRow.getOrElse(c) { "Col ${c + 1}" })
+                                                }
+                                                chunked = chunked.drop(1)
+                                            } else {
+                                                for (c in 1..colCount) {
+                                                    currentTable.addColumn("Col $c")
+                                                }
+                                            }
+
+                                            for ((rIdx, rowVals) in chunked.withIndex()) {
+                                                currentTable.addRow("Row ${rIdx + 1}")
+                                                val targetR = currentTable.rows.size - 1
+                                                rowVals.take(currentTable.headers.size).forEachIndexed { cIdx, v ->
+                                                    currentTable.setCellValue(targetR, cIdx, v)
+                                                }
+                                            }
+                                            statusMessage = "Replaced table with ${currentTable.rows.size} rows!"
+                                        }
+                                        TokenPlacementMode.APPEND_NEW_ROW -> {
+                                            val colCount = studioColumnsCount.coerceAtLeast(1)
+                                            while (currentTable.headers.size < colCount) {
+                                                currentTable.addColumn("Col ${currentTable.headers.size + 1}")
+                                            }
+                                            var chunked = studioSelectedTokens.chunked(colCount)
+                                            if (studioExcludeTopRows > 0) chunked = chunked.drop(studioExcludeTopRows.coerceAtMost(chunked.size))
+
+                                            val startR = currentTable.rows.size
+                                            for ((rIdx, rowVals) in chunked.withIndex()) {
+                                                currentTable.addRow("Row ${startR + rIdx + 1}")
+                                                val targetR = currentTable.rows.size - 1
+                                                rowVals.take(currentTable.headers.size).forEachIndexed { cIdx, v ->
+                                                    currentTable.setCellValue(targetR, cIdx, v)
+                                                }
+                                            }
+                                            statusMessage = "Appended ${chunked.size} rows from tokens!"
+                                        }
+                                        TokenPlacementMode.SEQUENCE_FROM_ACTIVE -> {
+                                            var (tr, tc) = anchorCell
+                                            for (w in studioSelectedTokens) {
+                                                currentTable.setCellValue(tr, tc, w)
+                                                if (tc < currentTable.headers.size - 1) tc++ else {
+                                                    if (tr < currentTable.rows.size - 1) { tr++; tc = 0 } else { currentTable.addRow(); tr++; tc = 0 }
+                                                }
+                                            }
+                                            statusMessage = "Sequenced ${studioSelectedTokens.size} tokens!"
+                                        }
+                                        TokenPlacementMode.FILL_MULTI_SELECTION -> {
+                                            selectedCells.forEachIndexed { idx, (r, c) ->
+                                                currentTable.setCellValue(r, c, studioSelectedTokens.getOrElse(idx % studioSelectedTokens.size) { "" })
+                                            }
+                                            statusMessage = "Filled ${selectedCells.size} cells with tokens!"
+                                        }
+                                        else -> {}
+                                    }
+                                    currentTable.markUpdated()
+                                    hasUnsavedChanges = true
+                                    showAllWordsDialog = false
+                                }
+                            },
+                            enabled = studioSelectedTokens.isNotEmpty(),
+                            colors = ButtonDefaults.buttonColors(
+                                backgroundColor = if (studioMode == TokenPlacementMode.REPLACE_CURRENT_TABLE) Color(0xFFD32F2F) else Color(0xFF2E7D32)
+                            )
+                        ) {
+                            Text(
+                                text = if (studioMode == TokenPlacementMode.REPLACE_CURRENT_TABLE) "🔁 Replace Table" else "✓ Apply Tokens",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
                         }
                     }
                 }
-                currentTable.markUpdated()
-                hasUnsavedChanges = true
-                showAllWordsDialog = false
-                statusMessage = "Transferred ${words.size} word tokens!"
             }
-        )
+        }
     }
 
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
@@ -991,42 +1270,64 @@ fun MobileTableEditorScreen() {
         AlertDialog(
             onDismissRequest = { showChartDateSelectorDialog = false },
             title = {
-                Text("Show / Hide Dates in Attendance Chart", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFF1565C0))
+                Column {
+                    Text("Select Dates for Attendance Chart", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1565C0))
+                    Text("Check or uncheck dates to customize the overview:", fontSize = 11.sp, color = Color.Gray)
+                }
             },
             text = {
                 if (allDateCols.isEmpty()) {
                     Text("No date columns found in this table. Add date columns first.", fontSize = 12.sp, color = Color.Gray)
                 } else {
                     Column(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 340.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("Uncheck any date to hide it from the daily attendance chart:", fontSize = 11.sp, color = Color.DarkGray)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        allDateCols.forEach { colIdx ->
-                            val colName = currentTable.headers[colIdx].name
-                            val isVisible = !hiddenChartDateIndices.contains(colIdx)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { hiddenChartDateIndices.clear() },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(2.dp)
+                            ) { Text("Select All", fontSize = 11.sp) }
 
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        if (isVisible) hiddenChartDateIndices.add(colIdx)
-                                        else hiddenChartDateIndices.remove(colIdx)
-                                    }
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isVisible,
-                                    onCheckedChange = { checked ->
-                                        if (checked) hiddenChartDateIndices.remove(colIdx)
-                                        else hiddenChartDateIndices.add(colIdx)
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(text = colName, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            OutlinedButton(
+                                onClick = {
+                                    hiddenChartDateIndices.clear()
+                                    hiddenChartDateIndices.addAll(allDateCols)
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(2.dp)
+                            ) { Text("Deselect All", fontSize = 11.sp) }
+                        }
+
+                        Divider()
+
+                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            itemsIndexed(allDateCols) { _, colIdx ->
+                                val colName = currentTable.headers[colIdx].name
+                                val isVisible = !hiddenChartDateIndices.contains(colIdx)
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            if (isVisible) hiddenChartDateIndices.add(colIdx)
+                                            else hiddenChartDateIndices.remove(colIdx)
+                                        }
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = isVisible,
+                                        onCheckedChange = { checked ->
+                                            if (checked) hiddenChartDateIndices.remove(colIdx)
+                                            else hiddenChartDateIndices.add(colIdx)
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(text = colName, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                }
                             }
                         }
                     }
@@ -1346,7 +1647,7 @@ fun MobileTableEditorScreen() {
                 .padding(paddingValues)
                 .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
         ) {
-            // MAIN UI SAVE / CANCEL CHANGES BAR (Appears whenever table is modified)
+            // Unsaved Changes Banner
             if (hasUnsavedChanges) {
                 Row(
                     modifier = Modifier
@@ -1406,6 +1707,7 @@ fun MobileTableEditorScreen() {
                             .imePadding()
                             .verticalScroll(tab0VerticalScrollState)
                     ) {
+                        // Toolbar Row
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1426,22 +1728,8 @@ fun MobileTableEditorScreen() {
                             }
 
                             Button(onClick = { showNewTableDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
-
-                            Button(
-                                onClick = { showAddDateColumnDialog = true },
-                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Text("📅 + Date Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = { showAttendanceChart = !showAttendanceChart },
-                                colors = ButtonDefaults.buttonColors(backgroundColor = if (showAttendanceChart) Color(0xFF303F9F) else Color(0xFF5C6BC0)),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Text(if (showAttendanceChart) "📊 Hide Chart" else "📊 Attendance Chart", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
+                            Button(onClick = { showAddDateColumnDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("📅 + Date Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                            Button(onClick = { showAttendanceChart = !showAttendanceChart }, colors = ButtonDefaults.buttonColors(backgroundColor = if (showAttendanceChart) Color(0xFF303F9F) else Color(0xFF5C6BC0)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text(if (showAttendanceChart) "📊 Hide Chart" else "📊 Attendance Chart", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
 
                             Button(onClick = {
                                 val subTable = currentTable.createSubTable("${currentTable.tableName} (Filtered)", filteredRowIndices, visibleColIndices)
@@ -1489,7 +1777,7 @@ fun MobileTableEditorScreen() {
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                         }
 
-                        // DAILY ATTENDANCE CHART (With option to show/hide multiple dates charts)
+                        // ATTENDANCE CHART WITH PROMINENT DATE FILTER BUTTON
                         if (showAttendanceChart) {
                             val allDateColIndices = remember(currentTable.headers) {
                                 currentTable.headers.indices.filter { idx ->
@@ -1497,7 +1785,6 @@ fun MobileTableEditorScreen() {
                                     def.type == ColumnType.DATE || parseDateFromHeader(def.name) != null
                                 }
                             }
-                            // Filter out hidden dates
                             val dateColIndices = allDateColIndices.filter { !hiddenChartDateIndices.contains(it) }
 
                             Card(
@@ -1508,43 +1795,43 @@ fun MobileTableEditorScreen() {
                                 elevation = 2.dp,
                                 backgroundColor = Color.White
                             ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
+                                Column(modifier = Modifier.padding(10.dp)) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = "📊 Daily Attendance Chart (${filteredRowIndices.size} filtered rows)",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF1565C0)
-                                        )
+                                        Column {
+                                            Text(
+                                                text = "📊 Daily Attendance Chart (${filteredRowIndices.size} filtered rows)",
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF1565C0)
+                                            )
+                                            Text(
+                                                text = "Showing ${dateColIndices.size} of ${allDateColIndices.size} tracked dates",
+                                                fontSize = 11.sp,
+                                                color = Color.Gray
+                                            )
+                                        }
 
-                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            if (allDateColIndices.isNotEmpty()) {
-                                                Button(
-                                                    onClick = { showChartDateSelectorDialog = true },
-                                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
-                                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                                    modifier = Modifier.height(26.dp)
-                                                ) {
-                                                    Text("⚙ Select Dates (${dateColIndices.size}/${allDateColIndices.size})", color = Color.White, fontSize = 10.sp)
-                                                }
-                                            }
-
-                                            if (dateColIndices.isNotEmpty()) {
-                                                Text(
-                                                    text = "${dateColIndices.size} Shown",
-                                                    fontSize = 11.sp,
-                                                    color = Color.Gray,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                            }
+                                        // PROMINENT LARGE FILTER BUTTON FOR DATES
+                                        Button(
+                                            onClick = { showChartDateSelectorDialog = true },
+                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                            modifier = Modifier.height(34.dp)
+                                        ) {
+                                            Text(
+                                                text = "📅 Filter Dates (${dateColIndices.size}/${allDateColIndices.size})",
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
                                         }
                                     }
 
-                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Spacer(modifier = Modifier.height(6.dp))
 
                                     if (dateColIndices.isEmpty()) {
                                         Box(
@@ -1555,7 +1842,7 @@ fun MobileTableEditorScreen() {
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
-                                                text = if (allDateColIndices.isEmpty()) "No date columns yet. Tap '📅 + Date Col' to add attendance columns." else "All dates are hidden. Tap '⚙ Select Dates' to show them.",
+                                                text = if (allDateColIndices.isEmpty()) "No date columns yet. Tap '📅 + Date Col' to add attendance columns." else "All dates are hidden. Tap '📅 Filter Dates' above to select dates.",
                                                 fontSize = 11.sp,
                                                 color = Color.Gray,
                                                 textAlign = TextAlign.Center
@@ -1645,227 +1932,305 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
+                        // EXPANDED & NON-TRUNCATED SCANNER WORKSPACE WITH VIEW TOGGLE
                         if (showScanWorkspaceInTable) {
                             val activeDisplayBitmap = previewCroppedBitmap ?: selectedBitmap
+                            // 0 = Split (Side-by-Side), 1 = Tokens Full Width, 2 = Image Full Width
+                            var scannerViewMode by remember { mutableIntStateOf(0) }
 
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(310.dp)
+                                    .height(430.dp)
                                     .padding(4.dp),
-                                shape = RoundedCornerShape(8.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 elevation = 3.dp
                             ) {
-                                Row(modifier = Modifier.fillMaxSize().padding(4.dp)) {
-                                    Box(
+                                Column(modifier = Modifier.fillMaxSize().padding(6.dp)) {
+                                    // Top Bar with View Mode Switcher
+                                    Row(
                                         modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight()
-                                            .clipToBounds()
-                                            .background(Color(0xFF263238), RoundedCornerShape(6.dp))
-                                            .pointerInput(activeDisplayBitmap) {
-                                                detectTransformGestures { _, pan, zoom, _ ->
-                                                    zoomScale = (zoomScale * zoom).coerceIn(1f, 5f)
-                                                    val maxPan = 500f * (zoomScale - 1f)
-                                                    panOffsetX = (panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
-                                                    panOffsetY = (panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
-                                                }
-                                            },
-                                        contentAlignment = Alignment.Center
+                                            .fillMaxWidth()
+                                            .padding(bottom = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        if (activeDisplayBitmap != null) {
-                                            Image(
-                                                bitmap = activeDisplayBitmap.asImageBitmap(),
-                                                contentDescription = "Cropped Snippet",
+                                        Text(
+                                            text = "📷 Scanner (${detectedWords.size} Tokens)",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = Color(0xFF1565C0)
+                                        )
+
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
                                                 modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .graphicsLayer(
-                                                        scaleX = zoomScale,
-                                                        scaleY = zoomScale,
-                                                        translationX = panOffsetX,
-                                                        translationY = panOffsetY
-                                                    ),
-                                                contentScale = ContentScale.Fit
-                                            )
-
-                                            if (zoomScale > 1.05f) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .align(Alignment.TopStart)
-                                                        .padding(6.dp)
-                                                        .background(Color(0xCC000000), RoundedCornerShape(4.dp))
-                                                        .clickable {
-                                                            zoomScale = 1f
-                                                            panOffsetX = 0f
-                                                            panOffsetY = 0f
-                                                        }
-                                                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "🔍 ${(zoomScale * 100).toInt()}% (Reset)",
-                                                        color = Color.White,
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                }
+                                                    .background(if (scannerViewMode == 0) Color(0xFF1976D2) else Color(0xFFECEFF1), RoundedCornerShape(4.dp))
+                                                    .clickable { scannerViewMode = 0 }
+                                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                                            ) {
+                                                Text("⚏ Split", fontSize = 10.sp, color = if (scannerViewMode == 0) Color.White else Color.Black)
                                             }
-                                        } else {
-                                            Text(
-                                                "No cropped snippet yet.\nPick or scan to crop.",
-                                                color = Color.White,
-                                                fontSize = 11.sp,
-                                                textAlign = TextAlign.Center
-                                            )
-                                        }
 
-                                        Row(
-                                            modifier = Modifier
-                                                .align(Alignment.BottomCenter)
-                                                .padding(4.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Button(
-                                                onClick = { imagePickerLauncher.launch("image/*") },
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                            ) { Text("📷 Pick", fontSize = 10.sp) }
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(if (scannerViewMode == 1) Color(0xFF1976D2) else Color(0xFFECEFF1), RoundedCornerShape(4.dp))
+                                                    .clickable { scannerViewMode = 1 }
+                                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                                            ) {
+                                                Text("🔤 Tokens", fontSize = 10.sp, color = if (scannerViewMode == 1) Color.White else Color.Black)
+                                            }
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(if (scannerViewMode == 2) Color(0xFF1976D2) else Color(0xFFECEFF1), RoundedCornerShape(4.dp))
+                                                    .clickable { scannerViewMode = 2 }
+                                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                                            ) {
+                                                Text("🖼 Image", fontSize = 10.sp, color = if (scannerViewMode == 2) Color.White else Color.Black)
+                                            }
 
                                             Button(
-                                                onClick = { showCropperDialog = true },
-                                                enabled = selectedBitmap != null,
-                                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                            ) { Text("✂ Crop", fontSize = 10.sp) }
+                                                onClick = { showAllWordsDialog = true },
+                                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                modifier = Modifier.height(26.dp)
+                                            ) {
+                                                Text("⛶ Token Studio", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            }
                                         }
                                     }
 
-                                    Spacer(modifier = Modifier.width(6.dp))
-
-                                    Column(modifier = Modifier.weight(1.35f).fillMaxHeight()) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                "Tokens (${detectedWords.size})",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 12.sp,
-                                                color = Color(0xFF1565C0)
-                                            )
-                                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                TextButton(
-                                                    onClick = {
-                                                        selectedTokens.clear()
-                                                        selectedTokens.addAll(detectedWords)
+                                    // Main Workspace Container
+                                    Row(
+                                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        // Image Viewer
+                                        if (scannerViewMode == 0 || scannerViewMode == 2) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(if (scannerViewMode == 2) 1f else 0.95f)
+                                                    .fillMaxHeight()
+                                                    .clipToBounds()
+                                                    .background(Color(0xFF263238), RoundedCornerShape(6.dp))
+                                                    .pointerInput(activeDisplayBitmap) {
+                                                        detectTransformGestures { _, pan, zoom, _ ->
+                                                            zoomScale = (zoomScale * zoom).coerceIn(1f, 5f)
+                                                            val maxPan = 500f * (zoomScale - 1f)
+                                                            panOffsetX = (panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
+                                                            panOffsetY = (panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
+                                                        }
                                                     },
-                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
-                                                ) { Text("All", fontSize = 10.sp) }
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                if (activeDisplayBitmap != null) {
+                                                    Image(
+                                                        bitmap = activeDisplayBitmap.asImageBitmap(),
+                                                        contentDescription = "Cropped Snippet",
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .graphicsLayer(
+                                                                scaleX = zoomScale,
+                                                                scaleY = zoomScale,
+                                                                translationX = panOffsetX,
+                                                                translationY = panOffsetY
+                                                            ),
+                                                        contentScale = ContentScale.Fit
+                                                    )
 
-                                                TextButton(
-                                                    onClick = { selectedTokens.clear() },
-                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
-                                                ) { Text("Clear", fontSize = 10.sp) }
-
-                                                TextButton(
-                                                    onClick = { showAllWordsDialog = true },
-                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
-                                                ) { Text("⛶ Modal", fontSize = 10.sp, color = Color(0xFF0D47A1), fontWeight = FontWeight.Bold) }
-                                            }
-                                        }
-
-                                        val (tr, tc) = anchorCell
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 3.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Button(
-                                                onClick = {
-                                                    if (selectedTokens.isNotEmpty()) {
-                                                        currentTable.setCellValue(tr, tc, selectedTokens.joinToString(" "))
-                                                        currentTable.markUpdated()
-                                                        hasUnsavedChanges = true
-                                                        jumpToNextRow()
-                                                    }
-                                                },
-                                                enabled = selectedTokens.isNotEmpty(),
-                                                modifier = Modifier.weight(1f),
-                                                contentPadding = PaddingValues(2.dp),
-                                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
-                                            ) { Text("➔ Active ($tr,$tc)", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold) }
-
-                                            Button(
-                                                onClick = {
-                                                    var (cr, cc) = anchorCell
-                                                    for (w in selectedTokens) {
-                                                        currentTable.setCellValue(cr, cc, w)
-                                                        if (cc < currentTable.headers.size - 1) cc++ else {
-                                                            if (cr < currentTable.rows.size - 1) { cr++; cc = 0 } else { currentTable.addRow(); cr++; cc = 0 }
+                                                    if (zoomScale > 1.05f) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .align(Alignment.TopStart)
+                                                                .padding(6.dp)
+                                                                .background(Color(0xCC000000), RoundedCornerShape(4.dp))
+                                                                .clickable {
+                                                                    zoomScale = 1f
+                                                                    panOffsetX = 0f
+                                                                    panOffsetY = 0f
+                                                                }
+                                                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = "🔍 ${(zoomScale * 100).toInt()}% (Reset)",
+                                                                color = Color.White,
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
                                                         }
                                                     }
-                                                    currentTable.markUpdated()
-                                                    hasUnsavedChanges = true
-                                                },
-                                                enabled = selectedTokens.isNotEmpty(),
-                                                modifier = Modifier.weight(1f),
-                                                contentPadding = PaddingValues(2.dp),
-                                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
-                                            ) { Text("➔ Sequence", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold) }
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .weight(1f)
-                                                .background(Color(0xFFF8FAFC), RoundedCornerShape(6.dp))
-                                                .border(1.dp, Color(0xFFCFD8DC), RoundedCornerShape(6.dp))
-                                                .verticalScroll(rememberScrollState())
-                                                .padding(6.dp)
-                                        ) {
-                                            if (detectedWords.isEmpty()) {
-                                                Box(
-                                                    modifier = Modifier.fillMaxSize().padding(top = 28.dp),
-                                                    contentAlignment = Alignment.Center
-                                                ) {
+                                                } else {
                                                     Text(
-                                                        "No tokens extracted yet.\nCrop a region above to generate words.",
+                                                        "No cropped snippet.\nPick or crop to scan.",
+                                                        color = Color.White,
                                                         fontSize = 11.sp,
-                                                        color = Color.Gray,
                                                         textAlign = TextAlign.Center
                                                     )
                                                 }
-                                            } else {
-                                                FlowRow(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+
+                                                Row(
+                                                    modifier = Modifier
+                                                        .align(Alignment.BottomCenter)
+                                                        .padding(4.dp),
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                                                 ) {
-                                                    detectedWords.forEach { w ->
-                                                        val isSel = selectedTokens.contains(w)
-                                                        Box(
+                                                    Button(
+                                                        onClick = { imagePickerLauncher.launch("image/*") },
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                        modifier = Modifier.height(28.dp)
+                                                    ) { Text("📷 Pick", fontSize = 10.sp) }
+
+                                                    Button(
+                                                        onClick = { showCropperDialog = true },
+                                                        enabled = selectedBitmap != null,
+                                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                        modifier = Modifier.height(28.dp)
+                                                    ) { Text("✂ Crop", fontSize = 10.sp) }
+                                                }
+                                            }
+                                        }
+
+                                        // Tokens Cloud
+                                        if (scannerViewMode == 0 || scannerViewMode == 1) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .weight(if (scannerViewMode == 1) 1f else 1.35f)
+                                                    .fillMaxHeight()
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        "${selectedTokens.size} selected",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = Color.DarkGray
+                                                    )
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                        Text(
+                                                            "All",
+                                                            fontSize = 11.sp,
+                                                            color = Color(0xFF1976D2),
+                                                            fontWeight = FontWeight.Bold,
                                                             modifier = Modifier
-                                                                .background(
-                                                                    if (isSel) Color(0xFF1976D2) else Color(0xFFFFFFFF),
-                                                                    RoundedCornerShape(6.dp)
-                                                                )
-                                                                .border(
-                                                                    1.dp,
-                                                                    if (isSel) Color(0xFF0D47A1) else Color(0xFFB0BEC5),
-                                                                    RoundedCornerShape(6.dp)
-                                                                )
                                                                 .clickable {
-                                                                    if (isSel) selectedTokens.remove(w)
-                                                                    else selectedTokens.add(w)
+                                                                    selectedTokens.clear()
+                                                                    selectedTokens.addAll(detectedWords)
                                                                 }
-                                                                .padding(horizontal = 8.dp, vertical = 5.dp)
+                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                        )
+                                                        Text(
+                                                            "Clear",
+                                                            fontSize = 11.sp,
+                                                            color = Color.Red,
+                                                            modifier = Modifier
+                                                                .clickable { selectedTokens.clear() }
+                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
+
+                                                val (tr, tc) = anchorCell
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                ) {
+                                                    Button(
+                                                        onClick = {
+                                                            if (selectedTokens.isNotEmpty()) {
+                                                                currentTable.setCellValue(tr, tc, selectedTokens.joinToString(" "))
+                                                                currentTable.markUpdated()
+                                                                hasUnsavedChanges = true
+                                                                jumpToNextRow()
+                                                            }
+                                                        },
+                                                        enabled = selectedTokens.isNotEmpty(),
+                                                        modifier = Modifier.weight(1f).height(32.dp),
+                                                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+                                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                                                    ) {
+                                                        Text("➔ Cell ($tr,$tc)", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1)
+                                                    }
+
+                                                    Button(
+                                                        onClick = {
+                                                            var (cr, cc) = anchorCell
+                                                            for (w in selectedTokens) {
+                                                                currentTable.setCellValue(cr, cc, w)
+                                                                if (cc < currentTable.headers.size - 1) cc++ else {
+                                                                    if (cr < currentTable.rows.size - 1) { cr++; cc = 0 } else { currentTable.addRow(); cr++; cc = 0 }
+                                                                }
+                                                            }
+                                                            currentTable.markUpdated()
+                                                            hasUnsavedChanges = true
+                                                        },
+                                                        enabled = selectedTokens.isNotEmpty(),
+                                                        modifier = Modifier.weight(1f).height(32.dp),
+                                                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+                                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
+                                                    ) {
+                                                        Text("➔ Sequence", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1)
+                                                    }
+                                                }
+
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .weight(1f)
+                                                        .background(Color(0xFFF8FAFC), RoundedCornerShape(6.dp))
+                                                        .border(1.dp, Color(0xFFCFD8DC), RoundedCornerShape(6.dp))
+                                                        .verticalScroll(rememberScrollState())
+                                                        .padding(6.dp)
+                                                ) {
+                                                    if (detectedWords.isEmpty()) {
+                                                        Box(
+                                                            modifier = Modifier.fillMaxSize().padding(top = 28.dp),
+                                                            contentAlignment = Alignment.Center
                                                         ) {
                                                             Text(
-                                                                text = w,
+                                                                "No tokens extracted yet.\nCrop a region on the left to extract words.",
                                                                 fontSize = 11.sp,
-                                                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                                                color = if (isSel) Color.White else Color(0xFF263238)
+                                                                color = Color.Gray,
+                                                                textAlign = TextAlign.Center
                                                             )
+                                                        }
+                                                    } else {
+                                                        FlowRow(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                        ) {
+                                                            detectedWords.forEach { w ->
+                                                                val isSel = selectedTokens.contains(w)
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .background(
+                                                                            if (isSel) Color(0xFF1976D2) else Color(0xFFFFFFFF),
+                                                                            RoundedCornerShape(6.dp)
+                                                                        )
+                                                                        .border(
+                                                                            1.dp,
+                                                                            if (isSel) Color(0xFF0D47A1) else Color(0xFFB0BEC5),
+                                                                            RoundedCornerShape(6.dp)
+                                                                        )
+                                                                        .clickable {
+                                                                            if (isSel) selectedTokens.remove(w)
+                                                                            else selectedTokens.add(w)
+                                                                        }
+                                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                                ) {
+                                                                    Text(
+                                                                        text = w,
+                                                                        fontSize = 11.sp,
+                                                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                                                        color = if (isSel) Color.White else Color(0xFF263238)
+                                                                    )
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -1876,6 +2241,7 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
+                        // Search and Multi-Select Control Bar
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                             backgroundColor = if (isMultiSelectMode) Color(0xFFF3E5F5) else Color(0xFFF1F5F9),
@@ -2006,6 +2372,7 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
+                        // Main Scrollable Table Canvas
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2013,6 +2380,7 @@ fun MobileTableEditorScreen() {
                                 .horizontalScroll(rememberScrollState())
                         ) {
                             Column(modifier = Modifier.width(totalTableWidth)) {
+                                // Table Header Row
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2086,6 +2454,7 @@ fun MobileTableEditorScreen() {
                                     }
                                 }
 
+                                // Table Rows
                                 if (filteredRowIndices.isEmpty()) {
                                     Box(
                                         modifier = Modifier
@@ -2380,6 +2749,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
+            // PDF STUDIO TAB
             if (selectedTabIndex == 1 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
                     Card(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), shape = RoundedCornerShape(8.dp), backgroundColor = Color(0xFFF1F5F9)) {
@@ -2554,6 +2924,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
+            // SAVED TABLES HISTORY TAB
             if (selectedTabIndex == 2 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -2589,6 +2960,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
+            // SETTINGS TAB
             if (selectedTabIndex == 3 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text("Settings & App Maintenance", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
@@ -2613,6 +2985,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
+    // SAVED TABLES DRAWER MODAL
     if (showTableHistoryDrawer) {
         AlertDialog(
             onDismissRequest = { showTableHistoryDrawer = false },

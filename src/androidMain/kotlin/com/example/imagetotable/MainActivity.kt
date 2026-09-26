@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Bundle
 import android.print.PrintAttributes
@@ -403,6 +405,51 @@ fun MobileTableEditorScreen() {
                 }
             }
             statusMessage = "Loaded ${uris.size} page(s) into PDF Studio!"
+        }
+    }
+
+    // PDF Import Launcher: Reads an existing PDF and converts each page to a Bitmap
+    val pdfPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                isProcessing = true
+                statusMessage = "Importing pages from PDF..."
+                try {
+                    val count = withContext(Dispatchers.IO) {
+                        val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                            ?: throw IllegalArgumentException("Could not open file descriptor for PDF.")
+                        val renderer = PdfRenderer(pfd)
+                        val total = renderer.pageCount
+                        val newPages = mutableListOf<PdfPageItem>()
+
+                        for (i in 0 until total) {
+                            val page = renderer.openPage(i)
+                            val scale = 2f
+                            val w = (page.width * scale).toInt().coerceAtMost(2480)
+                            val h = (page.height * scale).toInt().coerceAtMost(3508)
+                            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                            val canvas = Canvas(bmp)
+                            canvas.drawColor(android.graphics.Color.WHITE)
+                            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            page.close()
+                            newPages.add(PdfPageItem(bitmap = bmp))
+                        }
+
+                        renderer.close()
+                        pfd.close()
+
+                        withContext(Dispatchers.Main) {
+                            pdfPages.addAll(newPages)
+                        }
+                        total
+                    }
+                    statusMessage = "Imported $count page(s) from PDF! Ready to compress/edit."
+                } catch (e: Exception) {
+                    statusMessage = "PDF Import error: ${e.message}"
+                } finally {
+                    isProcessing = false
+                }
+            }
         }
     }
 
@@ -1416,7 +1463,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
-            // TAB 1: PDF STUDIO (SCAN CAMERA, UPLOAD, BORDERS, POST-GEN INSPECTION)
+            // TAB 1: PDF STUDIO (SCAN CAMERA, UPLOAD IMAGES, IMPORT EXISTING PDF, COMPRESS)
             if (selectedTabIndex == 1 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
                     Card(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), shape = RoundedCornerShape(8.dp), backgroundColor = Color(0xFFF1F5F9)) {
@@ -1425,7 +1472,7 @@ fun MobileTableEditorScreen() {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Button(
                                     onClick = { pdfStudioCameraScanLauncher.launch(null) },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315)),
@@ -1437,6 +1484,12 @@ fun MobileTableEditorScreen() {
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                 ) { Text("+ Upload Pages", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+
+                                Button(
+                                    onClick = { pdfPickerLauncher.launch("application/pdf") },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) { Text("📄 + Import PDF", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
 
                                 Button(
                                     onClick = { pdfPages.clear() },
@@ -1451,12 +1504,17 @@ fun MobileTableEditorScreen() {
 
                     if (pdfPages.isEmpty()) {
                         Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("No PDF pages loaded.", color = Color.Gray, fontSize = 14.sp)
-                                Spacer(modifier = Modifier.height(8.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(onClick = { pdfStudioCameraScanLauncher.launch(null) }) { Text("📷 Scan with Camera") }
-                                    Button(onClick = { multiImagePickerLauncher.launch("image/*") }) { Text("🖼 Upload from Gallery") }
+                                    Button(onClick = { multiImagePickerLauncher.launch("image/*") }) { Text("🖼 Upload Images") }
+                                }
+                                Button(
+                                    onClick = { pdfPickerLauncher.launch("application/pdf") },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A))
+                                ) {
+                                    Text("📄 Import Existing PDF", color = Color.White, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -1571,7 +1629,7 @@ fun MobileTableEditorScreen() {
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
                     ) {
                         Text(
-                            if (isProcessing) "Generating..." else "⚡ Generate PDF & Inspect Pages (Zoom & Reduce Size)",
+                            if (isProcessing) "Generating..." else "⚡ Compress & Inspect PDF (Target Size KB / DPI)",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp

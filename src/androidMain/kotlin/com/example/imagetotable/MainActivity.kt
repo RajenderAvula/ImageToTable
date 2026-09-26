@@ -1,6 +1,7 @@
 package com.example.imagetotable
 
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -30,6 +31,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.runtime.*
@@ -46,6 +48,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -196,6 +199,51 @@ fun MobileTableEditorScreen() {
     // PDF Studio State
     val pdfPages = remember { mutableStateListOf<PdfPageItem>() }
     var cacheSizeText by remember { mutableStateOf(CacheManager.getFormattedCacheSize(context)) }
+
+    // Launches Native Date + Time Picker directly for any table grid cell
+    fun openDatePickerForCell(rIdx: Int, cIdx: Int) {
+        val cal = Calendar.getInstance()
+        val currentVal = currentTable.rows.getOrNull(rIdx)?.getOrNull(cIdx) ?: ""
+        try {
+            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+            val parsed = sdf.parse(currentVal)
+            if (parsed != null) cal.time = parsed
+        } catch (_: Exception) {
+            try {
+                val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                val parsed = sdfDate.parse(currentVal)
+                if (parsed != null) cal.time = parsed
+            } catch (_: Exception) {}
+        }
+
+        DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                cal.set(Calendar.YEAR, year)
+                cal.set(Calendar.MONTH, month)
+                cal.set(Calendar.DAY_OF_MONTH, dayOfMonth)
+
+                TimePickerDialog(
+                    context,
+                    { _, hourOfDay, minute ->
+                        cal.set(Calendar.HOUR_OF_DAY, hourOfDay)
+                        cal.set(Calendar.MINUTE, minute)
+                        val outFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                        val formatted = outFormat.format(cal.time)
+                        currentTable.setCellValue(rIdx, cIdx, formatted)
+                        currentTable.markUpdated()
+                        TableRepository.saveOrUpdate(currentTable)
+                    },
+                    cal.get(Calendar.HOUR_OF_DAY),
+                    cal.get(Calendar.MINUTE),
+                    true
+                ).show()
+            },
+            cal.get(Calendar.YEAR),
+            cal.get(Calendar.MONTH),
+            cal.get(Calendar.DAY_OF_MONTH)
+        ).show()
+    }
 
     // UNIFIED AND COMPLETE TABLE DELETION HANDLER
     fun executeDeleteTable(targetTableId: String) {
@@ -1168,7 +1216,7 @@ fun MobileTableEditorScreen() {
     }
 
     val actionColWidth = 190.dp
-    val dataColWidth = 190.dp
+    val dataColWidth = 195.dp
     val totalTableWidth = actionColWidth + (dataColWidth * visibleColIndices.size) + 90.dp
 
     Scaffold(
@@ -1884,15 +1932,14 @@ fun MobileTableEditorScreen() {
                                                 val isSelected = selectedCells.contains(cellCoord)
                                                 val isAnchor = anchorCell == cellCoord
 
-                                                val isDateCol = colDef.type == ColumnType.DATE || parseDateFromHeader(colDef.name) != null
                                                 val isPresent = isAttendancePresent(cellValue)
                                                 val isAbsent = isAttendanceAbsent(cellValue)
 
                                                 val cellBg = when {
                                                     isSelected && isMultiSelectMode -> Color(0xFFE1BEE7)
                                                     isSelected -> Color(0xFFBBDEFB)
-                                                    isPresent -> Color(0xFFE8F5E9)
-                                                    isAbsent -> Color(0xFFFFEBEE)
+                                                    colDef.type == ColumnType.DATE && isPresent -> Color(0xFFE8F5E9)
+                                                    colDef.type == ColumnType.DATE && isAbsent -> Color(0xFFFFEBEE)
                                                     else -> Color.White
                                                 }
                                                 val cellBorder = when {
@@ -1909,76 +1956,254 @@ fun MobileTableEditorScreen() {
                                                         .background(cellBg)
                                                         .padding(horizontal = 6.dp, vertical = 4.dp)
                                                 ) {
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                    ) {
-                                                        BasicTextField(
-                                                            value = cellValue,
-                                                            onValueChange = {
-                                                                currentTable.setCellValue(origRIdx, colIdx, it)
-                                                                currentTable.markUpdated()
-                                                                TableRepository.saveOrUpdate(currentTable)
-                                                            },
-                                                            enabled = !isMultiSelectMode,
-                                                            textStyle = TextStyle(
-                                                                fontSize = 12.sp,
-                                                                fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
-                                                                color = when {
-                                                                    isPresent -> Color(0xFF2E7D32)
-                                                                    isAbsent -> Color(0xFFC62828)
-                                                                    else -> Color.Black
-                                                                }
-                                                            ),
-                                                            modifier = Modifier
-                                                                .weight(1f)
-                                                                .onFocusChanged {
-                                                                    if (it.isFocused && !isMultiSelectMode) {
-                                                                        anchorCell = cellCoord
-                                                                        selectedCells.clear()
-                                                                        selectedCells.add(cellCoord)
+                                                    // TYPE-DRIVEN CELL CONTENT
+                                                    when (colDef.type) {
+                                                        ColumnType.DATE -> {
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.SpaceBetween
+                                                            ) {
+                                                                BasicTextField(
+                                                                    value = cellValue,
+                                                                    onValueChange = {
+                                                                        currentTable.setCellValue(origRIdx, colIdx, it)
+                                                                        currentTable.markUpdated()
+                                                                        TableRepository.saveOrUpdate(currentTable)
+                                                                    },
+                                                                    enabled = !isMultiSelectMode,
+                                                                    textStyle = TextStyle(
+                                                                        fontSize = 11.sp,
+                                                                        fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
+                                                                        color = when {
+                                                                            isPresent -> Color(0xFF2E7D32)
+                                                                            isAbsent -> Color(0xFFC62828)
+                                                                            else -> Color.Black
+                                                                        }
+                                                                    ),
+                                                                    modifier = Modifier
+                                                                        .weight(1f)
+                                                                        .onFocusChanged {
+                                                                            if (it.isFocused && !isMultiSelectMode) {
+                                                                                anchorCell = cellCoord
+                                                                                selectedCells.clear()
+                                                                                selectedCells.add(cellCoord)
+                                                                            }
+                                                                        }
+                                                                )
+
+                                                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                                    // Native Calendar Picker Button
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(Color(0xFFE3F2FD), RoundedCornerShape(3.dp))
+                                                                            .clickable { openDatePickerForCell(origRIdx, colIdx) }
+                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                    ) {
+                                                                        Text("📅", fontSize = 11.sp)
+                                                                    }
+
+                                                                    // Quick Attendance P / A Chips
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(
+                                                                                if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
+                                                                                RoundedCornerShape(3.dp)
+                                                                            )
+                                                                            .clickable {
+                                                                                val newVal = if (isPresent) "" else "Present"
+                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                                currentTable.markUpdated()
+                                                                                TableRepository.saveOrUpdate(currentTable)
+                                                                            }
+                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                    ) {
+                                                                        Text("P", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
+                                                                    }
+
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(
+                                                                                if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
+                                                                                RoundedCornerShape(3.dp)
+                                                                            )
+                                                                            .clickable {
+                                                                                val newVal = if (isAbsent) "" else "Absent"
+                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                                currentTable.markUpdated()
+                                                                                TableRepository.saveOrUpdate(currentTable)
+                                                                            }
+                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                    ) {
+                                                                        Text("A", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
                                                                     }
                                                                 }
-                                                        )
+                                                            }
+                                                        }
 
-                                                        // QUICK ATTENDANCE TOGGLE BUTTONS (P / A) FOR DATE COLUMNS
-                                                        if (isDateCol) {
-                                                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                                                Box(
-                                                                    modifier = Modifier
-                                                                        .background(
-                                                                            if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
-                                                                            RoundedCornerShape(3.dp)
-                                                                        )
-                                                                        .clickable {
-                                                                            val newVal = if (isPresent) "" else "Present"
-                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                            currentTable.markUpdated()
-                                                                            TableRepository.saveOrUpdate(currentTable)
-                                                                        }
-                                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                                                                ) {
-                                                                    Text("P", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
-                                                                }
+                                                        ColumnType.BOOLEAN -> {
+                                                            val isTrue = cellValue.equals("true", ignoreCase = true) || cellValue.equals("yes", ignoreCase = true) || cellValue.equals("1", ignoreCase = true)
+                                                            val isFalse = cellValue.equals("false", ignoreCase = true) || cellValue.equals("no", ignoreCase = true) || cellValue.equals("0", ignoreCase = true)
 
-                                                                Box(
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.SpaceBetween
+                                                            ) {
+                                                                BasicTextField(
+                                                                    value = cellValue,
+                                                                    onValueChange = {
+                                                                        currentTable.setCellValue(origRIdx, colIdx, it)
+                                                                        currentTable.markUpdated()
+                                                                        TableRepository.saveOrUpdate(currentTable)
+                                                                    },
+                                                                    enabled = !isMultiSelectMode,
+                                                                    textStyle = TextStyle(fontSize = 11.sp, color = Color.Black),
                                                                     modifier = Modifier
-                                                                        .background(
-                                                                            if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
-                                                                            RoundedCornerShape(3.dp)
-                                                                        )
-                                                                        .clickable {
-                                                                            val newVal = if (isAbsent) "" else "Absent"
-                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                            currentTable.markUpdated()
-                                                                            TableRepository.saveOrUpdate(currentTable)
+                                                                        .weight(1f)
+                                                                        .onFocusChanged {
+                                                                            if (it.isFocused && !isMultiSelectMode) {
+                                                                                anchorCell = cellCoord
+                                                                                selectedCells.clear()
+                                                                                selectedCells.add(cellCoord)
+                                                                            }
                                                                         }
-                                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                                                                ) {
-                                                                    Text("A", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
+                                                                )
+
+                                                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(if (isTrue) Color(0xFF2E7D32) else Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
+                                                                            .clickable {
+                                                                                val newVal = if (isTrue) "" else "true"
+                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                                currentTable.markUpdated()
+                                                                                TableRepository.saveOrUpdate(currentTable)
+                                                                            }
+                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                    ) {
+                                                                        Text("True", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = if (isTrue) Color.White else Color(0xFF2E7D32))
+                                                                    }
+
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(if (isFalse) Color(0xFFC62828) else Color(0xFFFFEBEE), RoundedCornerShape(3.dp))
+                                                                            .clickable {
+                                                                                val newVal = if (isFalse) "" else "false"
+                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                                currentTable.markUpdated()
+                                                                                TableRepository.saveOrUpdate(currentTable)
+                                                                            }
+                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                    ) {
+                                                                        Text("False", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = if (isFalse) Color.White else Color(0xFFC62828))
+                                                                    }
                                                                 }
                                                             }
+                                                        }
+
+                                                        ColumnType.NUMBER -> {
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.SpaceBetween
+                                                            ) {
+                                                                BasicTextField(
+                                                                    value = cellValue,
+                                                                    onValueChange = { newVal ->
+                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '-' })
+                                                                        currentTable.markUpdated()
+                                                                        TableRepository.saveOrUpdate(currentTable)
+                                                                    },
+                                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                                    enabled = !isMultiSelectMode,
+                                                                    textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                    modifier = Modifier
+                                                                        .weight(1f)
+                                                                        .onFocusChanged {
+                                                                            if (it.isFocused && !isMultiSelectMode) {
+                                                                                anchorCell = cellCoord
+                                                                                selectedCells.clear()
+                                                                                selectedCells.add(cellCoord)
+                                                                            }
+                                                                        }
+                                                                )
+
+                                                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                            .clickable {
+                                                                                val num = cellValue.toIntOrNull() ?: 0
+                                                                                currentTable.setCellValue(origRIdx, colIdx, (num - 1).toString())
+                                                                                currentTable.markUpdated()
+                                                                                TableRepository.saveOrUpdate(currentTable)
+                                                                            }
+                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                    ) {
+                                                                        Text("-", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                                    }
+
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                            .clickable {
+                                                                                val num = cellValue.toIntOrNull() ?: 0
+                                                                                currentTable.setCellValue(origRIdx, colIdx, (num + 1).toString())
+                                                                                currentTable.markUpdated()
+                                                                                TableRepository.saveOrUpdate(currentTable)
+                                                                            }
+                                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                    ) {
+                                                                        Text("+", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        ColumnType.DECIMAL -> {
+                                                            BasicTextField(
+                                                                value = cellValue,
+                                                                onValueChange = { newVal ->
+                                                                    currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '.' || it == '-' })
+                                                                    currentTable.markUpdated()
+                                                                    TableRepository.saveOrUpdate(currentTable)
+                                                                },
+                                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                                                enabled = !isMultiSelectMode,
+                                                                textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .onFocusChanged {
+                                                                        if (it.isFocused && !isMultiSelectMode) {
+                                                                            anchorCell = cellCoord
+                                                                            selectedCells.clear()
+                                                                            selectedCells.add(cellCoord)
+                                                                        }
+                                                                    }
+                                                            )
+                                                        }
+
+                                                        ColumnType.TEXT -> {
+                                                            BasicTextField(
+                                                                value = cellValue,
+                                                                onValueChange = {
+                                                                    currentTable.setCellValue(origRIdx, colIdx, it)
+                                                                    currentTable.markUpdated()
+                                                                    TableRepository.saveOrUpdate(currentTable)
+                                                                },
+                                                                enabled = !isMultiSelectMode,
+                                                                textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .onFocusChanged {
+                                                                        if (it.isFocused && !isMultiSelectMode) {
+                                                                            anchorCell = cellCoord
+                                                                            selectedCells.clear()
+                                                                            selectedCells.add(cellCoord)
+                                                                        }
+                                                                    }
+                                                            )
                                                         }
                                                     }
 

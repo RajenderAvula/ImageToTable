@@ -1,5 +1,6 @@
 package com.example.imagetotable
 
+import android.app.DatePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -45,6 +46,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -57,11 +59,46 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.*
 
 enum class ExportFormat(val extension: String, val mime: String) {
     PDF("pdf", "application/pdf"),
     EXCEL("csv", "text/csv"),
     WORD("doc", "application/msword")
+}
+
+// Attendance date parsing and identification helpers
+fun parseDateFromHeader(header: String): Date? {
+    val formats = listOf(
+        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()),
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()),
+        SimpleDateFormat("dd-MM-yyyy", Locale.getDefault()),
+        SimpleDateFormat("MM/dd/yyyy", Locale.getDefault()),
+        SimpleDateFormat("yyyy/MM/dd", Locale.getDefault())
+    )
+    for (sdf in formats) {
+        try {
+            return sdf.parse(header.trim())
+        } catch (_: Exception) {}
+    }
+    return null
+}
+
+fun isAttendancePresent(value: String): Boolean {
+    val trimmed = value.trim()
+    return trimmed.equals("P", ignoreCase = true) ||
+           trimmed.equals("Present", ignoreCase = true) ||
+           trimmed.equals("1", ignoreCase = true) ||
+           trimmed.equals("Yes", ignoreCase = true)
+}
+
+fun isAttendanceAbsent(value: String): Boolean {
+    val trimmed = value.trim()
+    return trimmed.equals("A", ignoreCase = true) ||
+           trimmed.equals("Absent", ignoreCase = true) ||
+           trimmed.equals("0", ignoreCase = true) ||
+           trimmed.equals("No", ignoreCase = true)
 }
 
 class MainActivity : ComponentActivity() {
@@ -85,19 +122,20 @@ fun MobileTableEditorScreen() {
 
     val initialTable = remember {
         TableData(
-            initialName = "Invoice Extraction",
+            initialName = "Invoice & Attendance",
             initialHeaders = listOf(
-                ColumnDef("SKU / Code", ColumnType.TEXT),
-                ColumnDef("Description", ColumnType.TEXT),
-                ColumnDef("Qty", ColumnType.NUMBER),
-                ColumnDef("Price ($)", ColumnType.DECIMAL)
+                ColumnDef("Employee / SKU", ColumnType.TEXT),
+                ColumnDef("Department", ColumnType.TEXT),
+                ColumnDef("2026-09-25", ColumnType.DATE),
+                ColumnDef("2026-09-26", ColumnType.DATE)
             ),
             initialRows = listOf(
-                listOf("A-101", "Ballpoint Pens", "50", "1.25"),
-                listOf("B-204", "A4 Paper Reams", "10", "4.50"),
-                listOf("C-305", "Desk Organizer", "3", "12.00")
+                listOf("John Doe", "Engineering", "Present", "Present"),
+                listOf("Jane Smith", "Design", "Present", "Absent"),
+                listOf("Robert Lee", "Marketing", "Absent", "Present"),
+                listOf("Alice Wong", "Engineering", "Present", "Present")
             ),
-            initialCorner = "Item #"
+            initialCorner = "ID / #"
         ).also { TableRepository.saveOrUpdate(it) }
     }
 
@@ -119,6 +157,7 @@ fun MobileTableEditorScreen() {
 
     var isFullScreen by remember { mutableStateOf(false) }
     var showScanWorkspaceInTable by remember { mutableStateOf(false) }
+    var showAttendanceChart by remember { mutableStateOf(true) }
 
     // Dialog Visibilities
     var showCropperDialog by remember { mutableStateOf(false) }
@@ -131,6 +170,7 @@ fun MobileTableEditorScreen() {
     var showClearTableConfirm by remember { mutableStateOf(false) }
     var showRowEditorDialog by remember { mutableStateOf(false) }
     var editingRowIndex by remember { mutableIntStateOf(0) }
+    var showAddDateColumnDialog by remember { mutableStateOf(false) }
 
     // Column Value Filter Dialog State
     var activeFilterColIdx by remember { mutableStateOf<Int?>(null) }
@@ -145,7 +185,6 @@ fun MobileTableEditorScreen() {
     var pendingExtractedHeaders by remember { mutableStateOf<List<ColumnDef>>(emptyList()) }
     var pendingExtractedRows by remember { mutableStateOf<List<List<String>>>(emptyList()) }
 
-    var showExportMenu by remember { mutableStateOf(false) }
     var activeExportFormat by remember { mutableStateOf(ExportFormat.PDF) }
 
     // Search & Filter States
@@ -166,7 +205,7 @@ fun MobileTableEditorScreen() {
                 initialName = "New Table",
                 initialHeaders = listOf(ColumnDef("Col 1", ColumnType.TEXT), ColumnDef("Col 2", ColumnType.TEXT)),
                 initialRows = listOf(listOf("", ""), listOf("", "")),
-                initialCorner = "Item #"
+                initialCorner = "ID / #"
             ).also { TableRepository.saveOrUpdate(it) }
 
             currentTable = next
@@ -801,6 +840,101 @@ fun MobileTableEditorScreen() {
         )
     }
 
+    // ADD DATE ATTENDANCE COLUMN DIALOG
+    if (showAddDateColumnDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDateColumnDialog = false },
+            title = {
+                Text("Add Date Attendance Column", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1565C0))
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Select how you'd like to add date columns to track Present or Absent:", fontSize = 12.sp, color = Color.DarkGray)
+
+                    Button(
+                        onClick = {
+                            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                            val todayStr = sdf.format(Date())
+                            currentTable.addColumn(todayStr, ColumnType.DATE)
+                            currentTable.markUpdated()
+                            TableRepository.saveOrUpdate(currentTable)
+                            showAddDateColumnDialog = false
+                            statusMessage = "Added column '$todayStr'"
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2))
+                    ) {
+                        Text("📅 Add Today's Date", color = Color.White)
+                    }
+
+                    Button(
+                        onClick = {
+                            showAddDateColumnDialog = false
+                            val cal = Calendar.getInstance()
+                            DatePickerDialog(
+                                context,
+                                { _, y, m, d ->
+                                    val selCal = Calendar.getInstance().apply { set(y, m, d) }
+                                    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                                    val dateStr = sdf.format(selCal.time)
+                                    currentTable.addColumn(dateStr, ColumnType.DATE)
+                                    currentTable.markUpdated()
+                                    TableRepository.saveOrUpdate(currentTable)
+                                    statusMessage = "Added column '$dateStr'"
+                                },
+                                cal.get(Calendar.YEAR),
+                                cal.get(Calendar.MONTH),
+                                cal.get(Calendar.DAY_OF_MONTH)
+                            ).show()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
+                    ) {
+                        Text("🗓 Pick Custom Date from Calendar", color = Color.White)
+                    }
+
+                    Button(
+                        onClick = {
+                            showAddDateColumnDialog = false
+                            val cal = Calendar.getInstance()
+                            DatePickerDialog(
+                                context,
+                                { _, y, m, _ ->
+                                    val tempCal = Calendar.getInstance().apply { set(y, m, 1) }
+                                    val daysInMonth = tempCal.getActualMaximum(Calendar.DAY_OF_MONTH)
+                                    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                                    for (day in 1..daysInMonth) {
+                                        tempCal.set(Calendar.DAY_OF_MONTH, day)
+                                        val dayStr = sdf.format(tempCal.time)
+                                        if (currentTable.headers.none { it.name.trim() == dayStr }) {
+                                            currentTable.addColumn(dayStr, ColumnType.DATE)
+                                        }
+                                    }
+                                    currentTable.markUpdated()
+                                    TableRepository.saveOrUpdate(currentTable)
+                                    statusMessage = "Generated $daysInMonth daily columns!"
+                                },
+                                cal.get(Calendar.YEAR),
+                                cal.get(Calendar.MONTH),
+                                1
+                            ).apply {
+                                setTitle("Select Month to Generate Daily Columns")
+                            }.show()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A))
+                    ) {
+                        Text("📆 Generate Full Month (1 to 31)", color = Color.White)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showAddDateColumnDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     // CLEAR ALL VALUES CONFIRMATION DIALOG
     if (showClearTableConfirm) {
         AlertDialog(
@@ -1034,7 +1168,7 @@ fun MobileTableEditorScreen() {
     }
 
     val actionColWidth = 190.dp
-    val dataColWidth = 180.dp
+    val dataColWidth = 190.dp
     val totalTableWidth = actionColWidth + (dataColWidth * visibleColIndices.size) + 90.dp
 
     Scaffold(
@@ -1120,6 +1254,25 @@ fun MobileTableEditorScreen() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Button(onClick = { showNewTableDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
+
+                            // ADD DATE ATTENDANCE COLUMN BUTTON
+                            Button(
+                                onClick = { showAddDateColumnDialog = true },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("📅 + Date Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            // ATTENDANCE CHART TOGGLE BUTTON
+                            Button(
+                                onClick = { showAttendanceChart = !showAttendanceChart },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = if (showAttendanceChart) Color(0xFF303F9F) else Color(0xFF5C6BC0)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(if (showAttendanceChart) "📊 Hide Chart" else "📊 Attendance Chart", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
                             Button(onClick = {
                                 val subTable = currentTable.createSubTable("${currentTable.tableName} (Filtered)", filteredRowIndices, visibleColIndices)
                                 TableRepository.saveOrUpdate(subTable)
@@ -1164,6 +1317,146 @@ fun MobileTableEditorScreen() {
                                 currentTable.markUpdated()
                                 TableRepository.saveOrUpdate(currentTable)
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
+                        }
+
+                        // SCROLLABLE MONTHLY ATTENDANCE CHART (Calculated dynamically from filteredRowIndices)
+                        if (showAttendanceChart) {
+                            val dateColIndices = remember(currentTable.headers) {
+                                currentTable.headers.indices.filter { idx ->
+                                    val def = currentTable.headers[idx]
+                                    def.type == ColumnType.DATE || parseDateFromHeader(def.name) != null
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                elevation = 2.dp,
+                                backgroundColor = Color.White
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "📊 Daily Attendance Chart (${filteredRowIndices.size} filtered rows)",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF1565C0)
+                                        )
+                                        if (dateColIndices.isNotEmpty()) {
+                                            Text(
+                                                text = "${dateColIndices.size} Tracked Days",
+                                                fontSize = 11.sp,
+                                                color = Color.Gray,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    if (dateColIndices.isEmpty()) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(60.dp)
+                                                .background(Color(0xFFF1F5F9), RoundedCornerShape(6.dp)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "No date columns yet. Tap '📅 + Date Col' to add attendance columns.",
+                                                fontSize = 11.sp,
+                                                color = Color.Gray
+                                            )
+                                        }
+                                    } else {
+                                        val totalRowsFiltered = filteredRowIndices.size.coerceAtLeast(1)
+                                        val maxChartHeight = 70.dp
+
+                                        LazyRow(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 4.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            verticalAlignment = Alignment.Bottom
+                                        ) {
+                                            itemsIndexed(dateColIndices) { _, colIdx ->
+                                                val colDef = currentTable.headers[colIdx]
+                                                val presentCount = filteredRowIndices.count { rIdx ->
+                                                    val cellVal = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
+                                                    isAttendancePresent(cellVal)
+                                                }
+                                                val absentCount = filteredRowIndices.count { rIdx ->
+                                                    val cellVal = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
+                                                    isAttendanceAbsent(cellVal)
+                                                }
+                                                val ratio = (presentCount.toFloat() / totalRowsFiltered).coerceIn(0.05f, 1f)
+
+                                                Column(
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    modifier = Modifier
+                                                        .width(54.dp)
+                                                        .background(Color(0xFFF8FAFC), RoundedCornerShape(6.dp))
+                                                        .border(0.5.dp, Color(0xFFE2E8F0), RoundedCornerShape(6.dp))
+                                                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "$presentCount P",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color(0xFF2E7D32)
+                                                    )
+
+                                                    Spacer(modifier = Modifier.height(2.dp))
+
+                                                    // Visual proportional bar
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .width(20.dp)
+                                                            .height(maxChartHeight),
+                                                        contentAlignment = Alignment.BottomCenter
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .fillMaxHeight()
+                                                                .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                        )
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .fillMaxHeight(fraction = ratio)
+                                                                .background(Color(0xFF43A047), RoundedCornerShape(3.dp))
+                                                        )
+                                                    }
+
+                                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                                    Text(
+                                                        text = if (absentCount > 0) "$absentCount A" else "${(ratio * 100).toInt()}%",
+                                                        fontSize = 9.sp,
+                                                        color = if (absentCount > 0) Color(0xFFC62828) else Color.DarkGray
+                                                    )
+
+                                                    val displayLabel = colDef.name.replace("2026-", "").replace("2025-", "")
+                                                    Text(
+                                                        text = displayLabel,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        textAlign = TextAlign.Center,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // SCANNER WORKSPACE
@@ -1585,14 +1878,21 @@ fun MobileTableEditorScreen() {
                                             }
 
                                             visibleColIndices.forEach { colIdx ->
+                                                val colDef = currentTable.headers[colIdx]
                                                 val cellCoord = Pair(origRIdx, colIdx)
                                                 val cellValue = rowData.getOrElse(colIdx) { "" }
                                                 val isSelected = selectedCells.contains(cellCoord)
                                                 val isAnchor = anchorCell == cellCoord
 
+                                                val isDateCol = colDef.type == ColumnType.DATE || parseDateFromHeader(colDef.name) != null
+                                                val isPresent = isAttendancePresent(cellValue)
+                                                val isAbsent = isAttendanceAbsent(cellValue)
+
                                                 val cellBg = when {
                                                     isSelected && isMultiSelectMode -> Color(0xFFE1BEE7)
                                                     isSelected -> Color(0xFFBBDEFB)
+                                                    isPresent -> Color(0xFFE8F5E9)
+                                                    isAbsent -> Color(0xFFFFEBEE)
                                                     else -> Color.White
                                                 }
                                                 val cellBorder = when {
@@ -1607,27 +1907,80 @@ fun MobileTableEditorScreen() {
                                                         .width(dataColWidth)
                                                         .border(width = if (isSelected || isAnchor) 2.dp else 0.5.dp, color = cellBorder)
                                                         .background(cellBg)
-                                                        .padding(8.dp)
+                                                        .padding(horizontal = 6.dp, vertical = 4.dp)
                                                 ) {
-                                                    BasicTextField(
-                                                        value = cellValue,
-                                                        onValueChange = {
-                                                            currentTable.setCellValue(origRIdx, colIdx, it)
-                                                            currentTable.markUpdated()
-                                                            TableRepository.saveOrUpdate(currentTable)
-                                                        },
-                                                        enabled = !isMultiSelectMode,
-                                                        textStyle = TextStyle(fontSize = 13.sp, color = Color.Black),
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .onFocusChanged {
-                                                                if (it.isFocused && !isMultiSelectMode) {
-                                                                    anchorCell = cellCoord
-                                                                    selectedCells.clear()
-                                                                    selectedCells.add(cellCoord)
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        BasicTextField(
+                                                            value = cellValue,
+                                                            onValueChange = {
+                                                                currentTable.setCellValue(origRIdx, colIdx, it)
+                                                                currentTable.markUpdated()
+                                                                TableRepository.saveOrUpdate(currentTable)
+                                                            },
+                                                            enabled = !isMultiSelectMode,
+                                                            textStyle = TextStyle(
+                                                                fontSize = 12.sp,
+                                                                fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
+                                                                color = when {
+                                                                    isPresent -> Color(0xFF2E7D32)
+                                                                    isAbsent -> Color(0xFFC62828)
+                                                                    else -> Color.Black
+                                                                }
+                                                            ),
+                                                            modifier = Modifier
+                                                                .weight(1f)
+                                                                .onFocusChanged {
+                                                                    if (it.isFocused && !isMultiSelectMode) {
+                                                                        anchorCell = cellCoord
+                                                                        selectedCells.clear()
+                                                                        selectedCells.add(cellCoord)
+                                                                    }
+                                                                }
+                                                        )
+
+                                                        // QUICK ATTENDANCE TOGGLE BUTTONS (P / A) FOR DATE COLUMNS
+                                                        if (isDateCol) {
+                                                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .background(
+                                                                            if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
+                                                                            RoundedCornerShape(3.dp)
+                                                                        )
+                                                                        .clickable {
+                                                                            val newVal = if (isPresent) "" else "Present"
+                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                            currentTable.markUpdated()
+                                                                            TableRepository.saveOrUpdate(currentTable)
+                                                                        }
+                                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                                ) {
+                                                                    Text("P", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
+                                                                }
+
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .background(
+                                                                            if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
+                                                                            RoundedCornerShape(3.dp)
+                                                                        )
+                                                                        .clickable {
+                                                                            val newVal = if (isAbsent) "" else "Absent"
+                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                            currentTable.markUpdated()
+                                                                            TableRepository.saveOrUpdate(currentTable)
+                                                                        }
+                                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                                ) {
+                                                                    Text("A", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
                                                                 }
                                                             }
-                                                    )
+                                                        }
+                                                    }
 
                                                     if (isMultiSelectMode) {
                                                         Box(

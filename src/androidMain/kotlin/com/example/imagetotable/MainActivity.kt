@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MobileTableEditorScreen() {
     val context = LocalContext.current
@@ -697,7 +698,7 @@ fun MobileTableEditorScreen() {
 
     val visibleColIndices = currentTable.headers.indices.filter { !hiddenColumns.contains(it) }
 
-    // Evaluates both Global Search and Excel-style Column Value Filters
+    // Evaluates both Global Search and Column Value Filters
     val filteredRowIndices = currentTable.rows.indices.filter { rIdx ->
         val nameMatch = currentTable.rowNames.getOrElse(rIdx) { "" }.contains(globalSearchQuery, ignoreCase = true)
         val cellMatch = currentTable.rows[rIdx].any { it.contains(globalSearchQuery, ignoreCase = true) }
@@ -710,9 +711,7 @@ fun MobileTableEditorScreen() {
         matchesGlobal && matchesColFilters
     }
 
-    // =========================================================================
-    // COLUMN VALUE FILTER DIALOG (Interactive list with Search & Counts)
-    // =========================================================================
+    // Column Value Filter Dialog
     if (activeFilterColIdx != null) {
         val targetCol = activeFilterColIdx!!
         val colName = currentTable.headers.getOrNull(targetCol)?.name ?: "Column ${targetCol + 1}"
@@ -995,42 +994,97 @@ fun MobileTableEditorScreen() {
                         Button(onClick = { currentTable.addColumn("Col ${currentTable.headers.size + 1}") }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                     }
 
+                    // SCANNER & CONVERT WORKSPACE WITH MULTI-ROW UP/DOWN SCROLLABLE TOKENS
                     if (showScanWorkspaceInTable) {
                         Card(
-                            modifier = Modifier.fillMaxWidth().height(160.dp).padding(4.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp)
+                                .padding(4.dp),
                             shape = RoundedCornerShape(8.dp),
                             elevation = 3.dp
                         ) {
                             Row(modifier = Modifier.fillMaxSize().padding(4.dp)) {
                                 Box(
-                                    modifier = Modifier.weight(1f).fillMaxHeight().background(Color(0xFF263238), RoundedCornerShape(6.dp)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .background(Color(0xFF263238), RoundedCornerShape(6.dp)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (selectedBitmap != null) {
-                                        Image(bitmap = selectedBitmap!!.asImageBitmap(), contentDescription = "Snippet", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                                        Image(
+                                            bitmap = selectedBitmap!!.asImageBitmap(),
+                                            contentDescription = "Snippet",
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Fit
+                                        )
                                     } else {
                                         Text("No image loaded", color = Color.White, fontSize = 11.sp)
                                     }
 
-                                    Row(modifier = Modifier.align(Alignment.BottomCenter).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Button(onClick = { imagePickerLauncher.launch("image/*") }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 1.dp)) { Text("📷 Pick", fontSize = 10.sp) }
-                                        Button(onClick = { showCropperDialog = true }, enabled = selectedBitmap != null, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 1.dp)) { Text("✂ Crop", fontSize = 10.sp) }
+                                    Row(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .padding(4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { imagePickerLauncher.launch("image/*") },
+                                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 1.dp)
+                                        ) { Text("📷 Pick", fontSize = 10.sp) }
+
+                                        Button(
+                                            onClick = { showCropperDialog = true },
+                                            enabled = selectedBitmap != null,
+                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 1.dp)
+                                        ) { Text("✂ Crop", fontSize = 10.sp) }
                                     }
                                 }
 
                                 Spacer(modifier = Modifier.width(6.dp))
 
-                                Column(modifier = Modifier.weight(1.3f).fillMaxHeight()) {
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                        Text("Tokens (${detectedWords.size})", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color(0xFF1565C0))
+                                Column(modifier = Modifier.weight(1.35f).fillMaxHeight()) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "Tokens (${detectedWords.size})",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF1565C0)
+                                        )
                                         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            TextButton(onClick = { selectedTokens.clear(); selectedTokens.addAll(detectedWords) }, contentPadding = PaddingValues(1.dp)) { Text("All", fontSize = 9.sp) }
-                                            TextButton(onClick = { selectedTokens.clear() }, contentPadding = PaddingValues(1.dp)) { Text("Clear", fontSize = 9.sp) }
+                                            TextButton(
+                                                onClick = {
+                                                    selectedTokens.clear()
+                                                    selectedTokens.addAll(detectedWords)
+                                                },
+                                                contentPadding = PaddingValues(1.dp)
+                                            ) { Text("All", fontSize = 9.sp) }
+
+                                            TextButton(
+                                                onClick = { selectedTokens.clear() },
+                                                contentPadding = PaddingValues(1.dp)
+                                            ) { Text("Clear", fontSize = 9.sp) }
+
+                                            TextButton(
+                                                onClick = { showAllWordsDialog = true },
+                                                contentPadding = PaddingValues(1.dp)
+                                            ) { Text("⛶ All Modal", fontSize = 9.sp, color = Color(0xFF0D47A1)) }
                                         }
                                     }
 
                                     val (tr, tc) = anchorCell
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 2.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
                                         Button(
                                             onClick = {
                                                 if (selectedTokens.isNotEmpty()) {
@@ -1061,15 +1115,61 @@ fun MobileTableEditorScreen() {
                                         ) { Text("➔ Seq", fontSize = 9.sp, color = Color.White) }
                                     }
 
-                                    LazyRow(modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        itemsIndexed(detectedWords) { _, w ->
-                                            val isSel = selectedTokens.contains(w)
+                                    // TOKENS VISIBLE ALL AT ONCE (FLOW WRAP WITH VERTICAL UP/DOWN SCROLL)
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)
+                                            .background(Color(0xFFF8FAFC), RoundedCornerShape(4.dp))
+                                            .border(0.5.dp, Color(0xFFCFD8DC), RoundedCornerShape(4.dp))
+                                            .verticalScroll(rememberScrollState())
+                                            .padding(4.dp)
+                                    ) {
+                                        if (detectedWords.isEmpty()) {
                                             Box(
-                                                modifier = Modifier
-                                                    .background(if (isSel) Color(0xFF1976D2) else Color(0xFFE8EEF5), RoundedCornerShape(4.dp))
-                                                    .clickable { if (isSel) selectedTokens.remove(w) else selectedTokens.add(w) }
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                                            ) { Text(w, fontSize = 10.sp, color = if (isSel) Color.White else Color.Black) }
+                                                modifier = Modifier.fillMaxSize().padding(top = 16.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    "No tokens yet. Pick/crop image to extract text.",
+                                                    fontSize = 10.sp,
+                                                    color = Color.Gray
+                                                )
+                                            }
+                                        } else {
+                                            FlowRow(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                detectedWords.forEach { w ->
+                                                    val isSel = selectedTokens.contains(w)
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .background(
+                                                                if (isSel) Color(0xFF1976D2) else Color(0xFFE8EEF5),
+                                                                RoundedCornerShape(4.dp)
+                                                            )
+                                                            .border(
+                                                                0.5.dp,
+                                                                if (isSel) Color(0xFF0D47A1) else Color(0xFFCFD8DC),
+                                                                RoundedCornerShape(4.dp)
+                                                            )
+                                                            .clickable {
+                                                                if (isSel) selectedTokens.remove(w)
+                                                                else selectedTokens.add(w)
+                                                            }
+                                                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = w,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                                            color = if (isSel) Color.White else Color.Black
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1559,6 +1659,7 @@ fun MobileTableEditorScreen() {
                                 Column(modifier = Modifier.weight(1f).clickable {
                                     currentTable = t
                                     tableSnapshot = t.createSnapshot()
+                                    columnValueFilters.clear()
                                     selectedCells.clear(); selectedCells.add(Pair(0, 0))
                                     showTableHistoryDrawer = false
                                     statusMessage = "Loaded: ${t.tableName}"

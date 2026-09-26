@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.runtime.*
@@ -18,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -87,7 +89,7 @@ fun AdvancedRowEditorDialog(
         )
     }
 
-    fun openCalendarPicker() {
+    fun openCalendarPickerForTable() {
         val cal = Calendar.getInstance()
         try {
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
@@ -115,6 +117,48 @@ fun AdvancedRowEditorDialog(
                         cal.set(Calendar.MINUTE, minute)
                         val outFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
                         tableDateTimeState = outFormat.format(cal.time)
+                    },
+                    cal.get(Calendar.HOUR_OF_DAY),
+                    cal.get(Calendar.MINUTE),
+                    true
+                ).show()
+            },
+            cal.get(Calendar.YEAR),
+            cal.get(Calendar.MONTH),
+            cal.get(Calendar.DAY_OF_MONTH)
+        ).show()
+    }
+
+    fun openCalendarPickerForCell(colIdx: Int) {
+        val cal = Calendar.getInstance()
+        val currentVal = valuesState.getOrElse(colIdx) { "" }
+        try {
+            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+            val parsed = sdf.parse(currentVal)
+            if (parsed != null) cal.time = parsed
+        } catch (_: Exception) {
+            try {
+                val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                val parsed = sdfDate.parse(currentVal)
+                if (parsed != null) cal.time = parsed
+            } catch (_: Exception) {}
+        }
+
+        DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                cal.set(Calendar.YEAR, year)
+                cal.set(Calendar.MONTH, month)
+                cal.set(Calendar.DAY_OF_MONTH, dayOfMonth)
+
+                TimePickerDialog(
+                    context,
+                    { _, hourOfDay, minute ->
+                        cal.set(Calendar.HOUR_OF_DAY, hourOfDay)
+                        cal.set(Calendar.MINUTE, minute)
+                        val outFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                        while (valuesState.size <= colIdx) valuesState.add("")
+                        valuesState[colIdx] = outFormat.format(cal.time)
                     },
                     cal.get(Calendar.HOUR_OF_DAY),
                     cal.get(Calendar.MINUTE),
@@ -263,7 +307,7 @@ fun AdvancedRowEditorDialog(
                                         .weight(1f)
                                         .border(1.dp, Color(0xFF90CAF9), RoundedCornerShape(6.dp))
                                         .background(Color(0xFFF1F8FE), RoundedCornerShape(6.dp))
-                                        .clickable { openCalendarPicker() }
+                                        .clickable { openCalendarPickerForTable() }
                                         .padding(horizontal = 12.dp, vertical = 10.dp)
                                 ) {
                                     Column {
@@ -329,7 +373,7 @@ fun AdvancedRowEditorDialog(
                         }
                     }
 
-                    // SECTION 3: COLUMN LIST (NAMES, TYPES, MOVE UP/DOWN, VALUE INPUT)
+                    // SECTION 3: COLUMN LIST WITH TYPE-AWARE ADAPTIVE VALUE EDITORS
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -488,17 +532,205 @@ fun AdvancedRowEditorDialog(
                                         )
                                     }
 
-                                    // Row C: Cell Value Input
-                                    OutlinedTextField(
-                                        value = cellValue,
-                                        onValueChange = { newVal ->
-                                            while (valuesState.size <= cIdx) valuesState.add("")
-                                            valuesState[cIdx] = newVal
-                                        },
-                                        label = { Text("Value for ${colDef.name}") },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        textStyle = TextStyle(fontSize = 13.sp)
-                                    )
+                                    // Row C: ADAPTIVE VALUE INPUT BASED ON DATA TYPE
+                                    when (colDef.type) {
+                                        ColumnType.DATE -> {
+                                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .border(1.dp, Color(0xFF90CAF9), RoundedCornerShape(6.dp))
+                                                            .background(Color(0xFFF1F8FE), RoundedCornerShape(6.dp))
+                                                            .clickable { openCalendarPickerForCell(cIdx) }
+                                                            .padding(horizontal = 10.dp, vertical = 10.dp)
+                                                    ) {
+                                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                                            Text("📅 ", fontSize = 13.sp)
+                                                            Text(
+                                                                text = cellValue.ifBlank { "Tap to pick Date & Time" },
+                                                                fontSize = 13.sp,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                                color = Color(0xFF1565C0)
+                                                            )
+                                                        }
+                                                    }
+
+                                                    Button(
+                                                        onClick = {
+                                                            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                                                            while (valuesState.size <= cIdx) valuesState.add("")
+                                                            valuesState[cIdx] = sdf.format(Date())
+                                                        },
+                                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0288D1)),
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                                                    ) {
+                                                        Text("Today", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
+
+                                                // Attendance Present / Absent Quick Toggles
+                                                val isPresent = cellValue.equals("Present", ignoreCase = true) || cellValue.equals("P", ignoreCase = true)
+                                                val isAbsent = cellValue.equals("Absent", ignoreCase = true) || cellValue.equals("A", ignoreCase = true)
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    Button(
+                                                        onClick = {
+                                                            while (valuesState.size <= cIdx) valuesState.add("")
+                                                            valuesState[cIdx] = if (isPresent) "" else "Present"
+                                                        },
+                                                        modifier = Modifier.weight(1f),
+                                                        colors = ButtonDefaults.buttonColors(
+                                                            backgroundColor = if (isPresent) Color(0xFF2E7D32) else Color(0xFFE8F5E9)
+                                                        ),
+                                                        contentPadding = PaddingValues(vertical = 4.dp)
+                                                    ) {
+                                                        Text("✓ Present", fontSize = 11.sp, color = if (isPresent) Color.White else Color(0xFF1B5E20), fontWeight = FontWeight.Bold)
+                                                    }
+
+                                                    Button(
+                                                        onClick = {
+                                                            while (valuesState.size <= cIdx) valuesState.add("")
+                                                            valuesState[cIdx] = if (isAbsent) "" else "Absent"
+                                                        },
+                                                        modifier = Modifier.weight(1f),
+                                                        colors = ButtonDefaults.buttonColors(
+                                                            backgroundColor = if (isAbsent) Color(0xFFC62828) else Color(0xFFFFEBEE)
+                                                        ),
+                                                        contentPadding = PaddingValues(vertical = 4.dp)
+                                                    ) {
+                                                        Text("✕ Absent", fontSize = 11.sp, color = if (isAbsent) Color.White else Color(0xFFB71C1C), fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
+
+                                                OutlinedTextField(
+                                                    value = cellValue,
+                                                    onValueChange = { newVal ->
+                                                        while (valuesState.size <= cIdx) valuesState.add("")
+                                                        valuesState[cIdx] = newVal
+                                                    },
+                                                    label = { Text("Manual Text for ${colDef.name}", fontSize = 10.sp) },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    textStyle = TextStyle(fontSize = 12.sp)
+                                                )
+                                            }
+                                        }
+
+                                        ColumnType.BOOLEAN -> {
+                                            val isTrue = cellValue.equals("true", ignoreCase = true) || cellValue.equals("yes", ignoreCase = true) || cellValue.equals("1", ignoreCase = true)
+                                            val isFalse = cellValue.equals("false", ignoreCase = true) || cellValue.equals("no", ignoreCase = true) || cellValue.equals("0", ignoreCase = true)
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Button(
+                                                    onClick = {
+                                                        while (valuesState.size <= cIdx) valuesState.add("")
+                                                        valuesState[cIdx] = if (isTrue) "" else "true"
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        backgroundColor = if (isTrue) Color(0xFF2E7D32) else Color(0xFFE8F5E9)
+                                                    )
+                                                ) {
+                                                    Text(if (isTrue) "✓ True (Active)" else "True", color = if (isTrue) Color.White else Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
+                                                }
+
+                                                Button(
+                                                    onClick = {
+                                                        while (valuesState.size <= cIdx) valuesState.add("")
+                                                        valuesState[cIdx] = if (isFalse) "" else "false"
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        backgroundColor = if (isFalse) Color(0xFFC62828) else Color(0xFFFFEBEE)
+                                                    )
+                                                ) {
+                                                    Text(if (isFalse) "✕ False (Active)" else "False", color = if (isFalse) Color.White else Color(0xFFC62828), fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+
+                                        ColumnType.NUMBER -> {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = cellValue,
+                                                    onValueChange = { newVal ->
+                                                        while (valuesState.size <= cIdx) valuesState.add("")
+                                                        valuesState[cIdx] = newVal.filter { it.isDigit() || it == '-' }
+                                                    },
+                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                    label = { Text("Number Value (${colDef.name})") },
+                                                    modifier = Modifier.weight(1f),
+                                                    textStyle = TextStyle(fontSize = 13.sp)
+                                                )
+
+                                                Button(
+                                                    onClick = {
+                                                        val num = cellValue.toIntOrNull() ?: 0
+                                                        while (valuesState.size <= cIdx) valuesState.add("")
+                                                        valuesState[cIdx] = (num - 1).toString()
+                                                    },
+                                                    modifier = Modifier.size(width = 44.dp, height = 48.dp),
+                                                    contentPadding = PaddingValues(0.dp),
+                                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFECEFF1))
+                                                ) {
+                                                    Text("-1", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                }
+
+                                                Button(
+                                                    onClick = {
+                                                        val num = cellValue.toIntOrNull() ?: 0
+                                                        while (valuesState.size <= cIdx) valuesState.add("")
+                                                        valuesState[cIdx] = (num + 1).toString()
+                                                    },
+                                                    modifier = Modifier.size(width = 44.dp, height = 48.dp),
+                                                    contentPadding = PaddingValues(0.dp),
+                                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFECEFF1))
+                                                ) {
+                                                    Text("+1", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                }
+                                            }
+                                        }
+
+                                        ColumnType.DECIMAL -> {
+                                            OutlinedTextField(
+                                                value = cellValue,
+                                                onValueChange = { newVal ->
+                                                    while (valuesState.size <= cIdx) valuesState.add("")
+                                                    valuesState[cIdx] = newVal.filter { it.isDigit() || it == '.' || it == '-' }
+                                                },
+                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                                label = { Text("Decimal Value (${colDef.name})") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                textStyle = TextStyle(fontSize = 13.sp)
+                                            )
+                                        }
+
+                                        ColumnType.TEXT -> {
+                                            OutlinedTextField(
+                                                value = cellValue,
+                                                onValueChange = { newVal ->
+                                                    while (valuesState.size <= cIdx) valuesState.add("")
+                                                    valuesState[cIdx] = newVal
+                                                },
+                                                label = { Text("Text Value for ${colDef.name}") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                textStyle = TextStyle(fontSize = 13.sp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

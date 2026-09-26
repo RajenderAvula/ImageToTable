@@ -23,6 +23,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,9 +38,11 @@ import androidx.compose.material.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -200,6 +203,18 @@ fun MobileTableEditorScreen() {
     val pdfPages = remember { mutableStateListOf<PdfPageItem>() }
     var cacheSizeText by remember { mutableStateOf(CacheManager.getFormattedCacheSize(context)) }
 
+    // Interactive Zoom and Pan transformation for cropped snippet viewer
+    var zoomScale by remember { mutableFloatStateOf(1f) }
+    var panOffsetX by remember { mutableFloatStateOf(0f) }
+    var panOffsetY by remember { mutableFloatStateOf(0f) }
+
+    // Reset zoom when a fresh cropped snippet arrives
+    LaunchedEffect(previewCroppedBitmap) {
+        zoomScale = 1f
+        panOffsetX = 0f
+        panOffsetY = 0f
+    }
+
     // Launches Native Date + Time Picker directly for any table grid cell
     fun openDatePickerForCell(rIdx: Int, cIdx: Int) {
         val cal = Calendar.getInstance()
@@ -267,6 +282,7 @@ fun MobileTableEditorScreen() {
             detectedWords.clear()
             selectedTokens.clear()
             selectedBitmap = null
+            previewCroppedBitmap = null
             cellClipboard = null
             showDedicatedEditor = false
             showRowEditorDialog = false
@@ -513,6 +529,7 @@ fun MobileTableEditorScreen() {
         if (uri != null) {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 selectedBitmap = BitmapFactory.decodeStream(stream)
+                previewCroppedBitmap = null
                 cropperTargetPageIndex = null
                 showCropperDialog = true
             }
@@ -592,6 +609,7 @@ fun MobileTableEditorScreen() {
                     cropperTargetPageIndex = null
                     statusMessage = "Updated borders for Page ${pageTarget + 1}!"
                 } else {
+                    previewCroppedBitmap = cropped
                     coroutineScope.launch {
                         isProcessing = true
                         try {
@@ -613,7 +631,6 @@ fun MobileTableEditorScreen() {
                                     h.forEach { detectedWords.add(it) }
                                     r.flatten().filter { it.isNotBlank() }.forEach { detectedWords.add(it) }
 
-                                    previewCroppedBitmap = cropped
                                     pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
                                     pendingExtractedRows = r
                                     showExtractionPreviewDialog = true
@@ -716,6 +733,7 @@ fun MobileTableEditorScreen() {
                 detectedWords.clear()
                 selectedTokens.clear()
                 selectedBitmap = null
+                previewCroppedBitmap = null
                 showNewTableDialog = false
                 statusMessage = "Created table '${newTable.tableName}'!"
             }
@@ -1507,35 +1525,83 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // SCANNER WORKSPACE
+                        // EXPANDED SCANNER WORKSPACE: CROPPED IMAGE WITH PINCH-TO-ZOOM + SPACIOUS TOKENS UI
                         if (showScanWorkspaceInTable) {
+                            val activeDisplayBitmap = previewCroppedBitmap ?: selectedBitmap
+
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(200.dp)
+                                    .height(310.dp)
                                     .padding(4.dp),
                                 shape = RoundedCornerShape(8.dp),
                                 elevation = 3.dp
                             ) {
                                 Row(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                                    // LEFT: PINCH-TO-ZOOM & PAN CROPPED IMAGE VIEWER
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
                                             .fillMaxHeight()
-                                            .background(Color(0xFF263238), RoundedCornerShape(6.dp)),
+                                            .clipToBounds()
+                                            .background(Color(0xFF263238), RoundedCornerShape(6.dp))
+                                            .pointerInput(activeDisplayBitmap) {
+                                                detectTransformGestures { _, pan, zoom, _ ->
+                                                    zoomScale = (zoomScale * zoom).coerceIn(1f, 5f)
+                                                    val maxPan = 500f * (zoomScale - 1f)
+                                                    panOffsetX = (panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
+                                                    panOffsetY = (panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
+                                                }
+                                            },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        if (selectedBitmap != null) {
+                                        if (activeDisplayBitmap != null) {
                                             Image(
-                                                bitmap = selectedBitmap!!.asImageBitmap(),
-                                                contentDescription = "Snippet",
-                                                modifier = Modifier.fillMaxSize(),
+                                                bitmap = activeDisplayBitmap.asImageBitmap(),
+                                                contentDescription = "Cropped Snippet",
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .graphicsLayer(
+                                                        scaleX = zoomScale,
+                                                        scaleY = zoomScale,
+                                                        translationX = panOffsetX,
+                                                        translationY = panOffsetY
+                                                    ),
                                                 contentScale = ContentScale.Fit
                                             )
+
+                                            // Zoom Indicator & Quick Reset Badge
+                                            if (zoomScale > 1.05f) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .align(Alignment.TopStart)
+                                                        .padding(6.dp)
+                                                        .background(Color(0xCC000000), RoundedCornerShape(4.dp))
+                                                        .clickable {
+                                                            zoomScale = 1f
+                                                            panOffsetX = 0f
+                                                            panOffsetY = 0f
+                                                        }
+                                                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "🔍 ${(zoomScale * 100).toInt()}% (Reset)",
+                                                        color = Color.White,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
                                         } else {
-                                            Text("No image loaded", color = Color.White, fontSize = 11.sp)
+                                            Text(
+                                                "No cropped snippet yet.\nPick or scan to crop.",
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                textAlign = TextAlign.Center
+                                            )
                                         }
 
+                                        // Bottom Action Buttons for Image
                                         Row(
                                             modifier = Modifier
                                                 .align(Alignment.BottomCenter)
@@ -1544,20 +1610,21 @@ fun MobileTableEditorScreen() {
                                         ) {
                                             Button(
                                                 onClick = { imagePickerLauncher.launch("image/*") },
-                                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 1.dp)
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                             ) { Text("📷 Pick", fontSize = 10.sp) }
 
                                             Button(
                                                 onClick = { showCropperDialog = true },
                                                 enabled = selectedBitmap != null,
                                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
-                                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 1.dp)
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                             ) { Text("✂ Crop", fontSize = 10.sp) }
                                         }
                                     }
 
                                     Spacer(modifier = Modifier.width(6.dp))
 
+                                    // RIGHT: SPACIOUS WORDS & TOKENS UI
                                     Column(modifier = Modifier.weight(1.35f).fillMaxHeight()) {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -1567,7 +1634,7 @@ fun MobileTableEditorScreen() {
                                             Text(
                                                 "Tokens (${detectedWords.size})",
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 11.sp,
+                                                fontSize = 12.sp,
                                                 color = Color(0xFF1565C0)
                                             )
                                             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1576,18 +1643,18 @@ fun MobileTableEditorScreen() {
                                                         selectedTokens.clear()
                                                         selectedTokens.addAll(detectedWords)
                                                     },
-                                                    contentPadding = PaddingValues(1.dp)
-                                                ) { Text("All", fontSize = 9.sp) }
+                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
+                                                ) { Text("All", fontSize = 10.sp) }
 
                                                 TextButton(
                                                     onClick = { selectedTokens.clear() },
-                                                    contentPadding = PaddingValues(1.dp)
-                                                ) { Text("Clear", fontSize = 9.sp) }
+                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
+                                                ) { Text("Clear", fontSize = 10.sp) }
 
                                                 TextButton(
                                                     onClick = { showAllWordsDialog = true },
-                                                    contentPadding = PaddingValues(1.dp)
-                                                ) { Text("⛶ All Modal", fontSize = 9.sp, color = Color(0xFF0D47A1)) }
+                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
+                                                ) { Text("⛶ Modal", fontSize = 10.sp, color = Color(0xFF0D47A1), fontWeight = FontWeight.Bold) }
                                             }
                                         }
 
@@ -1595,7 +1662,7 @@ fun MobileTableEditorScreen() {
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .padding(vertical = 2.dp),
+                                                .padding(vertical = 3.dp),
                                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
                                             Button(
@@ -1609,9 +1676,9 @@ fun MobileTableEditorScreen() {
                                                 },
                                                 enabled = selectedTokens.isNotEmpty(),
                                                 modifier = Modifier.weight(1f),
-                                                contentPadding = PaddingValues(1.dp),
+                                                contentPadding = PaddingValues(2.dp),
                                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
-                                            ) { Text("➔ Cell ($tr,$tc)", fontSize = 9.sp, color = Color.White) }
+                                            ) { Text("➔ Active ($tr,$tc)", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold) }
 
                                             Button(
                                                 onClick = {
@@ -1627,61 +1694,63 @@ fun MobileTableEditorScreen() {
                                                 },
                                                 enabled = selectedTokens.isNotEmpty(),
                                                 modifier = Modifier.weight(1f),
-                                                contentPadding = PaddingValues(1.dp),
+                                                contentPadding = PaddingValues(2.dp),
                                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
-                                            ) { Text("➔ Seq", fontSize = 9.sp, color = Color.White) }
+                                            ) { Text("➔ Sequence", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold) }
                                         }
 
+                                        // Spacious Scrollable Token Cloud
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .weight(1f)
-                                                .background(Color(0xFFF8FAFC), RoundedCornerShape(4.dp))
-                                                .border(0.5.dp, Color(0xFFCFD8DC), RoundedCornerShape(4.dp))
+                                                .background(Color(0xFFF8FAFC), RoundedCornerShape(6.dp))
+                                                .border(1.dp, Color(0xFFCFD8DC), RoundedCornerShape(6.dp))
                                                 .verticalScroll(rememberScrollState())
-                                                .padding(4.dp)
+                                                .padding(6.dp)
                                         ) {
                                             if (detectedWords.isEmpty()) {
                                                 Box(
-                                                    modifier = Modifier.fillMaxSize().padding(top = 16.dp),
+                                                    modifier = Modifier.fillMaxSize().padding(top = 28.dp),
                                                     contentAlignment = Alignment.Center
                                                 ) {
                                                     Text(
-                                                        "No tokens yet. Pick/crop image to extract text.",
-                                                        fontSize = 10.sp,
-                                                        color = Color.Gray
+                                                        "No tokens extracted yet.\nCrop a region above to generate words.",
+                                                        fontSize = 11.sp,
+                                                        color = Color.Gray,
+                                                        textAlign = TextAlign.Center
                                                     )
                                                 }
                                             } else {
                                                 FlowRow(
                                                     modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
                                                     detectedWords.forEach { w ->
                                                         val isSel = selectedTokens.contains(w)
                                                         Box(
                                                             modifier = Modifier
                                                                 .background(
-                                                                    if (isSel) Color(0xFF1976D2) else Color(0xFFE8EEF5),
-                                                                    RoundedCornerShape(4.dp)
+                                                                    if (isSel) Color(0xFF1976D2) else Color(0xFFFFFFFF),
+                                                                    RoundedCornerShape(6.dp)
                                                                 )
                                                                 .border(
-                                                                    0.5.dp,
-                                                                    if (isSel) Color(0xFF0D47A1) else Color(0xFFCFD8DC),
-                                                                    RoundedCornerShape(4.dp)
+                                                                    1.dp,
+                                                                    if (isSel) Color(0xFF0D47A1) else Color(0xFFB0BEC5),
+                                                                    RoundedCornerShape(6.dp)
                                                                 )
                                                                 .clickable {
                                                                     if (isSel) selectedTokens.remove(w)
                                                                     else selectedTokens.add(w)
                                                                 }
-                                                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                                                .padding(horizontal = 8.dp, vertical = 5.dp)
                                                         ) {
                                                             Text(
                                                                 text = w,
-                                                                fontSize = 10.sp,
-                                                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                                                color = if (isSel) Color.White else Color.Black
+                                                                fontSize = 11.sp,
+                                                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                                                color = if (isSel) Color.White else Color(0xFF263238)
                                                             )
                                                         }
                                                     }
@@ -1939,8 +2008,8 @@ fun MobileTableEditorScreen() {
                                                 val cellBg = when {
                                                     isSelected && isMultiSelectMode -> Color(0xFFE1BEE7)
                                                     isSelected -> Color(0xFFBBDEFB)
-                                                    colDef.type == ColumnType.DATE && isPresent -> Color(0xFFE8F5E9)
-                                                    colDef.type == ColumnType.DATE && isAbsent -> Color(0xFFFFEBEE)
+                                                    isDateCol && isPresent -> Color(0xFFE8F5E9)
+                                                    isDateCol && isAbsent -> Color(0xFFFFEBEE)
                                                     else -> Color.White
                                                 }
                                                 val cellBorder = when {

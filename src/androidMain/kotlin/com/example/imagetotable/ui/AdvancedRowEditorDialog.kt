@@ -622,42 +622,6 @@ fun AdvancedRowEditorDialog(
                                             }
                                         }
 
-                                        ColumnType.BOOLEAN -> {
-                                            val isTrue = cellValue.equals("true", ignoreCase = true) || cellValue.equals("yes", ignoreCase = true) || cellValue.equals("1", ignoreCase = true)
-                                            val isFalse = cellValue.equals("false", ignoreCase = true) || cellValue.equals("no", ignoreCase = true) || cellValue.equals("0", ignoreCase = true)
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Button(
-                                                    onClick = {
-                                                        while (valuesState.size <= cIdx) valuesState.add("")
-                                                        valuesState[cIdx] = if (isTrue) "" else "true"
-                                                    },
-                                                    modifier = Modifier.weight(1f),
-                                                    colors = ButtonDefaults.buttonColors(
-                                                        backgroundColor = if (isTrue) Color(0xFF2E7D32) else Color(0xFFE8F5E9)
-                                                    )
-                                                ) {
-                                                    Text(if (isTrue) "✓ True (Active)" else "True", color = if (isTrue) Color.White else Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
-                                                }
-
-                                                Button(
-                                                    onClick = {
-                                                        while (valuesState.size <= cIdx) valuesState.add("")
-                                                        valuesState[cIdx] = if (isFalse) "" else "false"
-                                                    },
-                                                    modifier = Modifier.weight(1f),
-                                                    colors = ButtonDefaults.buttonColors(
-                                                        backgroundColor = if (isFalse) Color(0xFFC62828) else Color(0xFFFFEBEE)
-                                                    )
-                                                ) {
-                                                    Text(if (isFalse) "✕ False (Active)" else "False", color = if (isFalse) Color.White else Color(0xFFC62828), fontWeight = FontWeight.Bold)
-                                                }
-                                            }
-                                        }
-
                                         ColumnType.NUMBER -> {
                                             Row(
                                                 modifier = Modifier.fillMaxWidth(),
@@ -719,16 +683,47 @@ fun AdvancedRowEditorDialog(
                                         }
 
                                         ColumnType.TEXT -> {
-                                            OutlinedTextField(
-                                                value = cellValue,
-                                                onValueChange = { newVal ->
-                                                    while (valuesState.size <= cIdx) valuesState.add("")
-                                                    valuesState[cIdx] = newVal
-                                                },
-                                                label = { Text("Text Value for ${colDef.name}") },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                textStyle = TextStyle(fontSize = 13.sp)
-                                            )
+                                            val isTrue = cellValue.equals("true", ignoreCase = true) || cellValue.equals("yes", ignoreCase = true)
+                                            val isFalse = cellValue.equals("false", ignoreCase = true) || cellValue.equals("no", ignoreCase = true)
+                                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                OutlinedTextField(
+                                                    value = cellValue,
+                                                    onValueChange = { newVal ->
+                                                        while (valuesState.size <= cIdx) valuesState.add("")
+                                                        valuesState[cIdx] = newVal
+                                                    },
+                                                    label = { Text("Text Value for ${colDef.name}") },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    textStyle = TextStyle(fontSize = 13.sp)
+                                                )
+
+                                                // Seamless Boolean helper chips without requiring a separate enum type
+                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .background(if (isTrue) Color(0xFF2E7D32) else Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
+                                                            .clickable {
+                                                                while (valuesState.size <= cIdx) valuesState.add("")
+                                                                valuesState[cIdx] = if (isTrue) "" else "true"
+                                                            }
+                                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    ) {
+                                                        Text("True", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isTrue) Color.White else Color(0xFF2E7D32))
+                                                    }
+
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .background(if (isFalse) Color(0xFFC62828) else Color(0xFFFFEBEE), RoundedCornerShape(3.dp))
+                                                            .clickable {
+                                                                while (valuesState.size <= cIdx) valuesState.add("")
+                                                                valuesState[cIdx] = if (isFalse) "" else "false"
+                                                            }
+                                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    ) {
+                                                        Text("False", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isFalse) Color.White else Color(0xFFC62828))
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }

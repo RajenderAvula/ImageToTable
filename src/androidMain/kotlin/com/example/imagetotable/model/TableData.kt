@@ -1,10 +1,14 @@
 package com.example.imagetotable.model
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,7 +58,7 @@ data class TableSnapshot(
 )
 
 class TableData(
-    val id: String = UUID.randomUUID().toString(),
+    initialId: String = UUID.randomUUID().toString(),
     initialName: String = "New Table",
     initialDateTime: String = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date()),
     initialCorner: String = "Item #",
@@ -62,6 +66,7 @@ class TableData(
     initialRows: List<List<String>> = emptyList(),
     initialRowNames: List<String> = emptyList()
 ) {
+    val id: String = initialId
     var tableName: String by mutableStateOf(initialName)
     var tableDateTime: String by mutableStateOf(initialDateTime)
     var cornerHeader: String by mutableStateOf(initialCorner)
@@ -199,7 +204,6 @@ class TableData(
         if (clipboard.items.isEmpty()) return emptyList()
         val pasted = mutableListOf<Pair<Int, Int>>()
 
-        // CASE 1: 1 Copied Cell -> Replicate across all selected target cells
         if (clipboard.items.size == 1 && selectedCells.size > 1) {
             val singleValue = clipboard.items.first().value
             for ((r, c) in selectedCells) {
@@ -210,7 +214,6 @@ class TableData(
                 }
             }
         } else {
-            // CASE 2: Multi-cell block paste or single cell placement
             val (baseR, baseC) = if (selectedCells.isNotEmpty()) {
                 val minR = selectedCells.minOf { it.first }.coerceAtLeast(0)
                 val minC = selectedCells.minOf { it.second }.coerceAtLeast(0)
@@ -244,7 +247,6 @@ class TableData(
         val validCells = cells.filter { (r, c) -> r in rows.indices && c in headers.indices }
         if (validCells.isEmpty()) return cells.toList()
 
-        // Guard against shifting out-of-bounds at the top/left boundary
         if (direction == ShiftDirection.LEFT && validCells.any { it.second == 0 }) return cells.toList()
         if (direction == ShiftDirection.UP && validCells.any { it.first == 0 }) return cells.toList()
 
@@ -443,6 +445,33 @@ class TableData(
 
 object TableRepository {
     val tables: SnapshotStateList<TableData> = mutableStateListOf()
+    private var appContext: Context? = null
+
+    fun init(context: Context) {
+        if (appContext != null) return
+        appContext = context.applicationContext
+        loadFromDisk()
+        if (tables.isEmpty()) {
+            val defaultTable = TableData(
+                initialName = "Invoice & Attendance",
+                initialHeaders = listOf(
+                    ColumnDef("Employee / SKU", ColumnType.TEXT),
+                    ColumnDef("Department", ColumnType.TEXT),
+                    ColumnDef("2026-09-25", ColumnType.DATE),
+                    ColumnDef("2026-09-26", ColumnType.DATE)
+                ),
+                initialRows = listOf(
+                    listOf("John Doe", "Engineering", "Present", "Present"),
+                    listOf("Jane Smith", "Design", "Present", "Absent"),
+                    listOf("Robert Lee", "Marketing", "Absent", "Present"),
+                    listOf("Alice Wong", "Engineering", "Present", "Present")
+                ),
+                initialCorner = "ID / #"
+            )
+            tables.add(defaultTable)
+            persistToDisk()
+        }
+    }
 
     fun saveOrUpdate(table: TableData) {
         val existingIndex = tables.indexOfFirst { it.id == table.id }
@@ -451,9 +480,119 @@ object TableRepository {
         } else {
             tables.add(table)
         }
+        persistToDisk()
     }
 
     fun deleteTable(id: String) {
         tables.removeAll { it.id == id }
+        persistToDisk()
+    }
+
+    private fun persistToDisk() {
+        val context = appContext ?: return
+        try {
+            val jsonArray = JSONArray()
+            for (t in tables) {
+                val obj = JSONObject().apply {
+                    put("id", t.id)
+                    put("tableName", t.tableName)
+                    put("tableDateTime", t.tableDateTime)
+                    put("cornerHeader", t.cornerHeader)
+
+                    val hArr = JSONArray()
+                    for (h in t.headers) {
+                        val hObj = JSONObject().apply {
+                            put("name", h.name)
+                            put("type", h.type.name)
+                        }
+                        hArr.put(hObj)
+                    }
+                    put("headers", hArr)
+
+                    val rnArr = JSONArray()
+                    for (rn in t.rowNames) {
+                        rnArr.put(rn)
+                    }
+                    put("rowNames", rnArr)
+
+                    val rArr = JSONArray()
+                    for (row in t.rows) {
+                        val rowDataArr = JSONArray()
+                        for (cell in row) {
+                            rowDataArr.put(cell)
+                        }
+                        rArr.put(rowDataArr)
+                    }
+                    put("rows", rArr)
+                }
+                jsonArray.put(obj)
+            }
+            val file = File(context.filesDir, "saved_tables.json")
+            file.writeText(jsonArray.toString())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun loadFromDisk() {
+        val context = appContext ?: return
+        try {
+            val file = File(context.filesDir, "saved_tables.json")
+            if (!file.exists()) return
+            val content = file.readText()
+            if (content.isBlank()) return
+
+            val jsonArray = JSONArray(content)
+            tables.clear()
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                val id = obj.optString("id", UUID.randomUUID().toString())
+                val name = obj.optString("tableName", "New Table")
+                val dateTime = obj.optString("tableDateTime", "")
+                val corner = obj.optString("cornerHeader", "Item #")
+
+                val hArr = obj.getJSONArray("headers")
+                val headersList = mutableListOf<ColumnDef>()
+                for (hIdx in 0 until hArr.length()) {
+                    val hObj = hArr.getJSONObject(hIdx)
+                    val hName = hObj.getString("name")
+                    val hTypeStr = hObj.optString("type", "TEXT")
+                    val hType = try { ColumnType.valueOf(hTypeStr) } catch (_: Exception) { ColumnType.TEXT }
+                    headersList.add(ColumnDef(hName, hType))
+                }
+
+                val rnArr = obj.optJSONArray("rowNames")
+                val rowNamesList = mutableListOf<String>()
+                if (rnArr != null) {
+                    for (rnIdx in 0 until rnArr.length()) {
+                        rowNamesList.add(rnArr.getString(rnIdx))
+                    }
+                }
+
+                val rArr = obj.getJSONArray("rows")
+                val rowsList = mutableListOf<List<String>>()
+                for (rIdx in 0 until rArr.length()) {
+                    val rowDataArr = rArr.getJSONArray(rIdx)
+                    val rowCells = mutableListOf<String>()
+                    for (cIdx in 0 until rowDataArr.length()) {
+                        rowCells.add(rowDataArr.getString(cIdx))
+                    }
+                    rowsList.add(rowCells)
+                }
+
+                val table = TableData(
+                    initialId = id,
+                    initialName = name,
+                    initialDateTime = dateTime,
+                    initialCorner = corner,
+                    initialHeaders = headersList,
+                    initialRows = rowsList,
+                    initialRowNames = rowNamesList
+                )
+                tables.add(table)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }

@@ -441,7 +441,7 @@ class TableData(
     }
 }
 
-object TableRepository {
+/*object TableRepository {
     val tables: SnapshotStateList<TableData> = mutableStateListOf()
 
     fun saveOrUpdate(table: TableData) {
@@ -456,4 +456,4 @@ object TableRepository {
     fun deleteTable(id: String) {
         tables.removeAll { it.id == id }
     }
-}
+}*/

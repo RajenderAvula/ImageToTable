@@ -1,15 +1,22 @@
 package com.example.imagetotable.ui
 
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -17,6 +24,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.imagetotable.model.ColumnDef
 import com.example.imagetotable.model.ColumnType
+import java.text.SimpleDateFormat
+import java.util.*
 
 @Composable
 fun AdvancedRowEditorDialog(
@@ -38,32 +47,99 @@ fun AdvancedRowEditorDialog(
     onNavigateRow: (targetIndex: Int) -> Unit,
     onAddNewColumn: (name: String, type: ColumnType) -> Unit,
     onDeleteColumn: (colIndex: Int) -> Unit,
+    onMoveColumn: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> },
     onAddNewRowBelow: () -> Unit,
     onAddNewRowAbove: () -> Unit,
     onMoveRowUp: () -> Unit,
     onMoveRowDown: () -> Unit,
     onDeleteRow: () -> Unit
 ) {
-    var tableName by remember(initialTableName) { mutableStateOf(initialTableName) }
-    var tableDateTime by remember(initialTableDateTime) { mutableStateOf(initialTableDateTime) }
-    var currentRowTitle by remember(rowName, currentRowIndex) { mutableStateOf(rowName) }
+    val context = LocalContext.current
 
-    val editableHeaders = remember(headers) {
-        mutableStateListOf(*headers.map { it.copy() }.toTypedArray())
+    var tableNameState by remember(initialTableName) { mutableStateOf(initialTableName) }
+    var tableDateTimeState by remember(initialTableDateTime) { mutableStateOf(initialTableDateTime) }
+    var rowNameState by remember(rowName, currentRowIndex) { mutableStateOf(rowName) }
+
+    val headersState = remember(headers) {
+        mutableStateListOf<ColumnDef>().apply {
+            addAll(headers.map { it.copy() })
+        }
     }
 
-    val cellValues = remember(rowValues, currentRowIndex, headers.size) {
-        mutableStateListOf(*Array(headers.size) { idx -> rowValues.getOrElse(idx) { "" } })
+    val valuesState = remember(rowValues, currentRowIndex, headers.size) {
+        mutableStateListOf<String>().apply {
+            addAll(rowValues)
+            while (size < headers.size) add("")
+        }
     }
+
+    var showAddColumnDialog by remember { mutableStateOf(false) }
+    var newColName by remember { mutableStateOf("") }
+    var newColType by remember { mutableStateOf(ColumnType.TEXT) }
 
     fun commitCurrentChanges() {
         onSaveRowAndTable(
-            tableName,
-            tableDateTime,
-            currentRowTitle,
-            editableHeaders.toList(),
-            cellValues.toList()
+            tableNameState,
+            tableDateTimeState,
+            rowNameState,
+            headersState.toList(),
+            valuesState.toList()
         )
+    }
+
+    fun openCalendarPicker() {
+        val cal = Calendar.getInstance()
+        try {
+            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+            val parsed = sdf.parse(tableDateTimeState)
+            if (parsed != null) cal.time = parsed
+        } catch (_: Exception) {
+            try {
+                val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                val parsed = sdfDate.parse(tableDateTimeState)
+                if (parsed != null) cal.time = parsed
+            } catch (_: Exception) {}
+        }
+
+        DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                cal.set(Calendar.YEAR, year)
+                cal.set(Calendar.MONTH, month)
+                cal.set(Calendar.DAY_OF_MONTH, dayOfMonth)
+
+                TimePickerDialog(
+                    context,
+                    { _, hourOfDay, minute ->
+                        cal.set(Calendar.HOUR_OF_DAY, hourOfDay)
+                        cal.set(Calendar.MINUTE, minute)
+                        val outFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                        tableDateTimeState = outFormat.format(cal.time)
+                    },
+                    cal.get(Calendar.HOUR_OF_DAY),
+                    cal.get(Calendar.MINUTE),
+                    true
+                ).show()
+            },
+            cal.get(Calendar.YEAR),
+            cal.get(Calendar.MONTH),
+            cal.get(Calendar.DAY_OF_MONTH)
+        ).show()
+    }
+
+    fun moveColumnLocally(from: Int, to: Int) {
+        if (from !in headersState.indices || to !in headersState.indices) return
+        val col = headersState.removeAt(from)
+        headersState.add(to, col)
+
+        val cellVal = if (from in valuesState.indices) valuesState.removeAt(from) else ""
+        if (to <= valuesState.size) {
+            valuesState.add(to, cellVal)
+        } else {
+            while (valuesState.size < to) valuesState.add("")
+            valuesState.add(cellVal)
+        }
+        onMoveColumn(from, to)
     }
 
     Dialog(
@@ -72,231 +148,550 @@ fun AdvancedRowEditorDialog(
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth(0.96f)
-                .fillMaxHeight(0.94f),
-            shape = RoundedCornerShape(12.dp),
-            elevation = 8.dp
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.93f),
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xFFF8FAFC)
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                // Header with Row Counter and Prev / Next Navigation
+            Column(modifier = Modifier.fillMaxSize()) {
+                // DIALOG HEADER BAR
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1976D2))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
                         Text(
-                            text = "Row Editor: #${currentRowIndex + 1} of $totalRows",
+                            text = "Row Editor",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF1565C0)
+                            color = Color.White
                         )
                         Text(
-                            text = "Navigate across rows without closing",
-                            fontSize = 11.sp,
-                            color = Color.Gray
+                            text = "Row #${currentRowIndex + 1} of $totalRows",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.85f)
                         )
                     }
 
-                    // Navigation buttons
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
                             onClick = {
                                 commitCurrentChanges()
                                 onNavigateRow(currentRowIndex - 1)
                             },
                             enabled = currentRowIndex > 0,
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0288D1)),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            colors = ButtonDefaults.outlinedButtonColors(backgroundColor = Color(0x2EFFFFFF)),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
                         ) {
-                            Text("◀ Prev", color = Color.White, fontSize = 11.sp)
+                            Text("◀ Prev", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                         }
 
-                        Button(
+                        OutlinedButton(
                             onClick = {
                                 commitCurrentChanges()
                                 onNavigateRow(currentRowIndex + 1)
                             },
                             enabled = currentRowIndex < totalRows - 1,
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0288D1)),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            colors = ButtonDefaults.outlinedButtonColors(backgroundColor = Color(0x2EFFFFFF)),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
                         ) {
-                            Text("Next ▶", color = Color.White, fontSize = 11.sp)
+                            Text("Next ▶", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Text("✕", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Scrollable Form Body
+                // SCROLLABLE BODY
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // Row Label & Table Info
+                    // SECTION 1: TABLE METADATA & CALENDAR DATE/TIME PICKER
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        backgroundColor = Color(0xFFF8FAFC),
-                        shape = RoundedCornerShape(8.dp),
-                        elevation = 1.dp
+                        shape = RoundedCornerShape(10.dp),
+                        elevation = 2.dp,
+                        backgroundColor = Color.White
                     ) {
-                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = currentRowTitle,
-                                onValueChange = { currentRowTitle = it },
-                                label = { Text("Row Name / Label") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Table Metadata & Bound Timestamp",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFF0D47A1)
                             )
 
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = tableName,
-                                    onValueChange = { tableName = it },
-                                    label = { Text("Table Name") },
-                                    modifier = Modifier.weight(1.2f),
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = tableDateTime,
-                                    onValueChange = { tableDateTime = it },
-                                    label = { Text("Date & Time") },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true
-                                )
-                            }
-                        }
-                    }
+                            OutlinedTextField(
+                                value = tableNameState,
+                                onValueChange = { tableNameState = it },
+                                label = { Text("Table Name") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                textStyle = TextStyle(fontSize = 13.sp)
+                            )
 
-                    // Structural Controls for this Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Button(
-                            onClick = onAddNewRowAbove,
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(4.dp)
-                        ) { Text("+ Row Above", fontSize = 10.sp, color = Color.White) }
-
-                        Button(
-                            onClick = onAddNewRowBelow,
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(4.dp)
-                        ) { Text("+ Row Below", fontSize = 10.sp, color = Color.White) }
-
-                        Button(
-                            onClick = onMoveRowUp,
-                            enabled = currentRowIndex > 0,
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
-                        ) { Text("▲", color = Color.White) }
-
-                        Button(
-                            onClick = onMoveRowDown,
-                            enabled = currentRowIndex < totalRows - 1,
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
-                        ) { Text("▼", color = Color.White) }
-                    }
-
-                    Divider(modifier = Modifier.padding(vertical = 4.dp))
-                    Text("Column Cell Values", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-
-                    // Cell Inputs for Every Column
-                    editableHeaders.forEachIndexed { colIdx, colDef ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            elevation = 1.dp,
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(8.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                            // Interactive Calendar Date-Time Box
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .border(1.dp, Color(0xFF90CAF9), RoundedCornerShape(6.dp))
+                                        .background(Color(0xFFF1F8FE), RoundedCornerShape(6.dp))
+                                        .clickable { openCalendarPicker() }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
                                 ) {
-                                    Text(
-                                        text = "${colDef.name} [${colDef.type.label}]",
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 12.sp,
-                                        color = Color(0xFF0D47A1)
-                                    )
-                                    if (editableHeaders.size > 1) {
-                                        TextButton(
-                                            onClick = { onDeleteColumn(colIdx) },
-                                            contentPadding = PaddingValues(2.dp)
-                                        ) {
-                                            Text("Delete Col", color = Color.Red, fontSize = 10.sp)
+                                    Column {
+                                        Text(
+                                            text = "Date & Time (Tap Calendar)",
+                                            fontSize = 10.sp,
+                                            color = Color.Gray
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("📅 ", fontSize = 14.sp)
+                                            Text(
+                                                text = tableDateTimeState.ifBlank { "Tap to set date & time" },
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF1565C0)
+                                            )
                                         }
                                     }
                                 }
 
-                                OutlinedTextField(
-                                    value = cellValues.getOrElse(colIdx) { "" },
-                                    onValueChange = { newVal ->
-                                        while (cellValues.size <= colIdx) cellValues.add("")
-                                        cellValues[colIdx] = newVal
+                                Button(
+                                    onClick = {
+                                        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                                        tableDateTimeState = sdf.format(Date())
                                     },
-                                    label = { Text("Value for ${colDef.name}") },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0288D1)),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                                    modifier = Modifier.height(52.dp)
+                                ) {
+                                    Text("🕒 Now", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    // SECTION 2: ROW IDENTIFIER
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        elevation = 2.dp,
+                        backgroundColor = Color.White
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Row Label / Identification",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFF0D47A1)
+                            )
+
+                            OutlinedTextField(
+                                value = rowNameState,
+                                onValueChange = { rowNameState = it },
+                                label = { Text("Row Title / Code") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                textStyle = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            )
+                        }
+                    }
+
+                    // SECTION 3: COLUMN LIST (NAMES, TYPES, MOVE UP/DOWN, VALUE INPUT)
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Columns & Values (${headersState.size})",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF263238)
+                            )
+
+                            Button(
+                                onClick = { showAddColumnDialog = true },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("+ Add Column", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        headersState.forEachIndexed { cIdx, colDef ->
+                            val cellValue = valuesState.getOrElse(cIdx) { "" }
+
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                elevation = 1.dp,
+                                backgroundColor = Color.White,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    // Row A: Column Name, Move Arrows, and Delete
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .background(Color(0xFFE3F2FD), RoundedCornerShape(4.dp))
+                                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Col ${cIdx + 1}",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF1565C0)
+                                            )
+                                        }
+
+                                        OutlinedTextField(
+                                            value = colDef.name,
+                                            onValueChange = { newName ->
+                                                headersState[cIdx] = colDef.copy(name = newName)
+                                            },
+                                            label = { Text("Column Name", fontSize = 10.sp) },
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true,
+                                            textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        )
+
+                                        // Move Column Up Button
+                                        Button(
+                                            onClick = { moveColumnLocally(cIdx, cIdx - 1) },
+                                            enabled = cIdx > 0,
+                                            modifier = Modifier.size(width = 34.dp, height = 36.dp),
+                                            contentPadding = PaddingValues(0.dp),
+                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFECEFF1))
+                                        ) {
+                                            Text("▲", fontSize = 12.sp, color = if (cIdx > 0) Color.Black else Color.Gray)
+                                        }
+
+                                        // Move Column Down Button
+                                        Button(
+                                            onClick = { moveColumnLocally(cIdx, cIdx + 1) },
+                                            enabled = cIdx < headersState.size - 1,
+                                            modifier = Modifier.size(width = 34.dp, height = 36.dp),
+                                            contentPadding = PaddingValues(0.dp),
+                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFECEFF1))
+                                        ) {
+                                            Text("▼", fontSize = 12.sp, color = if (cIdx < headersState.size - 1) Color.Black else Color.Gray)
+                                        }
+
+                                        // Delete Column Button
+                                        IconButton(
+                                            onClick = {
+                                                if (headersState.size > 1) {
+                                                    headersState.removeAt(cIdx)
+                                                    if (cIdx in valuesState.indices) valuesState.removeAt(cIdx)
+                                                    onDeleteColumn(cIdx)
+                                                }
+                                            },
+                                            enabled = headersState.size > 1,
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Text(
+                                                text = "✕",
+                                                color = if (headersState.size > 1) Color.Red else Color.LightGray,
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    // Row B: Column Data Type Dropdown Selector
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        var typeMenuExpanded by remember { mutableStateOf(false) }
+
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("Data Type: ", fontSize = 11.sp, color = Color.Gray)
+                                            Box {
+                                                Text(
+                                                    text = "${colDef.type.label} ▼",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF0D47A1),
+                                                    modifier = Modifier
+                                                        .background(Color(0xFFE1F5FE), RoundedCornerShape(4.dp))
+                                                        .clickable { typeMenuExpanded = true }
+                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                )
+
+                                                DropdownMenu(
+                                                    expanded = typeMenuExpanded,
+                                                    onDismissRequest = { typeMenuExpanded = false }
+                                                ) {
+                                                    ColumnType.values().forEach { cType ->
+                                                        DropdownMenuItem(onClick = {
+                                                            headersState[cIdx] = colDef.copy(type = cType)
+                                                            typeMenuExpanded = false
+                                                        }) {
+                                                            Text(cType.label, fontSize = 12.sp)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Text(
+                                            text = "Position: Column ${cIdx + 1}",
+                                            fontSize = 11.sp,
+                                            color = Color.Gray
+                                        )
+                                    }
+
+                                    // Row C: Cell Value Input
+                                    OutlinedTextField(
+                                        value = cellValue,
+                                        onValueChange = { newVal ->
+                                            while (valuesState.size <= cIdx) valuesState.add("")
+                                            valuesState[cIdx] = newVal
+                                        },
+                                        label = { Text("Value for ${colDef.name}") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        textStyle = TextStyle(fontSize = 13.sp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // SECTION 4: ROW ACTIONS & STRUCTURAL REORDERING
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        elevation = 1.dp,
+                        backgroundColor = Color.White
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("Row Positioning & Actions", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF455A64))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = onAddNewRowAbove,
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    Text("+ Row Above", color = Color.White, fontSize = 11.sp)
+                                }
+
+                                Button(
+                                    onClick = onAddNewRowBelow,
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    Text("+ Row Below", color = Color.White, fontSize = 11.sp)
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = onMoveRowUp,
+                                    enabled = currentRowIndex > 0,
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    Text("▲ Shift Up", color = Color.White, fontSize = 11.sp)
+                                }
+
+                                Button(
+                                    onClick = onMoveRowDown,
+                                    enabled = currentRowIndex < totalRows - 1,
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    Text("▼ Shift Down", color = Color.White, fontSize = 11.sp)
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = onDeleteRow,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.outlinedButtonColors(backgroundColor = Color(0xFFFFEBEE)),
+                                contentPadding = PaddingValues(vertical = 4.dp)
+                            ) {
+                                Text("🗑 Delete This Row", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-                Divider()
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Bottom Action Bar: Delete, Cancel, Save & Next, Save & Close
+                // STICKY BOTTOM ACTION FOOTER
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.White)
+                        .border(0.5.dp, Color(0xFFE0E0E0))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Button(
-                        onClick = onDeleteRow,
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).height(44.dp)
                     ) {
-                        Text("Delete Row", color = Color.White, fontSize = 11.sp)
+                        Text("Cancel", fontSize = 13.sp)
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedButton(onClick = onDismiss) {
-                            Text("Cancel")
-                        }
-
-                        if (currentRowIndex < totalRows - 1) {
-                            Button(
-                                onClick = {
-                                    commitCurrentChanges()
-                                    onNavigateRow(currentRowIndex + 1)
-                                },
-                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
-                            ) {
-                                Text("Save & Next ▶", color = Color.White, fontSize = 11.sp)
-                            }
-                        }
-
+                    if (currentRowIndex < totalRows - 1) {
                         Button(
                             onClick = {
                                 commitCurrentChanges()
-                                onDismiss()
+                                onNavigateRow(currentRowIndex + 1)
                             },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                            modifier = Modifier.weight(1.2f).height(44.dp),
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
                         ) {
-                            Text("Save & Close", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            Text("Save & Next ▶", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
+                    }
+
+                    Button(
+                        onClick = {
+                            commitCurrentChanges()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1.2f).height(44.dp),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                    ) {
+                        Text("Save & Close", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
+    }
+
+    // ADD NEW COLUMN MODAL
+    if (showAddColumnDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddColumnDialog = false },
+            title = { Text("Add New Column", fontWeight = FontWeight.Bold, fontSize = 15.sp) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newColName,
+                        onValueChange = { newColName = it },
+                        label = { Text("Column Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    var typeDropdownExpanded by remember { mutableStateOf(false) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Data Type:", fontSize = 12.sp)
+                        Box {
+                            Text(
+                                text = "${newColType.label} ▼",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0D47A1),
+                                modifier = Modifier
+                                    .background(Color(0xFFE1F5FE), RoundedCornerShape(4.dp))
+                                    .clickable { typeDropdownExpanded = true }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                            DropdownMenu(
+                                expanded = typeDropdownExpanded,
+                                onDismissRequest = { typeDropdownExpanded = false }
+                            ) {
+                                ColumnType.values().forEach { ct ->
+                                    DropdownMenuItem(onClick = {
+                                        newColType = ct
+                                        typeDropdownExpanded = false
+                                    }) {
+                                        Text(ct.label, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = newColName.ifBlank { "Col ${headersState.size + 1}" }
+                        headersState.add(ColumnDef(name, newColType))
+                        valuesState.add("")
+                        onAddNewColumn(name, newColType)
+                        newColName = ""
+                        showAddColumnDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                ) {
+                    Text("Add", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddColumnDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

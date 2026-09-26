@@ -28,7 +28,6 @@ object TableRepository {
         if (loaded.isNotEmpty()) {
             tables.addAll(loaded)
         } else {
-            // Seed initial sample table if storage is empty
             val defaultTable = TableData(
                 initialName = "Invoice & Attendance",
                 initialHeaders = listOf(
@@ -50,9 +49,6 @@ object TableRepository {
         }
     }
 
-    /**
-     * Saves or updates a table in the repository and persists to disk.
-     */
     fun saveOrUpdate(table: TableData) {
         val idx = tables.indexOfFirst { it.id == table.id }
         if (idx >= 0) {
@@ -63,9 +59,6 @@ object TableRepository {
         persistToDisk()
     }
 
-    /**
-     * Deletes a table by ID and updates disk storage.
-     */
     fun deleteTable(id: String) {
         tables.removeAll { it.id == id }
         persistToDisk()
@@ -88,7 +81,6 @@ object TableRepository {
                         put("tableDateTime", t.tableDateTime)
                         put("cornerHeader", t.cornerHeader)
 
-                        // Headers
                         val hArr = JSONArray()
                         for (h in t.headers) {
                             val hObj = JSONObject().apply {
@@ -99,14 +91,12 @@ object TableRepository {
                         }
                         put("headers", hArr)
 
-                        // Row Names
                         val rnArr = JSONArray()
                         for (rn in t.rowNames) {
                             rnArr.put(rn)
                         }
                         put("rowNames", rnArr)
 
-                        // Rows
                         val rArr = JSONArray()
                         for (row in t.rows) {
                             val rowDataArr = JSONArray()
@@ -139,18 +129,19 @@ object TableRepository {
 
             val jsonArray = JSONArray(content)
             val list = mutableListOf<TableData>()
+            val totalTables: Int = jsonArray.length()
 
-            for (i in 0 until jsonArray.length()) {
+            for (i in 0 until totalTables) {
                 val obj = jsonArray.getJSONObject(i)
                 val id = obj.optString("id", "")
                 val name = obj.optString("tableName", "Untitled Table")
                 val dateTime = obj.optString("tableDateTime", "")
                 val corner = obj.optString("cornerHeader", "ID / #")
 
-                // Headers
                 val hArr = obj.getJSONArray("headers")
                 val headersList = mutableListOf<ColumnDef>()
-                for (hIdx in 0 until hArr.length()) {
+                val totalHeaders: Int = hArr.length()
+                for (hIdx in 0 until totalHeaders) {
                     val hObj = hArr.getJSONObject(hIdx)
                     val hName = hObj.getString("name")
                     val hTypeStr = hObj.optString("type", "TEXT")
@@ -162,22 +153,23 @@ object TableRepository {
                     headersList.add(ColumnDef(hName, hType))
                 }
 
-                // Row Names
                 val rnArr = obj.optJSONArray("rowNames")
                 val rowNamesList = mutableListOf<String>()
                 if (rnArr != null) {
-                    for (rnIdx in 0 until rnArr.length()) {
+                    val totalRowNames: Int = rnArr.length()
+                    for (rnIdx in 0 until totalRowNames) {
                         rowNamesList.add(rnArr.getString(rnIdx))
                     }
                 }
 
-                // Rows
                 val rArr = obj.getJSONArray("rows")
                 val rowsList = mutableListOf<List<String>>()
-                for (rIdx in 0 until rArr.length()) {
+                val totalRows: Int = rArr.length()
+                for (rIdx in 0 until totalRows) {
                     val rowDataArr = rArr.getJSONArray(rIdx)
                     val rowCells = mutableListOf<String>()
-                    for (cIdx in 0 until rowDataArr.length()) {
+                    val totalCells: Int = rowDataArr.length()
+                    for (cIdx in 0 until totalCells) {
                         rowCells.add(rowDataArr.getString(cIdx))
                     }
                     rowsList.add(rowCells)

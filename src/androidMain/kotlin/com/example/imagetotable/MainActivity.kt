@@ -1,5 +1,4 @@
 package com.example.imagetotable
-import com.example.imagetotable.model.TokenPlacementMode
 
 import android.content.Context
 import android.content.Intent
@@ -38,8 +37,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -76,6 +77,7 @@ class MainActivity : ComponentActivity() {
 fun MobileTableEditorScreen() {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+    val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
     val initialTable = remember {
@@ -905,6 +907,7 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
+                    // MULTI-SELECT & CLIPBOARD CONTROL BAR
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                         backgroundColor = if (isMultiSelectMode) Color(0xFFF3E5F5) else Color(0xFFF1F5F9),
@@ -918,12 +921,78 @@ fun MobileTableEditorScreen() {
                         ) {
                             Text("🔍", fontSize = 14.sp)
                             BasicTextField(value = globalSearchQuery, onValueChange = { globalSearchQuery = it }, modifier = Modifier.width(130.dp).padding(vertical = 4.dp), textStyle = TextStyle(fontSize = 12.sp, color = Color.Black))
-                            Button(onClick = { isMultiSelectMode = !isMultiSelectMode }, colors = ButtonDefaults.buttonColors(backgroundColor = if (isMultiSelectMode) Color(0xFF7B1FA2) else Color(0xFF546E7A)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text(if (isMultiSelectMode) "✓ Multi (${selectedCells.size})" else "☐ Multi-Select", color = Color.White, fontSize = 11.sp) }
-                            Button(onClick = { cellClipboard = currentTable.copyCells(selectedCells, isCut = false); statusMessage = "Copied ${selectedCells.size} cell(s)!" }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1E88E5)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("📋 Copy", color = Color.White, fontSize = 11.sp) }
-                            Button(onClick = { cellClipboard = currentTable.copyCells(selectedCells, isCut = true); statusMessage = "Cut ${selectedCells.size} cell(s)!" }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("✂ Cut", color = Color.White, fontSize = 11.sp) }
-                            Button(onClick = { cellClipboard?.let { clip -> currentTable.pasteCells(selectedCells, anchorCell, clip); if (clip.isCut) cellClipboard = null } }, enabled = cellClipboard != null, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("📌 Paste", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                            Button(onClick = { currentTable.clearCells(selectedCells) }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("🗑 Clear Selection", color = Color.White, fontSize = 11.sp) }
+
+                            Button(
+                                onClick = { isMultiSelectMode = !isMultiSelectMode },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = if (isMultiSelectMode) Color(0xFF7B1FA2) else Color(0xFF546E7A)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(if (isMultiSelectMode) "✓ Multi (${selectedCells.size})" else "☐ Multi-Select", color = Color.White, fontSize = 11.sp)
+                            }
+
+                            Button(
+                                onClick = {
+                                    if (selectedCells.isNotEmpty()) {
+                                        cellClipboard = currentTable.copyCells(selectedCells, isCut = false)
+                                        val tsv = currentTable.selectionToTsv(selectedCells)
+                                        clipboardManager.setText(AnnotatedString(tsv))
+                                        statusMessage = "Copied ${selectedCells.size} cell(s)!"
+                                    }
+                                },
+                                enabled = selectedCells.isNotEmpty(),
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1E88E5)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) { Text("📋 Copy", color = Color.White, fontSize = 11.sp) }
+
+                            Button(
+                                onClick = {
+                                    if (selectedCells.isNotEmpty()) {
+                                        cellClipboard = currentTable.copyCells(selectedCells, isCut = true)
+                                        val tsv = currentTable.selectionToTsv(selectedCells)
+                                        clipboardManager.setText(AnnotatedString(tsv))
+                                        tableSnapshot = currentTable.createSnapshot()
+                                        statusMessage = "Cut ${selectedCells.size} cell(s)!"
+                                    }
+                                },
+                                enabled = selectedCells.isNotEmpty(),
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) { Text("✂ Cut", color = Color.White, fontSize = 11.sp) }
+
+                            Button(
+                                onClick = {
+                                    cellClipboard?.let { clip ->
+                                        val pasted = currentTable.pasteCells(selectedCells, anchorCell, clip)
+                                        if (pasted.isNotEmpty()) {
+                                            selectedCells.clear()
+                                            selectedCells.addAll(pasted)
+                                        }
+                                        tableSnapshot = currentTable.createSnapshot()
+                                        statusMessage = if (clip.items.size == 1 && selectedCells.size > 1) {
+                                            "Replicated '${clip.items.first().value}' into ${selectedCells.size} cells!"
+                                        } else {
+                                            "Pasted ${pasted.size} cell(s)!"
+                                        }
+                                        if (clip.isCut) cellClipboard = null
+                                    }
+                                },
+                                enabled = cellClipboard != null,
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) { Text("📌 Paste", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+
+                            Button(
+                                onClick = {
+                                    currentTable.clearCells(selectedCells)
+                                    statusMessage = "Cleared ${selectedCells.size} cell(s)!"
+                                },
+                                enabled = selectedCells.isNotEmpty(),
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) { Text("🗑 Clear Selection", color = Color.White, fontSize = 11.sp) }
+
                             OutlinedButton(onClick = { showClearTableConfirm = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("Clear All", color = Color.Red, fontSize = 11.sp) }
+
                             Text("Shift:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             Button(onClick = { val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.LEFT); selectedCells.clear(); selectedCells.addAll(u) }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("◀") }
                             Button(onClick = { val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.RIGHT); selectedCells.clear(); selectedCells.addAll(u) }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("▶") }
@@ -985,8 +1054,57 @@ fun MobileTableEditorScreen() {
                                             val cellCoord = Pair(origRIdx, colIdx)
                                             val cellValue = rowData.getOrElse(colIdx) { "" }
                                             val isSelected = selectedCells.contains(cellCoord)
-                                            Box(modifier = Modifier.width(dataColWidth).border(width = if (isSelected) 2.dp else 0.5.dp, color = if (isSelected) Color(0xFF1976D2) else Color.LightGray).background(if (isSelected) Color(0xFFBBDEFB) else Color.White).padding(8.dp)) {
-                                                BasicTextField(value = cellValue, onValueChange = { currentTable.setCellValue(origRIdx, colIdx, it) }, textStyle = TextStyle(fontSize = 13.sp, color = Color.Black), modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) { anchorCell = cellCoord; if (!isMultiSelectMode) { selectedCells.clear(); selectedCells.add(cellCoord) } } })
+                                            val isAnchor = anchorCell == cellCoord
+
+                                            val cellBg = when {
+                                                isSelected && isMultiSelectMode -> Color(0xFFE1BEE7)
+                                                isSelected -> Color(0xFFBBDEFB)
+                                                else -> Color.White
+                                            }
+                                            val cellBorder = when {
+                                                isAnchor -> Color(0xFF00C853)
+                                                isSelected && isMultiSelectMode -> Color(0xFF7B1FA2)
+                                                isSelected -> Color(0xFF1976D2)
+                                                else -> Color.LightGray
+                                            }
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(dataColWidth)
+                                                    .border(width = if (isSelected || isAnchor) 2.dp else 0.5.dp, color = cellBorder)
+                                                    .background(cellBg)
+                                                    .padding(8.dp)
+                                            ) {
+                                                BasicTextField(
+                                                    value = cellValue,
+                                                    onValueChange = { currentTable.setCellValue(origRIdx, colIdx, it) },
+                                                    enabled = !isMultiSelectMode,
+                                                    textStyle = TextStyle(fontSize = 13.sp, color = Color.Black),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .onFocusChanged {
+                                                            if (it.isFocused && !isMultiSelectMode) {
+                                                                anchorCell = cellCoord
+                                                                selectedCells.clear()
+                                                                selectedCells.add(cellCoord)
+                                                            }
+                                                        }
+                                                )
+
+                                                if (isMultiSelectMode) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .matchParentSize()
+                                                            .clickable {
+                                                                anchorCell = cellCoord
+                                                                if (selectedCells.contains(cellCoord)) {
+                                                                    selectedCells.remove(cellCoord)
+                                                                } else {
+                                                                    selectedCells.add(cellCoord)
+                                                                }
+                                                            }
+                                                    )
+                                                }
                                             }
                                         }
                                     }

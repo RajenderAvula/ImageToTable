@@ -408,7 +408,6 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // PDF Import Launcher: Reads an existing PDF and converts each page to a Bitmap
     val pdfPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
             coroutineScope.launch {
@@ -633,7 +632,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Advanced Row Editor Dialog with Next / Prev Navigation
+    // Advanced Row Editor Dialog with Next / Prev Navigation, Calendar Date-Time, and Column Move
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
         AdvancedRowEditorDialog(
@@ -648,14 +647,21 @@ fun MobileTableEditorScreen() {
             onSaveRowAndTable = { newName, newDateTime, updatedRowName, updatedHeaders, updatedValues ->
                 currentTable.tableName = newName
                 currentTable.tableDateTime = newDateTime
-                currentTable.rowNames[safeIndex] = updatedRowName
-                updatedHeaders.forEachIndexed { idx, cDef ->
-                    if (idx in currentTable.headers.indices) {
-                        currentTable.headers[idx] = cDef
+                if (safeIndex in currentTable.rowNames.indices) {
+                    currentTable.rowNames[safeIndex] = updatedRowName
+                }
+                for (i in updatedHeaders.indices) {
+                    if (i in currentTable.headers.indices) {
+                        currentTable.headers[i] = updatedHeaders[i]
                     }
                 }
-                currentTable.rows[safeIndex].clear()
-                currentTable.rows[safeIndex].addAll(updatedValues)
+                if (safeIndex in currentTable.rows.indices) {
+                    currentTable.rows[safeIndex].clear()
+                    currentTable.rows[safeIndex].addAll(updatedValues)
+                    while (currentTable.rows[safeIndex].size < currentTable.headers.size) {
+                        currentTable.rows[safeIndex].add("")
+                    }
+                }
                 currentTable.markUpdated()
                 TableRepository.saveOrUpdate(currentTable)
                 tableSnapshot = currentTable.createSnapshot()
@@ -664,6 +670,7 @@ fun MobileTableEditorScreen() {
             onNavigateRow = { target -> editingRowIndex = target },
             onAddNewColumn = { name, type -> currentTable.addColumn(name, type) },
             onDeleteColumn = { colIdx -> currentTable.deleteColumn(colIdx); columnValueFilters.remove(colIdx) },
+            onMoveColumn = { from, to -> currentTable.moveColumn(from, to) },
             onAddNewRowBelow = { currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex + 1) },
             onAddNewRowAbove = { currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex) },
             onMoveRowUp = { currentTable.moveRow(safeIndex, safeIndex - 1); editingRowIndex = safeIndex - 1 },
@@ -1041,7 +1048,7 @@ fun MobileTableEditorScreen() {
                         Button(onClick = { currentTable.addColumn("Col ${currentTable.headers.size + 1}") }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                     }
 
-                    // SCANNER & CONVERT WORKSPACE WITH MULTI-ROW UP/DOWN SCROLLABLE TOKENS
+                    // SCANNER WORKSPACE
                     if (showScanWorkspaceInTable) {
                         Card(
                             modifier = Modifier

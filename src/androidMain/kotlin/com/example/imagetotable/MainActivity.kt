@@ -129,6 +129,9 @@ fun MobileTableEditorScreen() {
     var showRowEditorDialog by remember { mutableStateOf(false) }
     var editingRowIndex by remember { mutableIntStateOf(0) }
 
+    // Column Value Filter Dialog State
+    var activeFilterColIdx by remember { mutableStateOf<Int?>(null) }
+
     // Post-Generation PDF Inspector Dialog
     var showGeneratedPdfInspector by remember { mutableStateOf(false) }
     var generatedPdfSizeBytes by remember { mutableLongStateOf(0L) }
@@ -145,13 +148,8 @@ fun MobileTableEditorScreen() {
     // Search & Filter States
     var globalSearchQuery by remember { mutableStateOf("") }
     val hiddenColumns = remember { mutableStateListOf<Int>() }
-    var showColumnFilterDropdown by remember { mutableStateOf(false) }
-    var showRowFilterDropdown by remember { mutableStateOf(false) }
-    var selectedFilterColIndex by remember { mutableIntStateOf(0) }
-    var activeColDropdownIdx by remember { mutableStateOf<Int?>(null) }
-    var activeRowDropdownIdx by remember { mutableStateOf<Int?>(null) }
     var drawerSearchQuery by remember { mutableStateOf("") }
-    val columnValueFilters = remember { mutableStateMapOf<Int, MutableSet<String>>() }
+    val columnValueFilters = remember { mutableStateMapOf<Int, Set<String>>() }
 
     // PDF Studio State
     val pdfPages = remember { mutableStateListOf<PdfPageItem>() }
@@ -321,6 +319,7 @@ fun MobileTableEditorScreen() {
                     val content = stream.bufferedReader().use { it.readText() }
                     currentTable.importCsv(content)
                     tableSnapshot = currentTable.createSnapshot()
+                    columnValueFilters.clear()
                     selectedCells.clear(); selectedCells.add(Pair(0, 0))
                     statusMessage = "Imported CSV successfully!"
                 }
@@ -500,6 +499,7 @@ fun MobileTableEditorScreen() {
                     currentTable.loadExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
                 }
                 tableSnapshot = currentTable.createSnapshot()
+                columnValueFilters.clear()
                 showExtractionPreviewDialog = false
                 statusMessage = "Replaced table with ${verifiedRows.size} verified rows!"
             }
@@ -528,6 +528,7 @@ fun MobileTableEditorScreen() {
                 TableRepository.saveOrUpdate(newTable)
                 currentTable = newTable
                 tableSnapshot = newTable.createSnapshot()
+                columnValueFilters.clear()
                 selectedCells.clear(); selectedCells.add(Pair(0, 0))
                 showNewTableDialog = false
                 statusMessage = "Created table '${newTable.tableName}'!"
@@ -614,7 +615,7 @@ fun MobileTableEditorScreen() {
             },
             onNavigateRow = { target -> editingRowIndex = target },
             onAddNewColumn = { name, type -> currentTable.addColumn(name, type) },
-            onDeleteColumn = { colIdx -> currentTable.deleteColumn(colIdx) },
+            onDeleteColumn = { colIdx -> currentTable.deleteColumn(colIdx); columnValueFilters.remove(colIdx) },
             onAddNewRowBelow = { currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex + 1) },
             onAddNewRowAbove = { currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex) },
             onMoveRowUp = { currentTable.moveRow(safeIndex, safeIndex - 1); editingRowIndex = safeIndex - 1 },
@@ -682,6 +683,7 @@ fun MobileTableEditorScreen() {
                         ).also { TableRepository.saveOrUpdate(it) }
                         currentTable = next
                         tableSnapshot = next.createSnapshot()
+                        columnValueFilters.clear()
                         selectedCells.clear(); selectedCells.add(Pair(0, 0))
                         showDeleteTableConfirm = false
                         statusMessage = "Table deleted."
@@ -694,19 +696,186 @@ fun MobileTableEditorScreen() {
     }
 
     val visibleColIndices = currentTable.headers.indices.filter { !hiddenColumns.contains(it) }
+
+    // Evaluates both Global Search and Excel-style Column Value Filters
     val filteredRowIndices = currentTable.rows.indices.filter { rIdx ->
         val nameMatch = currentTable.rowNames.getOrElse(rIdx) { "" }.contains(globalSearchQuery, ignoreCase = true)
         val cellMatch = currentTable.rows[rIdx].any { it.contains(globalSearchQuery, ignoreCase = true) }
         val matchesGlobal = globalSearchQuery.isBlank() || nameMatch || cellMatch
 
-        val matchesColFilters = columnValueFilters.all { (colIdx, selectedValues) ->
-            if (selectedValues.isEmpty()) true
-            else {
-                val rowVal = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
-                selectedValues.contains(rowVal)
-            }
+        val matchesColFilters = columnValueFilters.all { (colIdx, selectedSet) ->
+            val cellVal = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
+            selectedSet.contains(cellVal)
         }
         matchesGlobal && matchesColFilters
+    }
+
+    // =========================================================================
+    // COLUMN VALUE FILTER DIALOG (Interactive list with Search & Counts)
+    // =========================================================================
+    if (activeFilterColIdx != null) {
+        val targetCol = activeFilterColIdx!!
+        val colName = currentTable.headers.getOrNull(targetCol)?.name ?: "Column ${targetCol + 1}"
+
+        val distinctValuesWithCount = remember(currentTable.rows, targetCol) {
+            currentTable.rows
+                .map { it.getOrElse(targetCol) { "" } }
+                .groupingBy { it }
+                .eachCount()
+                .toList()
+                .sortedWith(compareBy({ it.first.isEmpty() }, { it.first.lowercase() }))
+        }
+
+        var filterSearchQuery by remember { mutableStateOf("") }
+        val allDistinctValues = remember(distinctValuesWithCount) { distinctValuesWithCount.map { it.first } }
+
+        val activeSelectedInDialog = remember {
+            mutableStateListOf<String>().apply {
+                val existing = columnValueFilters[targetCol]
+                if (existing != null) {
+                    addAll(existing)
+                } else {
+                    addAll(allDistinctValues)
+                }
+            }
+        }
+
+        val filteredItemsInDialog = remember(filterSearchQuery, distinctValuesWithCount) {
+            if (filterSearchQuery.isBlank()) {
+                distinctValuesWithCount
+            } else {
+                distinctValuesWithCount.filter { (v, _) ->
+                    val display = if (v.isEmpty()) "(Blanks)" else v
+                    display.contains(filterSearchQuery, ignoreCase = true)
+                }
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { activeFilterColIdx = null },
+            title = {
+                Column {
+                    Text("Filter Values: $colName", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF0D47A1))
+                    Text("${activeSelectedInDialog.size} of ${allDistinctValues.size} values selected", fontSize = 11.sp, color = Color.Gray)
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
+                    OutlinedTextField(
+                        value = filterSearchQuery,
+                        onValueChange = { filterSearchQuery = it },
+                        placeholder = { Text("Search values...", fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        singleLine = true,
+                        textStyle = TextStyle(fontSize = 12.sp)
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                filteredItemsInDialog.forEach { (v, _) ->
+                                    if (!activeSelectedInDialog.contains(v)) activeSelectedInDialog.add(v)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(2.dp)
+                        ) {
+                            Text("Select All", fontSize = 10.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                filteredItemsInDialog.forEach { (v, _) ->
+                                    activeSelectedInDialog.remove(v)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(2.dp)
+                        ) {
+                            Text("Clear All", fontSize = 10.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Divider()
+
+                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        itemsIndexed(filteredItemsInDialog) { _, (valStr, count) ->
+                            val isSelected = activeSelectedInDialog.contains(valStr)
+                            val displayLabel = if (valStr.isBlank()) "(Blanks)" else valStr
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isSelected) activeSelectedInDialog.remove(valStr)
+                                        else activeSelectedInDialog.add(valStr)
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { chk ->
+                                        if (chk) activeSelectedInDialog.add(valStr)
+                                        else activeSelectedInDialog.remove(valStr)
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = displayLabel,
+                                    fontSize = 13.sp,
+                                    color = if (valStr.isBlank()) Color.Gray else Color.Black,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = "($count)",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(onClick = {
+                        columnValueFilters.remove(targetCol)
+                        statusMessage = "Cleared filter for '$colName'"
+                        activeFilterColIdx = null
+                    }) {
+                        Text("Reset", color = Color.Red, fontSize = 12.sp)
+                    }
+                    Button(
+                        onClick = {
+                            if (activeSelectedInDialog.size == allDistinctValues.size) {
+                                columnValueFilters.remove(targetCol)
+                            } else {
+                                columnValueFilters[targetCol] = activeSelectedInDialog.toSet()
+                            }
+                            statusMessage = "Applied filter on '$colName'"
+                            activeFilterColIdx = null
+                        },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1E88E5))
+                    ) {
+                        Text("Apply", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { activeFilterColIdx = null }) {
+                    Text("Cancel", fontSize = 12.sp)
+                }
+            }
+        )
     }
 
     val actionColWidth = 190.dp
@@ -800,6 +969,7 @@ fun MobileTableEditorScreen() {
                             TableRepository.saveOrUpdate(subTable)
                             currentTable = subTable
                             tableSnapshot = subTable.createSnapshot()
+                            columnValueFilters.clear()
                             selectedCells.clear(); selectedCells.add(Pair(0, 0))
                             statusMessage = "Created sub-table!"
                         }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00ACC1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("📋 New from Filters", color = Color.White, fontSize = 11.sp) }
@@ -922,6 +1092,19 @@ fun MobileTableEditorScreen() {
                             Text("🔍", fontSize = 14.sp)
                             BasicTextField(value = globalSearchQuery, onValueChange = { globalSearchQuery = it }, modifier = Modifier.width(130.dp).padding(vertical = 4.dp), textStyle = TextStyle(fontSize = 12.sp, color = Color.Black))
 
+                            if (columnValueFilters.isNotEmpty()) {
+                                Button(
+                                    onClick = {
+                                        columnValueFilters.clear()
+                                        statusMessage = "Cleared all column filters"
+                                    },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFFF6F00)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text("✕ Reset Filters (${columnValueFilters.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
                             Button(
                                 onClick = { isMultiSelectMode = !isMultiSelectMode },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = if (isMultiSelectMode) Color(0xFF7B1FA2) else Color(0xFF546E7A)),
@@ -1009,11 +1192,13 @@ fun MobileTableEditorScreen() {
                                 }
                                 visibleColIndices.forEach { colIdx ->
                                     val colDef = currentTable.headers[colIdx]
+                                    val isColFiltered = columnValueFilters.containsKey(colIdx)
+
                                     Box(modifier = Modifier.width(dataColWidth).border(1.dp, Color.LightGray).background(Color(0xFFF5F9FD)).padding(6.dp)) {
                                         Column {
                                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                                 BasicTextField(value = colDef.name, onValueChange = { currentTable.headers[colIdx] = colDef.copy(name = it); currentTable.markUpdated() }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 13.sp), modifier = Modifier.weight(1f))
-                                                Text("✕", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) { currentTable.deleteColumn(colIdx) })
+                                                Text("✕", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) { currentTable.deleteColumn(colIdx); columnValueFilters.remove(colIdx) })
                                             }
                                             Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                                 var typeExpanded by remember { mutableStateOf(false) }
@@ -1023,6 +1208,22 @@ fun MobileTableEditorScreen() {
                                                         ColumnType.values().forEach { ct -> DropdownMenuItem(onClick = { currentTable.headers[colIdx] = colDef.copy(type = ct); currentTable.markUpdated(); typeExpanded = false }) { Text(ct.label) } }
                                                     }
                                                 }
+
+                                                // COLUMN VALUE FILTER BUTTON
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(if (isColFiltered) Color(0xFFFF6F00) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                        .clickable { activeFilterColIdx = colIdx }
+                                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                ) {
+                                                    Text(
+                                                        text = if (isColFiltered) "⚲ Filtered" else "⚲ Filter",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = if (isColFiltered) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isColFiltered) Color.White else Color(0xFF37474F)
+                                                    )
+                                                }
+
                                                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                                     Text("◀", modifier = Modifier.clickable(enabled = colIdx > 0) { currentTable.moveColumn(colIdx, colIdx - 1) }, fontSize = 12.sp)
                                                     Text("▶", modifier = Modifier.clickable(enabled = colIdx < currentTable.headers.size - 1) { currentTable.moveColumn(colIdx, colIdx + 1) }, fontSize = 12.sp)
@@ -1292,7 +1493,7 @@ fun MobileTableEditorScreen() {
                         itemsIndexed(filtered) { _, t ->
                             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), elevation = 2.dp) {
                                 Row(modifier = Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                    Column(modifier = Modifier.weight(1f).clickable { currentTable = t; tableSnapshot = t.createSnapshot(); selectedTabIndex = 0; statusMessage = "Loaded ${t.tableName}" }) {
+                                    Column(modifier = Modifier.weight(1f).clickable { currentTable = t; tableSnapshot = t.createSnapshot(); columnValueFilters.clear(); selectedTabIndex = 0; statusMessage = "Loaded ${t.tableName}" }) {
                                         Text(t.tableName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                         Text("📅 ${t.tableDateTime} • ${t.rows.size} rows", fontSize = 11.sp, color = Color.Gray)
                                     }

@@ -78,6 +78,7 @@ fun AdvancedRowEditorDialog(
     var showAddColumnDialog by remember { mutableStateOf(false) }
     var newColName by remember { mutableStateOf("") }
     var newColType by remember { mutableStateOf(ColumnType.TEXT) }
+    var newColFormula by remember { mutableStateOf("") }
 
     fun commitCurrentChanges() {
         onSaveRowAndTable(
@@ -269,7 +270,7 @@ fun AdvancedRowEditorDialog(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // SECTION 1: TABLE METADATA & CALENDAR DATE/TIME PICKER
+                    // SECTION 1: TABLE METADATA
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp),
@@ -296,7 +297,6 @@ fun AdvancedRowEditorDialog(
                                 textStyle = TextStyle(fontSize = 13.sp)
                             )
 
-                            // Interactive Calendar Date-Time Box
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -414,7 +414,6 @@ fun AdvancedRowEditorDialog(
                                     modifier = Modifier.padding(12.dp),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    // Row A: Column Name, Move Arrows, and Delete
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -422,14 +421,17 @@ fun AdvancedRowEditorDialog(
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .background(Color(0xFFE3F2FD), RoundedCornerShape(4.dp))
+                                                .background(
+                                                    if (colDef.type == ColumnType.FORMULA) Color(0xFFE8F5E9) else Color(0xFFE3F2FD),
+                                                    RoundedCornerShape(4.dp)
+                                                )
                                                 .padding(horizontal = 8.dp, vertical = 6.dp)
                                         ) {
                                             Text(
-                                                text = "Col ${cIdx + 1}",
+                                                text = if (colDef.type == ColumnType.FORMULA) "fx" else "Col ${cIdx + 1}",
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = Color(0xFF1565C0)
+                                                color = if (colDef.type == ColumnType.FORMULA) Color(0xFF2E7D32) else Color(0xFF1565C0)
                                             )
                                         }
 
@@ -444,7 +446,6 @@ fun AdvancedRowEditorDialog(
                                             textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                         )
 
-                                        // Move Column Up Button
                                         Button(
                                             onClick = { moveColumnLocally(cIdx, cIdx - 1) },
                                             enabled = cIdx > 0,
@@ -455,7 +456,6 @@ fun AdvancedRowEditorDialog(
                                             Text("▲", fontSize = 12.sp, color = if (cIdx > 0) Color.Black else Color.Gray)
                                         }
 
-                                        // Move Column Down Button
                                         Button(
                                             onClick = { moveColumnLocally(cIdx, cIdx + 1) },
                                             enabled = cIdx < headersState.size - 1,
@@ -466,7 +466,6 @@ fun AdvancedRowEditorDialog(
                                             Text("▼", fontSize = 12.sp, color = if (cIdx < headersState.size - 1) Color.Black else Color.Gray)
                                         }
 
-                                        // Delete Column Button
                                         IconButton(
                                             onClick = {
                                                 if (headersState.size > 1) {
@@ -487,7 +486,6 @@ fun AdvancedRowEditorDialog(
                                         }
                                     }
 
-                                    // Row B: Column Data Type Dropdown Selector
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -526,14 +524,39 @@ fun AdvancedRowEditorDialog(
                                         }
 
                                         Text(
-                                            text = "Position: Column ${cIdx + 1}",
+                                            text = if (colDef.type == ColumnType.FORMULA) "Formula: ${colDef.formula}" else "Position: Col ${cIdx + 1}",
                                             fontSize = 11.sp,
-                                            color = Color.Gray
+                                            color = Color.Gray,
+                                            maxLines = 1
                                         )
                                     }
 
-                                    // Row C: ADAPTIVE VALUE INPUT BASED ON DATA TYPE
                                     when (colDef.type) {
+                                        ColumnType.FORMULA -> {
+                                            Card(
+                                                backgroundColor = Color(0xFFF1F8E9),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA5D6A7)),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Column {
+                                                        Text("Computed by Formula:", fontSize = 10.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
+                                                        Text(colDef.formula.ifBlank { "(No formula)" }, fontSize = 11.sp, color = Color.DarkGray)
+                                                    }
+                                                    Text(
+                                                        text = cellValue.ifBlank { "0" },
+                                                        fontSize = 15.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color(0xFF1B5E20)
+                                                    )
+                                                }
+                                            }
+                                        }
+
                                         ColumnType.DATE -> {
                                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                                 Row(
@@ -573,7 +596,6 @@ fun AdvancedRowEditorDialog(
                                                     }
                                                 }
 
-                                                // Attendance Present / Absent Quick Toggles
                                                 val isPresent = cellValue.equals("Present", ignoreCase = true) || cellValue.equals("P", ignoreCase = true)
                                                 val isAbsent = cellValue.equals("Absent", ignoreCase = true) || cellValue.equals("A", ignoreCase = true)
                                                 Row(
@@ -697,7 +719,6 @@ fun AdvancedRowEditorDialog(
                                                     textStyle = TextStyle(fontSize = 13.sp)
                                                 )
 
-                                                // Seamless Boolean helper chips without requiring a separate enum type
                                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     Box(
                                                         modifier = Modifier
@@ -897,16 +918,27 @@ fun AdvancedRowEditorDialog(
                             }
                         }
                     }
+
+                    if (newColType == ColumnType.FORMULA) {
+                        OutlinedTextField(
+                            value = newColFormula,
+                            onValueChange = { newColFormula = it },
+                            label = { Text("Formula (e.g. [Qty] * [Price])") },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(fontSize = 12.sp)
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
                         val name = newColName.ifBlank { "Col ${headersState.size + 1}" }
-                        headersState.add(ColumnDef(name, newColType))
+                        headersState.add(ColumnDef(name, newColType, newColFormula))
                         valuesState.add("")
                         onAddNewColumn(name, newColType)
                         newColName = ""
+                        newColFormula = ""
                         showAddColumnDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))

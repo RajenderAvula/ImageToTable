@@ -18,6 +18,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -148,9 +149,6 @@ fun MobileTableEditorScreen() {
     var currentTable by remember { mutableStateOf(initialTable) }
     var tableSnapshot by remember { mutableStateOf(initialTable.createSnapshot()) }
 
-    // State for main UI Save / Cancel changes bar
-    var hasUnsavedChanges by remember(currentTable.id) { mutableStateOf(false) }
-
     var selectedTabIndex by remember { mutableIntStateOf(0) }
 
     var isMultiSelectMode by remember { mutableStateOf(false) }
@@ -168,7 +166,6 @@ fun MobileTableEditorScreen() {
     var showScanWorkspaceInTable by remember { mutableStateOf(false) }
     var showAttendanceChart by remember { mutableStateOf(true) }
 
-    // Multiple Dates Chart Selector State (hidden/shown date column indices in attendance chart)
     val hiddenChartDateIndices = remember { mutableStateListOf<Int>() }
     var showChartDateSelectorDialog by remember { mutableStateOf(false) }
 
@@ -209,6 +206,33 @@ fun MobileTableEditorScreen() {
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
 
+    // --- SYNCHRONIZED SAVE & CANCEL FUNCTIONS (ACCROSS ALL UIS) ---
+    fun performSynchronizedSave() {
+        currentTable.markUpdated()
+        TableRepository.saveOrUpdate(currentTable)
+        tableSnapshot = currentTable.createSnapshot()
+        statusMessage = "All changes saved & synchronized across all UIs!"
+        Toast.makeText(context, "Saved & Synchronized", Toast.LENGTH_SHORT).show()
+    }
+
+    fun performSynchronizedCancel() {
+        currentTable.tableName = tableSnapshot.tableName
+        currentTable.tableDateTime = tableSnapshot.tableDateTime
+        currentTable.cornerHeader = tableSnapshot.cornerHeader
+        currentTable.headers.clear()
+        currentTable.headers.addAll(tableSnapshot.headers.map { it.copy() })
+        currentTable.rowNames.clear()
+        currentTable.rowNames.addAll(tableSnapshot.rowNames)
+        currentTable.rows.clear()
+        tableSnapshot.rows.forEach { r ->
+            currentTable.rows.add(mutableStateListOf(*r.toTypedArray()))
+        }
+        currentTable.markUpdated()
+        TableRepository.saveOrUpdate(currentTable)
+        statusMessage = "Reverted changes to last saved state."
+        Toast.makeText(context, "Changes reverted", Toast.LENGTH_SHORT).show()
+    }
+
     LaunchedEffect(previewCroppedBitmap) {
         zoomScale = 1f
         panOffsetX = 0f
@@ -246,7 +270,7 @@ fun MobileTableEditorScreen() {
                         val formatted = outFormat.format(cal.time)
                         currentTable.setCellValue(rIdx, cIdx, formatted)
                         currentTable.markUpdated()
-                        hasUnsavedChanges = true
+                        TableRepository.saveOrUpdate(currentTable)
                     },
                     cal.get(Calendar.HOUR_OF_DAY),
                     cal.get(Calendar.MINUTE),
@@ -271,9 +295,9 @@ fun MobileTableEditorScreen() {
 
             currentTable = next
             tableSnapshot = next.createSnapshot()
-            hasUnsavedChanges = false
             columnValueFilters.clear()
             hiddenColumns.clear()
+            hiddenChartDateIndices.clear()
             globalSearchQuery = ""
             selectedCells.clear()
             selectedCells.add(Pair(0, 0))
@@ -289,7 +313,6 @@ fun MobileTableEditorScreen() {
             showCropperDialog = false
         } else {
             tableSnapshot = currentTable.createSnapshot()
-            hasUnsavedChanges = false
         }
         statusMessage = "Table deleted successfully."
     }
@@ -308,7 +331,7 @@ fun MobileTableEditorScreen() {
         } else {
             currentTable.addRow("Row ${currentTable.rows.size + 1}")
             currentTable.markUpdated()
-            hasUnsavedChanges = true
+            TableRepository.saveOrUpdate(currentTable)
             anchorCell = Pair(currentTable.rows.size - 1, targetCol)
             selectedCells.clear()
             selectedCells.add(anchorCell)
@@ -452,6 +475,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
+    // Launchers
     val csvImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
             try {
@@ -459,7 +483,8 @@ fun MobileTableEditorScreen() {
                     val content = stream.bufferedReader().use { it.readText() }
                     currentTable.importCsv(content)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                     columnValueFilters.clear()
                     selectedCells.clear(); selectedCells.add(Pair(0, 0))
                     statusMessage = "Imported CSV successfully!"
@@ -618,7 +643,8 @@ fun MobileTableEditorScreen() {
                                 withContext(Dispatchers.Main) {
                                     currentTable.setCellValue(tr, tc, text)
                                     currentTable.markUpdated()
-                                    hasUnsavedChanges = true
+                                    TableRepository.saveOrUpdate(currentTable)
+                                    tableSnapshot = currentTable.createSnapshot()
                                     statusMessage = "Inserted '$text' into active cell ($tr, $tc)"
                                 }
                             } else {
@@ -667,7 +693,8 @@ fun MobileTableEditorScreen() {
                     currentTable.appendExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
                 }
                 currentTable.markUpdated()
-                hasUnsavedChanges = true
+                TableRepository.saveOrUpdate(currentTable)
+                tableSnapshot = currentTable.createSnapshot()
                 showExtractionPreviewDialog = false
                 statusMessage = "Appended ${verifiedRows.size} verified rows to table!"
             },
@@ -686,7 +713,8 @@ fun MobileTableEditorScreen() {
                     currentTable.loadExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
                 }
                 currentTable.markUpdated()
-                hasUnsavedChanges = true
+                TableRepository.saveOrUpdate(currentTable)
+                tableSnapshot = currentTable.createSnapshot()
                 columnValueFilters.clear()
                 showExtractionPreviewDialog = false
                 statusMessage = "Replaced table with ${verifiedRows.size} verified rows!"
@@ -703,9 +731,8 @@ fun MobileTableEditorScreen() {
                     currentTable.markUpdated()
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
-                    hasUnsavedChanges = false
                     showDedicatedEditor = false
-                    statusMessage = "Dedicated table edits saved!"
+                    statusMessage = "Dedicated table edits saved & synchronized!"
                 }
             )
         }
@@ -718,9 +745,9 @@ fun MobileTableEditorScreen() {
                 TableRepository.saveOrUpdate(newTable)
                 currentTable = newTable
                 tableSnapshot = newTable.createSnapshot()
-                hasUnsavedChanges = false
                 columnValueFilters.clear()
                 hiddenColumns.clear()
+                hiddenChartDateIndices.clear()
                 globalSearchQuery = ""
                 selectedCells.clear(); selectedCells.add(Pair(0, 0))
                 anchorCell = Pair(0, 0)
@@ -729,7 +756,7 @@ fun MobileTableEditorScreen() {
                 selectedBitmap = null
                 previewCroppedBitmap = null
                 showNewTableDialog = false
-                statusMessage = "Created table '${newTable.tableName}'!"
+                statusMessage = "Created table '${newTable.tableName}' and saved to storage!"
             }
         )
     }
@@ -777,7 +804,8 @@ fun MobileTableEditorScreen() {
                     }
                 }
                 currentTable.markUpdated()
-                hasUnsavedChanges = true
+                TableRepository.saveOrUpdate(currentTable)
+                tableSnapshot = currentTable.createSnapshot()
                 showAllWordsDialog = false
                 statusMessage = "Transferred ${words.size} word tokens!"
             }
@@ -815,52 +843,61 @@ fun MobileTableEditorScreen() {
                         }
                     }
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
-                    statusMessage = "Row ${safeIndex + 1} updated!"
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
+                    statusMessage = "Row ${safeIndex + 1} updated and saved to storage!"
                 },
                 onNavigateRow = { target -> editingRowIndex = target },
                 onAddNewColumn = { name, type ->
                     currentTable.addColumn(name, type)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                 },
                 onDeleteColumn = { colIdx ->
                     currentTable.deleteColumn(colIdx)
                     columnValueFilters.remove(colIdx)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                 },
                 onMoveColumn = { from, to ->
                     currentTable.moveColumn(from, to)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                 },
                 onAddNewRowBelow = {
                     currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex + 1)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                 },
                 onAddNewRowAbove = {
                     currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                 },
                 onMoveRowUp = {
                     currentTable.moveRow(safeIndex, safeIndex - 1)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                     editingRowIndex = safeIndex - 1
                 },
                 onMoveRowDown = {
                     currentTable.moveRow(safeIndex, safeIndex + 1)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                     editingRowIndex = safeIndex + 1
                 },
                 onDeleteRow = {
                     currentTable.deleteRow(safeIndex)
                     currentTable.markUpdated()
-                    hasUnsavedChanges = true
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
                     showRowEditorDialog = false
                     statusMessage = "Row ${safeIndex + 1} deleted."
                 }
@@ -903,9 +940,10 @@ fun MobileTableEditorScreen() {
                             val todayStr = sdf.format(Date())
                             currentTable.addColumn(todayStr, ColumnType.DATE)
                             currentTable.markUpdated()
-                            hasUnsavedChanges = true
+                            TableRepository.saveOrUpdate(currentTable)
+                            tableSnapshot = currentTable.createSnapshot()
                             showAddDateColumnDialog = false
-                            statusMessage = "Added column '$todayStr'"
+                            statusMessage = "Added column '$todayStr' and saved to storage"
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2))
@@ -925,8 +963,9 @@ fun MobileTableEditorScreen() {
                                     val dateStr = sdf.format(selCal.time)
                                     currentTable.addColumn(dateStr, ColumnType.DATE)
                                     currentTable.markUpdated()
-                                    hasUnsavedChanges = true
-                                    statusMessage = "Added column '$dateStr'"
+                                    TableRepository.saveOrUpdate(currentTable)
+                                    tableSnapshot = currentTable.createSnapshot()
+                                    statusMessage = "Added column '$dateStr' and saved to storage"
                                 },
                                 cal.get(Calendar.YEAR),
                                 cal.get(Calendar.MONTH),
@@ -957,8 +996,9 @@ fun MobileTableEditorScreen() {
                                         }
                                     }
                                     currentTable.markUpdated()
-                                    hasUnsavedChanges = true
-                                    statusMessage = "Generated $daysInMonth daily columns!"
+                                    TableRepository.saveOrUpdate(currentTable)
+                                    tableSnapshot = currentTable.createSnapshot()
+                                    statusMessage = "Generated $daysInMonth daily columns in storage!"
                                 },
                                 cal.get(Calendar.YEAR),
                                 cal.get(Calendar.MONTH),
@@ -981,7 +1021,6 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // MULTIPLE DATES ATTENDANCE CHART SHOW/HIDE SELECTOR DIALOG
     if (showChartDateSelectorDialog) {
         val allDateCols = currentTable.headers.indices.filter { idx ->
             val def = currentTable.headers[idx]
@@ -1053,7 +1092,8 @@ fun MobileTableEditorScreen() {
                     onClick = {
                         currentTable.clearAllValues()
                         currentTable.markUpdated()
-                        hasUnsavedChanges = true
+                        TableRepository.saveOrUpdate(currentTable)
+                        tableSnapshot = currentTable.createSnapshot()
                         showClearTableConfirm = false
                         statusMessage = "Cleared all cells in table."
                     },
@@ -1076,7 +1116,7 @@ fun MobileTableEditorScreen() {
                 )
             },
             text = {
-                Text("Are you sure you want to delete '${targetTable.tableName}'? All data, rows, and cells will be completely deleted across the entire application.")
+                Text("Are you sure you want to delete '${targetTable.tableName}'? All data, rows, and cells will be completely deleted across the entire application and storage.")
             },
             confirmButton = {
                 Button(
@@ -1277,33 +1317,160 @@ fun MobileTableEditorScreen() {
     Scaffold(
         topBar = {
             if (!isFullScreen) {
-                TopAppBar(
-                    title = {
-                        Column {
-                            BasicTextField(
-                                value = currentTable.tableName,
-                                onValueChange = {
-                                    currentTable.tableName = it
-                                    hasUnsavedChanges = true
-                                },
-                                textStyle = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            )
-                            Text("📅 ${currentTable.tableDateTime}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.85f))
+                Column {
+                    // Line 1: Primary Top App Bar
+                    TopAppBar(
+                        title = {
+                            Column {
+                                BasicTextField(
+                                    value = currentTable.tableName,
+                                    onValueChange = { currentTable.tableName = it },
+                                    textStyle = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                )
+                                Text("📅 ${currentTable.tableDateTime}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.85f))
+                            }
+                        },
+                        backgroundColor = Color(0xFF1E88E5),
+                        actions = {
+                            IconButton(onClick = { showDedicatedEditor = true }) {
+                                Text("🛠 Edit", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            IconButton(onClick = { showTableHistoryDrawer = true }) {
+                                Text("📂 Tables", color = Color.White, fontSize = 11.sp)
+                            }
+                            IconButton(onClick = { isFullScreen = true }) {
+                                Text("⛶ Full", color = Color.White, fontSize = 11.sp)
+                            }
                         }
-                    },
-                    backgroundColor = Color(0xFF1E88E5),
-                    actions = {
-                        IconButton(onClick = { showDedicatedEditor = true }) {
-                            Text("🛠 Edit", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                        IconButton(onClick = { showTableHistoryDrawer = true }) {
-                            Text("📂 Tables", color = Color.White, fontSize = 11.sp)
-                        }
-                        IconButton(onClick = { isFullScreen = true }) {
-                            Text("⛶ Full", color = Color.White, fontSize = 11.sp)
+                    )
+
+                    // Line 2: PERMANENT CANCEL & SAVE BAR (FIXED AT TOP, UNCONGESTED, NEVER DISAPPEARS)
+                    Surface(
+                        color = Color(0xFFFFFFFF),
+                        elevation = 3.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Left side: Clean metrics without congestion
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(Color(0xFFE0F2FE), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Text(
+                                        text = "${currentTable.rows.size} Rows × ${currentTable.headers.size} Cols",
+                                        color = Color(0xFF0369A1),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                Text(
+                                    text = statusMessage.take(24),
+                                    fontSize = 11.sp,
+                                    color = Color.Gray,
+                                    maxLines = 1
+                                )
+                            }
+
+                            // Right side: Permanent Cancel & Save Buttons
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = { performSynchronizedCancel() },
+                                    colors = ButtonDefaults.outlinedButtonColors(backgroundColor = Color.White),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    border = BorderStroke(1.dp, Color(0xFFDC2626)),
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Text("↩ Cancel", color = Color(0xFFDC2626), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = { performSynchronizedSave() },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF15803D)),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Text("💾 Save", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
-                )
+                }
+            } else {
+                // Full Screen Mode Header with Permanent Clean Save & Cancel Buttons
+                Surface(
+                    color = Color(0xFFFFFFFF),
+                    elevation = 3.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "⛶ ${currentTable.tableName}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF0F172A),
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = { performSynchronizedCancel() },
+                                colors = ButtonDefaults.outlinedButtonColors(backgroundColor = Color.White),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                border = BorderStroke(1.dp, Color(0xFFDC2626)),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.height(30.dp)
+                            ) {
+                                Text("↩ Cancel", color = Color(0xFFDC2626), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = { performSynchronizedSave() },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF15803D)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.height(30.dp)
+                            ) {
+                                Text("💾 Save", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = { isFullScreen = false },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF475569)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.height(30.dp)
+                            ) {
+                                Text("Exit ✕", color = Color.White, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
             }
         },
         bottomBar = {
@@ -1346,114 +1513,7 @@ fun MobileTableEditorScreen() {
                 .padding(paddingValues)
                 .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
         ) {
-            // MAIN UI SAVE / CANCEL CHANGES BAR (Appears whenever table is modified)
-         /*   if (hasUnsavedChanges) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFFFFF8E1))
-                        .border(0.5.dp, Color(0xFFFFE082))
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "⚠ You have unsaved changes in '${currentTable.tableName}'.",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF8D6E63)
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(
-                            onClick = {
-                                currentTable.revertToSnapshot(tableSnapshot)
-                                hasUnsavedChanges = false
-                                statusMessage = "Changes cancelled and reverted."
-                            },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD32F2F)),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Text("✕ Cancel", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        Button(
-                            onClick = {
-                                currentTable.markUpdated()
-                                TableRepository.saveOrUpdate(currentTable)
-                                tableSnapshot = currentTable.createSnapshot()
-                                hasUnsavedChanges = false
-                                statusMessage = "Changes saved successfully!"
-                            },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Text("💾 Save Changes", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }*/
-                        // MAIN UI SAVE / CANCEL CHANGES BAR (Two-line layout: Warning on top, Buttons below)
-            if (hasUnsavedChanges) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFFFFF8E1))
-                        .border(0.5.dp, Color(0xFFFFE082))
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    // Line 1: Warning Message
-                    Text(
-                        text = "⚠ You have unsaved changes in '${currentTable.tableName}'.",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF8D6E63),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    // Line 2: Cancel & Save Buttons
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(
-                            onClick = {
-                                currentTable.revertToSnapshot(tableSnapshot)
-                                hasUnsavedChanges = false
-                                statusMessage = "Changes cancelled and reverted."
-                            },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD32F2F)),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Text("✕ Cancel", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        Button(
-                            onClick = {
-                                currentTable.markUpdated()
-                                TableRepository.saveOrUpdate(currentTable)
-                                tableSnapshot = currentTable.createSnapshot()
-                                hasUnsavedChanges = false
-                                statusMessage = "Changes saved successfully!"
-                            },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Text("💾 Save Changes", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
-
+            // TAB 0: MERGED TABLE AND SCAN & CONVERT WORKSPACE (VERTICAL SCROLL ENABLED SO CELLS NEVER GET HIDDEN)
             if (selectedTabIndex == 0 || isFullScreen) {
                 key(currentTable.id) {
                     val tab0VerticalScrollState = rememberScrollState()
@@ -1464,6 +1524,7 @@ fun MobileTableEditorScreen() {
                             .imePadding()
                             .verticalScroll(tab0VerticalScrollState)
                     ) {
+                        // Action Toolbar Row
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1473,18 +1534,9 @@ fun MobileTableEditorScreen() {
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isFullScreen) {
-                                Button(
-                                    onClick = { isFullScreen = false },
-                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Text("✕ Exit Full", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-
                             Button(onClick = { showNewTableDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
 
+                            // ADD DATE ATTENDANCE COLUMN BUTTON
                             Button(
                                 onClick = { showAddDateColumnDialog = true },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
@@ -1493,6 +1545,7 @@ fun MobileTableEditorScreen() {
                                 Text("📅 + Date Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
+                            // ATTENDANCE CHART TOGGLE BUTTON
                             Button(
                                 onClick = { showAttendanceChart = !showAttendanceChart },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = if (showAttendanceChart) Color(0xFF303F9F) else Color(0xFF5C6BC0)),
@@ -1506,9 +1559,9 @@ fun MobileTableEditorScreen() {
                                 TableRepository.saveOrUpdate(subTable)
                                 currentTable = subTable
                                 tableSnapshot = subTable.createSnapshot()
-                                hasUnsavedChanges = false
                                 columnValueFilters.clear()
                                 hiddenColumns.clear()
+                                hiddenChartDateIndices.clear()
                                 globalSearchQuery = ""
                                 selectedCells.clear(); selectedCells.add(Pair(0, 0))
                                 statusMessage = "Created sub-table!"
@@ -1524,7 +1577,8 @@ fun MobileTableEditorScreen() {
                             Button(onClick = {
                                 currentTable.transposeTable()
                                 currentTable.markUpdated()
-                                hasUnsavedChanges = true
+                                TableRepository.saveOrUpdate(currentTable)
+                                tableSnapshot = currentTable.createSnapshot()
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("⇄ Transpose", color = Color.White, fontSize = 11.sp) }
 
                             Button(onClick = { activeExportFormat = ExportFormat.PDF; fileSaveLauncher.launch("${currentTable.tableName}.pdf") }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("PDF", color = Color.White, fontSize = 11.sp) }
@@ -1538,16 +1592,18 @@ fun MobileTableEditorScreen() {
                             Button(onClick = {
                                 currentTable.addRow()
                                 currentTable.markUpdated()
-                                hasUnsavedChanges = true
+                                TableRepository.saveOrUpdate(currentTable)
+                                tableSnapshot = currentTable.createSnapshot()
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Row", color = Color.White, fontSize = 11.sp) }
                             Button(onClick = {
                                 currentTable.addColumn("Col ${currentTable.headers.size + 1}")
                                 currentTable.markUpdated()
-                                hasUnsavedChanges = true
+                                TableRepository.saveOrUpdate(currentTable)
+                                tableSnapshot = currentTable.createSnapshot()
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                         }
 
-                        // DAILY ATTENDANCE CHART (With option to show/hide multiple dates charts)
+                        // SCROLLABLE MONTHLY ATTENDANCE CHART (WITH MULTI-DATE SHOW / HIDE FILTER)
                         if (showAttendanceChart) {
                             val allDateColIndices = remember(currentTable.headers) {
                                 currentTable.headers.indices.filter { idx ->
@@ -1555,7 +1611,6 @@ fun MobileTableEditorScreen() {
                                     def.type == ColumnType.DATE || parseDateFromHeader(def.name) != null
                                 }
                             }
-                            // Filter out hidden dates
                             val dateColIndices = allDateColIndices.filter { !hiddenChartDateIndices.contains(it) }
 
                             Card(
@@ -1703,10 +1758,9 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // UPDATED RESPONSIVE SCANNER WORKSPACE (Fixes truncation after tokens appear)
+                        // EXPANDED SCANNER WORKSPACE: CROPPED IMAGE WITH PINCH-TO-ZOOM + SPACIOUS TOKENS UI
                         if (showScanWorkspaceInTable) {
                             val activeDisplayBitmap = previewCroppedBitmap ?: selectedBitmap
-                            // 0 = Split (Side-by-Side), 1 = Tokens Full Width, 2 = Image Full Width
                             var scannerViewMode by remember { mutableIntStateOf(0) }
 
                             Card(
@@ -1718,7 +1772,6 @@ fun MobileTableEditorScreen() {
                                 elevation = 3.dp
                             ) {
                                 Column(modifier = Modifier.fillMaxSize().padding(6.dp)) {
-                                    // View switcher bar to prevent truncation on mobile screens
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -1775,12 +1828,10 @@ fun MobileTableEditorScreen() {
                                         }
                                     }
 
-                                    // Content Area
                                     Row(
                                         modifier = Modifier.weight(1f).fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        // Left: Image View
                                         if (scannerViewMode == 0 || scannerViewMode == 2) {
                                             Box(
                                                 modifier = Modifier
@@ -1866,7 +1917,6 @@ fun MobileTableEditorScreen() {
                                             }
                                         }
 
-                                        // Right: Tokens View
                                         if (scannerViewMode == 0 || scannerViewMode == 1) {
                                             Column(
                                                 modifier = Modifier
@@ -1917,7 +1967,8 @@ fun MobileTableEditorScreen() {
                                                             if (selectedTokens.isNotEmpty()) {
                                                                 currentTable.setCellValue(tr, tc, selectedTokens.joinToString(" "))
                                                                 currentTable.markUpdated()
-                                                                hasUnsavedChanges = true
+                                                                TableRepository.saveOrUpdate(currentTable)
+                                                                tableSnapshot = currentTable.createSnapshot()
                                                                 jumpToNextRow()
                                                             }
                                                         },
@@ -1945,7 +1996,8 @@ fun MobileTableEditorScreen() {
                                                                 }
                                                             }
                                                             currentTable.markUpdated()
-                                                            hasUnsavedChanges = true
+                                                            TableRepository.saveOrUpdate(currentTable)
+                                                            tableSnapshot = currentTable.createSnapshot()
                                                         },
                                                         enabled = selectedTokens.isNotEmpty(),
                                                         modifier = Modifier.weight(1f).height(32.dp),
@@ -2026,6 +2078,7 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
+                        // MULTI-SELECT & CLIPBOARD CONTROL BAR
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                             backgroundColor = if (isMultiSelectMode) Color(0xFFF3E5F5) else Color(0xFFF1F5F9),
@@ -2082,7 +2135,8 @@ fun MobileTableEditorScreen() {
                                             val tsv = currentTable.selectionToTsv(selectedCells)
                                             clipboardManager.setText(AnnotatedString(tsv))
                                             currentTable.markUpdated()
-                                            hasUnsavedChanges = true
+                                            TableRepository.saveOrUpdate(currentTable)
+                                            tableSnapshot = currentTable.createSnapshot()
                                             statusMessage = "Cut ${selectedCells.size} cell(s)!"
                                         }
                                     },
@@ -2100,7 +2154,8 @@ fun MobileTableEditorScreen() {
                                                 selectedCells.addAll(pasted)
                                             }
                                             currentTable.markUpdated()
-                                            hasUnsavedChanges = true
+                                            TableRepository.saveOrUpdate(currentTable)
+                                            tableSnapshot = currentTable.createSnapshot()
                                             statusMessage = if (clip.items.size == 1 && selectedCells.size > 1) {
                                                 "Replicated '${clip.items.first().value}' into ${selectedCells.size} cells!"
                                             } else {
@@ -2118,7 +2173,8 @@ fun MobileTableEditorScreen() {
                                     onClick = {
                                         currentTable.clearCells(selectedCells)
                                         currentTable.markUpdated()
-                                        hasUnsavedChanges = true
+                                        TableRepository.saveOrUpdate(currentTable)
+                                        tableSnapshot = currentTable.createSnapshot()
                                         statusMessage = "Cleared ${selectedCells.size} cell(s)!"
                                     },
                                     enabled = selectedCells.isNotEmpty(),
@@ -2133,29 +2189,30 @@ fun MobileTableEditorScreen() {
                                     val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.LEFT)
                                     selectedCells.clear(); selectedCells.addAll(u)
                                     currentTable.markUpdated()
-                                    hasUnsavedChanges = true
+                                    TableRepository.saveOrUpdate(currentTable)
                                 }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("◀") }
                                 Button(onClick = {
                                     val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.RIGHT)
                                     selectedCells.clear(); selectedCells.addAll(u)
                                     currentTable.markUpdated()
-                                    hasUnsavedChanges = true
+                                    TableRepository.saveOrUpdate(currentTable)
                                 }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("▶") }
                                 Button(onClick = {
                                     val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.UP)
                                     selectedCells.clear(); selectedCells.addAll(u)
                                     currentTable.markUpdated()
-                                    hasUnsavedChanges = true
+                                    TableRepository.saveOrUpdate(currentTable)
                                 }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("▲") }
                                 Button(onClick = {
                                     val u = currentTable.shiftCellsBatch(selectedCells, ShiftDirection.DOWN)
                                     selectedCells.clear(); selectedCells.addAll(u)
                                     currentTable.markUpdated()
-                                    hasUnsavedChanges = true
+                                    TableRepository.saveOrUpdate(currentTable)
                                 }, modifier = Modifier.size(width = 30.dp, height = 26.dp), contentPadding = PaddingValues(0.dp)) { Text("▼") }
                             }
                         }
 
+                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE (VERTICALLY EXPANDED, NEVER HIDDEN)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2163,6 +2220,7 @@ fun MobileTableEditorScreen() {
                                 .horizontalScroll(rememberScrollState())
                         ) {
                             Column(modifier = Modifier.width(totalTableWidth)) {
+                                // Table Header Row
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2171,7 +2229,7 @@ fun MobileTableEditorScreen() {
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Box(modifier = Modifier.width(actionColWidth).border(1.dp, Color.LightGray).background(Color(0xFFECEFF1)).padding(6.dp)) {
-                                        BasicTextField(value = currentTable.cornerHeader, onValueChange = { currentTable.cornerHeader = it; hasUnsavedChanges = true }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF0D47A1)))
+                                        BasicTextField(value = currentTable.cornerHeader, onValueChange = { currentTable.cornerHeader = it }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF0D47A1)))
                                     }
                                     visibleColIndices.forEach { colIdx ->
                                         val colDef = currentTable.headers[colIdx]
@@ -2180,12 +2238,14 @@ fun MobileTableEditorScreen() {
                                         Box(modifier = Modifier.width(dataColWidth).border(1.dp, Color.LightGray).background(Color(0xFFF5F9FD)).padding(6.dp)) {
                                             Column {
                                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                                    BasicTextField(value = colDef.name, onValueChange = { currentTable.headers[colIdx] = colDef.copy(name = it); currentTable.markUpdated(); hasUnsavedChanges = true }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 13.sp), modifier = Modifier.weight(1f))
+                                                    BasicTextField(value = colDef.name, onValueChange = { currentTable.headers[colIdx] = colDef.copy(name = it); currentTable.markUpdated() }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 13.sp), modifier = Modifier.weight(1f))
                                                     Text("✕", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) {
                                                         currentTable.deleteColumn(colIdx)
                                                         columnValueFilters.remove(colIdx)
+                                                        hiddenChartDateIndices.remove(colIdx)
                                                         currentTable.markUpdated()
-                                                        hasUnsavedChanges = true
+                                                        TableRepository.saveOrUpdate(currentTable)
+                                                        tableSnapshot = currentTable.createSnapshot()
                                                     })
                                                 }
                                                 Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -2193,10 +2253,11 @@ fun MobileTableEditorScreen() {
                                                     Box {
                                                         Text("[${colDef.type.label.take(7)} ▼]", fontSize = 10.sp, color = Color(0xFF0D47A1), modifier = Modifier.background(Color(0xFFE1F5FE), RoundedCornerShape(3.dp)).clickable { typeExpanded = true }.padding(horizontal = 4.dp, vertical = 1.dp))
                                                         DropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
-                                                            ColumnType.values().forEach { ct -> DropdownMenuItem(onClick = { currentTable.headers[colIdx] = colDef.copy(type = ct); currentTable.markUpdated(); hasUnsavedChanges = true; typeExpanded = false }) { Text(ct.label) } }
+                                                            ColumnType.values().forEach { ct -> DropdownMenuItem(onClick = { currentTable.headers[colIdx] = colDef.copy(type = ct); currentTable.markUpdated(); typeExpanded = false }) { Text(ct.label) } }
                                                         }
                                                     }
 
+                                                    // COLUMN VALUE FILTER BUTTON
                                                     Box(
                                                         modifier = Modifier
                                                             .background(if (isColFiltered) Color(0xFFFF6F00) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
@@ -2215,12 +2276,12 @@ fun MobileTableEditorScreen() {
                                                         Text("◀", modifier = Modifier.clickable(enabled = colIdx > 0) {
                                                             currentTable.moveColumn(colIdx, colIdx - 1)
                                                             currentTable.markUpdated()
-                                                            hasUnsavedChanges = true
+                                                            TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 12.sp)
                                                         Text("▶", modifier = Modifier.clickable(enabled = colIdx < currentTable.headers.size - 1) {
                                                             currentTable.moveColumn(colIdx, colIdx + 1)
                                                             currentTable.markUpdated()
-                                                            hasUnsavedChanges = true
+                                                            TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 12.sp)
                                                     }
                                                 }
@@ -2231,7 +2292,8 @@ fun MobileTableEditorScreen() {
                                         Button(onClick = {
                                             currentTable.addColumn("Col ${currentTable.headers.size + 1}")
                                             currentTable.markUpdated()
-                                            hasUnsavedChanges = true
+                                            TableRepository.saveOrUpdate(currentTable)
+                                            tableSnapshot = currentTable.createSnapshot()
                                         }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                                     }
                                 }
@@ -2263,22 +2325,22 @@ fun MobileTableEditorScreen() {
                                             ) {
                                                 Box(modifier = Modifier.width(actionColWidth).border(0.5.dp, Color(0xFFCFD8DC)).background(Color(0xFFF9FAFB)).padding(6.dp)) {
                                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                                        BasicTextField(value = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" }, onValueChange = { currentTable.rowNames[origRIdx] = it; currentTable.markUpdated(); hasUnsavedChanges = true }, textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)), modifier = Modifier.weight(1f))
+                                                        BasicTextField(value = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" }, onValueChange = { currentTable.rowNames[origRIdx] = it; currentTable.markUpdated() }, textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)), modifier = Modifier.weight(1f))
                                                         Text("✎", fontSize = 13.sp, color = Color(0xFF00897B), fontWeight = FontWeight.Bold, modifier = Modifier.clickable { editingRowIndex = origRIdx; showRowEditorDialog = true }.padding(horizontal = 2.dp))
                                                         Text("▲", modifier = Modifier.clickable(enabled = origRIdx > 0) {
                                                             currentTable.moveRow(origRIdx, origRIdx - 1)
                                                             currentTable.markUpdated()
-                                                            hasUnsavedChanges = true
+                                                            TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 11.sp)
                                                         Text("▼", modifier = Modifier.clickable(enabled = origRIdx < currentTable.rows.size - 1) {
                                                             currentTable.moveRow(origRIdx, origRIdx + 1)
                                                             currentTable.markUpdated()
-                                                            hasUnsavedChanges = true
+                                                            TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 11.sp)
                                                         Text("✕", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable {
                                                             currentTable.deleteRow(origRIdx)
                                                             currentTable.markUpdated()
-                                                            hasUnsavedChanges = true
+                                                            TableRepository.saveOrUpdate(currentTable)
                                                         })
                                                     }
                                                 }
@@ -2327,7 +2389,6 @@ fun MobileTableEditorScreen() {
                                                                         onValueChange = {
                                                                             currentTable.setCellValue(origRIdx, colIdx, it)
                                                                             currentTable.markUpdated()
-                                                                            hasUnsavedChanges = true
                                                                         },
                                                                         enabled = !isMultiSelectMode,
                                                                         textStyle = TextStyle(
@@ -2370,7 +2431,6 @@ fun MobileTableEditorScreen() {
                                                                                     val newVal = if (isPresent) "" else "Present"
                                                                                     currentTable.setCellValue(origRIdx, colIdx, newVal)
                                                                                     currentTable.markUpdated()
-                                                                                    hasUnsavedChanges = true
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                         ) {
@@ -2387,7 +2447,6 @@ fun MobileTableEditorScreen() {
                                                                                     val newVal = if (isAbsent) "" else "Absent"
                                                                                     currentTable.setCellValue(origRIdx, colIdx, newVal)
                                                                                     currentTable.markUpdated()
-                                                                                    hasUnsavedChanges = true
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                         ) {
@@ -2408,7 +2467,6 @@ fun MobileTableEditorScreen() {
                                                                         onValueChange = { newVal ->
                                                                             currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '-' })
                                                                             currentTable.markUpdated()
-                                                                            hasUnsavedChanges = true
                                                                         },
                                                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                                         enabled = !isMultiSelectMode,
@@ -2432,7 +2490,6 @@ fun MobileTableEditorScreen() {
                                                                                     val num = cellValue.toIntOrNull() ?: 0
                                                                                     currentTable.setCellValue(origRIdx, colIdx, (num - 1).toString())
                                                                                     currentTable.markUpdated()
-                                                                                    hasUnsavedChanges = true
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                         ) {
@@ -2446,7 +2503,6 @@ fun MobileTableEditorScreen() {
                                                                                     val num = cellValue.toIntOrNull() ?: 0
                                                                                     currentTable.setCellValue(origRIdx, colIdx, (num + 1).toString())
                                                                                     currentTable.markUpdated()
-                                                                                    hasUnsavedChanges = true
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                         ) {
@@ -2462,7 +2518,6 @@ fun MobileTableEditorScreen() {
                                                                     onValueChange = { newVal ->
                                                                         currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '.' || it == '-' })
                                                                         currentTable.markUpdated()
-                                                                        hasUnsavedChanges = true
                                                                     },
                                                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                                                     enabled = !isMultiSelectMode,
@@ -2485,7 +2540,6 @@ fun MobileTableEditorScreen() {
                                                                     onValueChange = {
                                                                         currentTable.setCellValue(origRIdx, colIdx, it)
                                                                         currentTable.markUpdated()
-                                                                        hasUnsavedChanges = true
                                                                     },
                                                                     enabled = !isMultiSelectMode,
                                                                     textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
@@ -2719,9 +2773,9 @@ fun MobileTableEditorScreen() {
                                     Column(modifier = Modifier.weight(1f).clickable {
                                         currentTable = t
                                         tableSnapshot = t.createSnapshot()
-                                        hasUnsavedChanges = false
                                         columnValueFilters.clear()
                                         hiddenColumns.clear()
+                                        hiddenChartDateIndices.clear()
                                         globalSearchQuery = ""
                                         selectedCells.clear(); selectedCells.add(Pair(0, 0))
                                         anchorCell = Pair(0, 0)
@@ -2791,9 +2845,9 @@ fun MobileTableEditorScreen() {
                                 Column(modifier = Modifier.weight(1f).clickable {
                                     currentTable = t
                                     tableSnapshot = t.createSnapshot()
-                                    hasUnsavedChanges = false
                                     columnValueFilters.clear()
                                     hiddenColumns.clear()
+                                    hiddenChartDateIndices.clear()
                                     globalSearchQuery = ""
                                     selectedCells.clear(); selectedCells.add(Pair(0, 0))
                                     anchorCell = Pair(0, 0)

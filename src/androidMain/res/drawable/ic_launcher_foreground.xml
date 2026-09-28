@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Document Shadow -->
+    <path
+        android:fillColor="#33000000"
+        android:pathData="M31,27 h48 c4.4,0 8,3.6 8,8 v46 c0,4.4 -3.6,8 -8,8 h-48 c-4.4,0 -8,-3.6 -8,-8 v-46 c0,-4.4 3.6,-8 8,-8 z" />
+
+    <!-- Document Card Body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,25 h48 c4.4,0 8,3.6 8,8 v46 c0,4.4 -3.6,8 -8,8 h-48 c-4.4,0 -8,-3.6 -8,-8 v-46 c0,-4.4 3.6,-8 8,-8 z" />
+
+    <!-- Table Header Row (Top Banner) -->
+    <path
+        android:fillColor="#1976D2"
+        android:pathData="M22,33 c0,-4.4 3.6,-8 8,-8 h48 c4.4,0 8,3.6 8,8 v8 h-64 z" />
+
+    <!-- Header Cell Dividers -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,28 h1.5 v10 h-1.5 z M64,28 h1.5 v10 h-1.5 z" />
+
+    <!-- Header Column Text Indicator Bars -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M27,32 h12 v2.5 h-12 z M49,32 h11 v2.5 h-11 z M69,32 h12 v2.5 h-12 z" />
+
+    <!-- Data Row 1 (Grid lines & cells) -->
+    <path
+        android:fillColor="#ECEFF1"
+        android:pathData="M26,45 h56 v7 h-56 z" />
+    <path
+        android:fillColor="#90A4AE"
+        android:pathData="M28,47.5 h11 v2 h-11 z M49,47.5 h10 v2 h-10 z M69,47.5 h12 v2 h-12 z" />
+
+    <!-- Data Row 2 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M26,54 h56 v7 h-56 z" />
+    <path
+        android:fillColor="#B0BEC5"
+        android:pathData="M28,56.5 h13 v2 h-13 z M49,56.5 h8 v2 h-8 z M69,56.5 h10 v2 h-10 z" />
+
+    <!-- Data Row 3 -->
+    <path
+        android:fillColor="#ECEFF1"
+        android:pathData="M26,63 h56 v7 h-56 z" />
+    <path
+        android:fillColor="#90A4AE"
+        android:pathData="M28,65.5 h10 v2 h-10 z M49,65.5 h12 v2 h-12 z M69,65.5 h8 v2 h-8 z" />
+
+    <!-- Data Row 4 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M26,72 h56 v7 h-56 z" />
+    <path
+        android:fillColor="#B0BEC5"
+        android:pathData="M28,74.5 h12 v2 h-12 z M49,74.5 h9 v2 h-9 z M69,74.5 h11 v2 h-11 z" />
+
+    <!-- Vertical Column Grid Dividers -->
+    <path
+        android:fillColor="#CFD8DC"
+        android:pathData="M44,41 h1 v39 h-1 z M64,41 h1 v39 h-1 z" />
+
+    <!-- Camera / Image Scan Badge (Overlapping Bottom-Left) -->
+    <!-- Badge Shadow -->
+    <path
+        android:fillColor="#33000000"
+        android:pathData="M19,53 h28 c3,0 5,2 5,5 v24 c0,3 -2,5 -5,5 h-28 c-3,0 -5,-2 -5,-5 v-24 c0,-3 2,-5 5,-5 z" />
+
+    <!-- Badge Card (Teal Gradient Background) -->
+    <path
+        android:fillColor="#00897B"
+        android:pathData="M18,52 h28 c3,0 5,2 5,5 v24 c0,3 -2,5 -5,5 h-28 c-3,0 -5,-2 -5,-5 v-24 c0,-3 2,-5 5,-5 z" />
+
+    <!-- Camera Body Silhouette Inside Badge -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M25,60 h4 l1.5,-2.5 h7 l1.5,2.5 h4 c1.5,0 2.5,1 2.5,2.5 v13 c0,1.5 -1,2.5 -2.5,2.5 h-18 c-1.5,0 -2.5,-1 -2.5,-2.5 v-13 c0,-1.5 1,-2.5 2.5,-2.5 z" />
+
+    <!-- Camera Lens Ring -->
+    <path
+        android:fillColor="#00897B"
+        android:pathData="M32,64 a4.5,4.5 0 1,0 0.001,0 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,66 a2.5,2.5 0 1,0 0.001,0 z" />
+
+    <!-- Glowing Scan / Transform Beam -->
+    <path
+        android:fillColor="#00E676"
+        android:pathData="M47,56 L55,51 L55,55 L84,55 L84,58 L55,58 L55,62 Z" />
+
+    <!-- Sparkle Stars for AI Extraction -->
+    <path
+        android:fillColor="#FFD600"
+        android:pathData="M81,18 L83,23 L88,25 L83,27 L81,32 L79,27 L74,25 L79,23 Z" />
+    <path
+        android:fillColor="#FFD600"
+        android:pathData="M23,20 L24.5,23.5 L28,25 L24.5,26.5 L23,30 L21.5,26.5 L18,25 L21.5,23.5 Z" />
+</vector>

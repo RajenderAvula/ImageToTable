@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import java.util.Locale
 import kotlin.math.*
 
 enum class CropExtractionMode {
@@ -81,7 +82,7 @@ fun FullScreenCropperDialog(
     var base90Rotation by remember { mutableFloatStateOf(0f) }
     var angleInputText by remember { mutableStateOf("0.0") }
     var customAngle by remember { mutableFloatStateOf(0f) }
-    val totalRotation get() = (base90Rotation + customAngle)
+    val totalRotation: Float = base90Rotation + customAngle
 
     // 4 Independent Corner coordinates stored in Bitmap Coordinate Space (Pixel-perfect & invariant to zoom/pan)
     var bTopLeft by remember(workingBitmap) {
@@ -139,9 +140,12 @@ fun FullScreenCropperDialog(
         val dx = sx0 - cx
         val dy = sy0 - cy
 
-        val rad = totalRotation * (PI.toFloat() / 180f)
-        val rotX = dx * cos(rad) - dy * sin(rad)
-        val rotY = dx * sin(rad) + dy * cos(rad)
+        val rad = Math.toRadians(totalRotation.toDouble())
+        val cosVal = cos(rad).toFloat()
+        val sinVal = sin(rad).toFloat()
+
+        val rotX = dx * cosVal - dy * sinVal
+        val rotY = dx * sinVal + dy * cosVal
 
         val finalX = cx + rotX * zoomScale + panOffset.x
         val finalY = cy + rotY * zoomScale + panOffset.y
@@ -175,9 +179,12 @@ fun FullScreenCropperDialog(
         val unzoomX = dx / zoomScale
         val unzoomY = dy / zoomScale
 
-        val invRad = -totalRotation * (PI.toFloat() / 180f)
-        val unrotX = unzoomX * cos(invRad) - unzoomY * sin(invRad)
-        val unrotY = unzoomX * sin(invRad) + unzoomY * cos(invRad)
+        val invRad = Math.toRadians(-totalRotation.toDouble())
+        val cosInv = cos(invRad).toFloat()
+        val sinInv = sin(invRad).toFloat()
+
+        val unrotX = unzoomX * cosInv - unzoomY * sinInv
+        val unrotY = unzoomX * sinInv + unzoomY * cosInv
 
         val origScreenX = cx + unrotX
         val origScreenY = cy + unrotY
@@ -190,12 +197,12 @@ fun FullScreenCropperDialog(
 
     // Perspective unwarp & quadrilateral crop
     fun calculatePerspectiveCroppedBitmap(): Bitmap? {
-        val widthTop = hypot(bTopRight.x - bTopLeft.x, bTopRight.y - bTopLeft.y)
-        val widthBottom = hypot(bBottomRight.x - bBottomLeft.x, bBottomRight.y - bBottomLeft.y)
+        val widthTop = hypot((bTopRight.x - bTopLeft.x).toDouble(), (bTopRight.y - bTopLeft.y).toDouble()).toFloat()
+        val widthBottom = hypot((bBottomRight.x - bBottomLeft.x).toDouble(), (bBottomRight.y - bBottomLeft.y).toDouble()).toFloat()
         val targetWidth = max(widthTop, widthBottom).roundToInt().coerceIn(10, 4096)
 
-        val heightLeft = hypot(bBottomLeft.x - bTopLeft.x, bBottomLeft.y - bTopLeft.y)
-        val heightRight = hypot(bBottomRight.x - bTopRight.x, bBottomRight.y - bTopRight.y)
+        val heightLeft = hypot((bBottomLeft.x - bTopLeft.x).toDouble(), (bBottomLeft.y - bTopLeft.y).toDouble()).toFloat()
+        val heightRight = hypot((bBottomRight.x - bTopRight.x).toDouble(), (bBottomRight.y - bTopRight.y).toDouble()).toFloat()
         val targetHeight = max(heightLeft, heightRight).roundToInt().coerceIn(10, 4096)
 
         val srcPts = floatArrayOf(
@@ -549,7 +556,7 @@ fun FullScreenCropperDialog(
                             }
 
                             Text(
-                                text = "Total: ${"%.1f".format(totalRotation)}°",
+                                text = "Total: ${String.format(Locale.US, "%.1f", totalRotation)}°",
                                 color = Color(0xFFB0BEC5),
                                 fontSize = 11.sp
                             )

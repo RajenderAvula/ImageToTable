@@ -182,6 +182,12 @@ fun MobileTableEditorScreen() {
     var editingRowIndex by remember { mutableIntStateOf(0) }
     var showAddDateColumnDialog by remember { mutableStateOf(false) }
 
+    // Formula Builder Dialog State
+    var showFormulaBuilderDialog by remember { mutableStateOf(false) }
+    var formulaEditingColIndex by remember { mutableIntStateOf(-1) }
+    var formulaInitialColName by remember { mutableStateOf("Total") }
+    var formulaInitialExpression by remember { mutableStateOf("") }
+
     // Custom Row and Column Show/Hide Dialog States
     var showColumnVisibilityDialog by remember { mutableStateOf(false) }
     var showRowVisibilityDialog by remember { mutableStateOf(false) }
@@ -211,8 +217,9 @@ fun MobileTableEditorScreen() {
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
 
-    // --- SYNCHRONIZED SAVE & CANCEL FUNCTIONS (ACROSS ALL UIS) ---
+    // Synchronized Save and Cancel Across All UIs
     fun performSynchronizedSave() {
+        currentTable.recomputeFormulas()
         currentTable.markUpdated()
         TableRepository.saveOrUpdate(currentTable)
         tableSnapshot = currentTable.createSnapshot()
@@ -232,6 +239,7 @@ fun MobileTableEditorScreen() {
         tableSnapshot.rows.forEach { r ->
             currentTable.rows.add(mutableStateListOf(*r.toTypedArray()))
         }
+        currentTable.recomputeFormulas()
         currentTable.markUpdated()
         TableRepository.saveOrUpdate(currentTable)
         statusMessage = "Reverted changes to last saved state."
@@ -272,8 +280,7 @@ fun MobileTableEditorScreen() {
                         cal.set(Calendar.HOUR_OF_DAY, hourOfDay)
                         cal.set(Calendar.MINUTE, minute)
                         val outFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                        val formatted = outFormat.format(cal.time)
-                        currentTable.setCellValue(rIdx, cIdx, formatted)
+                        currentTable.setCellValue(rIdx, cIdx, outFormat.format(cal.time))
                         currentTable.markUpdated()
                         TableRepository.saveOrUpdate(currentTable)
                     },
@@ -488,6 +495,7 @@ fun MobileTableEditorScreen() {
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val content = stream.bufferedReader().use { it.readText() }
                     currentTable.importCsv(content)
+                    currentTable.recomputeFormulas()
                     currentTable.markUpdated()
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
@@ -698,6 +706,7 @@ fun MobileTableEditorScreen() {
                 } else {
                     currentTable.appendExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
                 }
+                currentTable.recomputeFormulas()
                 currentTable.markUpdated()
                 TableRepository.saveOrUpdate(currentTable)
                 tableSnapshot = currentTable.createSnapshot()
@@ -718,6 +727,7 @@ fun MobileTableEditorScreen() {
                 } else {
                     currentTable.loadExtractedData(verifiedHeaders.map { it.name }, verifiedRows)
                 }
+                currentTable.recomputeFormulas()
                 currentTable.markUpdated()
                 TableRepository.saveOrUpdate(currentTable)
                 tableSnapshot = currentTable.createSnapshot()
@@ -734,6 +744,7 @@ fun MobileTableEditorScreen() {
                 tableData = currentTable,
                 onDismiss = { showDedicatedEditor = false },
                 onSave = {
+                    currentTable.recomputeFormulas()
                     currentTable.markUpdated()
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
@@ -764,6 +775,41 @@ fun MobileTableEditorScreen() {
                 previewCroppedBitmap = null
                 showNewTableDialog = false
                 statusMessage = "Created table '${newTable.tableName}' and saved to storage!"
+            }
+        )
+    }
+
+    // FORMULA BUILDER MODAL
+    if (showFormulaBuilderDialog) {
+        FormulaBuilderDialog(
+            initialColName = formulaInitialColName,
+            initialFormula = formulaInitialExpression,
+            headers = currentTable.headers,
+            sampleRowValues = currentTable.rows.firstOrNull() ?: emptyList(),
+            targetColIndex = formulaEditingColIndex,
+            onDismiss = { showFormulaBuilderDialog = false },
+            onConfirm = { colName, formula ->
+                if (formulaEditingColIndex >= 0 && formulaEditingColIndex < currentTable.headers.size) {
+                    val existing = currentTable.headers[formulaEditingColIndex]
+                    currentTable.headers[formulaEditingColIndex] = existing.copy(
+                        name = colName,
+                        type = ColumnType.FORMULA,
+                        formula = formula
+                    )
+                } else {
+                    currentTable.addColumn(
+                        name = colName,
+                        type = ColumnType.FORMULA,
+                        formula = formula
+                    )
+                }
+                currentTable.recomputeFormulas()
+                currentTable.markUpdated()
+                TableRepository.saveOrUpdate(currentTable)
+                tableSnapshot = currentTable.createSnapshot()
+                showFormulaBuilderDialog = false
+                statusMessage = "Applied formula: $colName = $formula"
+                Toast.makeText(context, "Formula applied!", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -809,7 +855,11 @@ fun MobileTableEditorScreen() {
                             currentTable.setCellValue(rIdx, lastC, w)
                         }
                     }
+                    TokenPlacementMode.REPLACE_CURRENT_TABLE -> {
+                        currentTable.replaceTableWithStructuredTokens(words, 3, false, 0)
+                    }
                 }
+                currentTable.recomputeFormulas()
                 currentTable.markUpdated()
                 TableRepository.saveOrUpdate(currentTable)
                 tableSnapshot = currentTable.createSnapshot()
@@ -849,6 +899,7 @@ fun MobileTableEditorScreen() {
                             currentTable.rows[safeIndex].add("")
                         }
                     }
+                    currentTable.recomputeFormulas()
                     currentTable.markUpdated()
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
@@ -1055,7 +1106,7 @@ fun MobileTableEditorScreen() {
                     ) {
                         Text("Uncheck any date to hide it from the daily attendance chart:", fontSize = 11.sp, color = Color.DarkGray)
                         Spacer(modifier = Modifier.height(4.dp))
-                        allDateColsLoop@ for (colIdx in dateColIndices) {
+                        for (colIdx in dateColIndices) {
                             val colName = currentTable.headers.getOrNull(colIdx)?.name ?: "Date $colIdx"
                             val isVisible = !hiddenChartDateIndices.contains(colIdx)
 
@@ -1178,7 +1229,7 @@ fun MobileTableEditorScreen() {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(text = colDef.name, fontSize = 13.sp, fontWeight = if (isVisible) FontWeight.SemiBold else FontWeight.Normal)
-                                    Text(text = "[${colDef.type.label}]", fontSize = 10.sp, color = Color.Gray)
+                                    Text(text = if (colDef.type == ColumnType.FORMULA) "[fx: ${colDef.formula}]" else "[${colDef.type.label}]", fontSize = 10.sp, color = Color.Gray)
                                 }
                             }
                         }
@@ -1335,7 +1386,6 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Filter computation with custom hidden rows and columns support
     val visibleColIndices = currentTable.headers.indices.filter { !hiddenColumns.contains(it) }
 
     val filteredRowIndices = currentTable.rows.indices.filter { rIdx ->
@@ -1564,7 +1614,6 @@ fun MobileTableEditorScreen() {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Left side: Clean metrics without congestion
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1589,7 +1638,6 @@ fun MobileTableEditorScreen() {
                                 )
                             }
 
-                            // Right side: Permanent Cancel & Save Buttons
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -1741,6 +1789,20 @@ fun MobileTableEditorScreen() {
                         ) {
                             Button(onClick = { showNewTableDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
 
+                            // ADD FORMULA COLUMN BUTTON
+                            Button(
+                                onClick = {
+                                    formulaEditingColIndex = -1
+                                    formulaInitialColName = "Total"
+                                    formulaInitialExpression = ""
+                                    showFormulaBuilderDialog = true
+                                },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("fx + Formula Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
                             // SHOW / HIDE CUSTOM COLUMNS BUTTON
                             Button(
                                 onClick = { showColumnVisibilityDialog = true },
@@ -1759,7 +1821,7 @@ fun MobileTableEditorScreen() {
                                 Text("👁 Rows (${currentTable.rows.size - hiddenRows.size}/${currentTable.rows.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            // RESET HIDDEN ROWS & COLUMNS CHIP (Shows whenever anything is hidden)
+                            // RESET HIDDEN ROWS & COLUMNS CHIP
                             if (hiddenColumns.isNotEmpty() || hiddenRows.isNotEmpty()) {
                                 Button(
                                     onClick = {
@@ -2410,7 +2472,6 @@ fun MobileTableEditorScreen() {
                                         currentTable.clearCells(selectedCells)
                                         currentTable.markUpdated()
                                         TableRepository.saveOrUpdate(currentTable)
-                                        tableSnapshot = currentTable.createSnapshot()
                                         statusMessage = "Cleared ${selectedCells.size} cell(s)!"
                                     },
                                     enabled = selectedCells.isNotEmpty(),
@@ -2470,8 +2531,15 @@ fun MobileTableEditorScreen() {
                                     visibleColIndices.forEach { colIdx ->
                                         val colDef = currentTable.headers[colIdx]
                                         val isColFiltered = columnValueFilters.containsKey(colIdx)
+                                        val isFormulaCol = colDef.type == ColumnType.FORMULA
 
-                                        Box(modifier = Modifier.width(dataColWidth).border(1.dp, Color.LightGray).background(Color(0xFFF5F9FD)).padding(6.dp)) {
+                                        Box(
+                                            modifier = Modifier
+                                                .width(dataColWidth)
+                                                .border(1.dp, if (isFormulaCol) Color(0xFF81C784) else Color.LightGray)
+                                                .background(if (isFormulaCol) Color(0xFFF1F8E9) else Color(0xFFF5F9FD))
+                                                .padding(6.dp)
+                                        ) {
                                             Column {
                                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                                     BasicTextField(value = colDef.name, onValueChange = { currentTable.headers[colIdx] = colDef.copy(name = it); currentTable.markUpdated() }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 13.sp), modifier = Modifier.weight(1f))
@@ -2502,9 +2570,44 @@ fun MobileTableEditorScreen() {
                                                 Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                                     var typeExpanded by remember { mutableStateOf(false) }
                                                     Box {
-                                                        Text("[${colDef.type.label.take(7)} ▼]", fontSize = 10.sp, color = Color(0xFF0D47A1), modifier = Modifier.background(Color(0xFFE1F5FE), RoundedCornerShape(3.dp)).clickable { typeExpanded = true }.padding(horizontal = 4.dp, vertical = 1.dp))
+                                                        Text(
+                                                            text = if (isFormulaCol) "[fx: ${colDef.formula.take(10)} ▼]" else "[${colDef.type.label.take(7)} ▼]",
+                                                            fontSize = 10.sp,
+                                                            color = if (isFormulaCol) Color(0xFF2E7D32) else Color(0xFF0D47A1),
+                                                            fontWeight = if (isFormulaCol) FontWeight.Bold else FontWeight.Normal,
+                                                            modifier = Modifier
+                                                                .background(if (isFormulaCol) Color(0xFFDCEDC8) else Color(0xFFE1F5FE), RoundedCornerShape(3.dp))
+                                                                .clickable { typeExpanded = true }
+                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
                                                         DropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
-                                                            ColumnType.values().forEach { ct -> DropdownMenuItem(onClick = { currentTable.headers[colIdx] = colDef.copy(type = ct); currentTable.markUpdated(); typeExpanded = false }) { Text(ct.label) } }
+                                                            if (isFormulaCol) {
+                                                                DropdownMenuItem(onClick = {
+                                                                    formulaEditingColIndex = colIdx
+                                                                    formulaInitialColName = colDef.name
+                                                                    formulaInitialExpression = colDef.formula
+                                                                    showFormulaBuilderDialog = true
+                                                                    typeExpanded = false
+                                                                }) {
+                                                                    Text("✎ Edit Formula Expression", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                }
+                                                                Divider()
+                                                            }
+                                                            ColumnType.values().forEach { ct ->
+                                                                DropdownMenuItem(onClick = {
+                                                                    if (ct == ColumnType.FORMULA) {
+                                                                        formulaEditingColIndex = colIdx
+                                                                        formulaInitialColName = colDef.name
+                                                                        formulaInitialExpression = colDef.formula
+                                                                        showFormulaBuilderDialog = true
+                                                                    } else {
+                                                                        currentTable.headers[colIdx] = colDef.copy(type = ct, formula = "")
+                                                                        currentTable.recomputeFormulas()
+                                                                        currentTable.markUpdated()
+                                                                    }
+                                                                    typeExpanded = false
+                                                                }) { Text(ct.label) }
+                                                            }
                                                         }
                                                     }
 
@@ -2611,10 +2714,12 @@ fun MobileTableEditorScreen() {
                                                     val isDateCol = colDef.type == ColumnType.DATE || parseDateFromHeader(colDef.name) != null
                                                     val isPresent = isAttendancePresent(cellValue)
                                                     val isAbsent = isAttendanceAbsent(cellValue)
+                                                    val isFormulaCol = colDef.type == ColumnType.FORMULA
 
                                                     val cellBg = when {
                                                         isSelected && isMultiSelectMode -> Color(0xFFE1BEE7)
                                                         isSelected -> Color(0xFFBBDEFB)
+                                                        isFormulaCol -> Color(0xFFF1F8E9)
                                                         isDateCol && isPresent -> Color(0xFFE8F5E9)
                                                         isDateCol && isAbsent -> Color(0xFFFFEBEE)
                                                         else -> Color.White
@@ -2623,6 +2728,7 @@ fun MobileTableEditorScreen() {
                                                         isAnchor -> Color(0xFF00C853)
                                                         isSelected && isMultiSelectMode -> Color(0xFF7B1FA2)
                                                         isSelected -> Color(0xFF1976D2)
+                                                        isFormulaCol -> Color(0xFFA5D6A7)
                                                         else -> Color.LightGray
                                                     }
 
@@ -2634,6 +2740,36 @@ fun MobileTableEditorScreen() {
                                                             .padding(horizontal = 6.dp, vertical = 4.dp)
                                                     ) {
                                                         when (colDef.type) {
+                                                            ColumnType.FORMULA -> {
+                                                                Row(
+                                                                    modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .clickable {
+                                                                            formulaEditingColIndex = colIdx
+                                                                            formulaInitialColName = colDef.name
+                                                                            formulaInitialExpression = colDef.formula
+                                                                            showFormulaBuilderDialog = true
+                                                                        },
+                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                                ) {
+                                                                    Text(
+                                                                        text = cellValue.ifBlank { "0" },
+                                                                        fontSize = 12.sp,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        color = if (cellValue.startsWith("#")) Color.Red else Color(0xFF1B5E20),
+                                                                        modifier = Modifier.weight(1f)
+                                                                    )
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(Color(0xFFDCEDC8), RoundedCornerShape(3.dp))
+                                                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                    ) {
+                                                                        Text("fx", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                    }
+                                                                }
+                                                            }
+
                                                             ColumnType.DATE -> {
                                                                 Row(
                                                                     modifier = Modifier.fillMaxWidth(),

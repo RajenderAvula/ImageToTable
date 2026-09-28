@@ -13,17 +13,20 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.*
 
 enum class ColumnType(val label: String) {
     TEXT("Text"),
     NUMBER("Number"),
     DECIMAL("Decimal"),
-    DATE("Date")
+    DATE("Date"),
+    FORMULA("Formula")
 }
 
 data class ColumnDef(
     var name: String,
-    var type: ColumnType = ColumnType.TEXT
+    var type: ColumnType = ColumnType.TEXT,
+    var formula: String = ""
 )
 
 enum class ShiftDirection {
@@ -34,7 +37,8 @@ enum class TokenPlacementMode {
     SEQUENCE_FROM_ACTIVE,
     FILL_MULTI_SELECTION,
     APPEND_NEW_ROW,
-    APPEND_NEW_COL
+    APPEND_NEW_COL,
+    REPLACE_CURRENT_TABLE
 }
 
 data class ClipboardItem(
@@ -56,6 +60,138 @@ data class TableSnapshot(
     val rowNames: List<String>,
     val rows: List<List<String>>
 )
+
+object FormulaEvaluator {
+    fun evaluate(
+        formula: String,
+        headers: List<ColumnDef>,
+        rowValues: List<String>,
+        targetColIdx: Int = -1
+    ): String {
+        if (formula.isBlank()) return ""
+        var expr = formula.trim()
+        if (expr.startsWith("=")) expr = expr.substring(1).trim()
+        if (expr.isBlank()) return ""
+
+        headers.forEachIndexed { idx, col ->
+            if (idx != targetColIdx) {
+                val raw = rowValues.getOrElse(idx) { "" }.trim()
+                val num = raw.replace(",", "").toDoubleOrNull() ?: 0.0
+                val formattedNum = if (num == num.toLong().toDouble()) num.toLong().toString() else num.toString()
+
+                expr = expr.replace("[${col.name}]", formattedNum, ignoreCase = true)
+                expr = expr.replace("{${col.name}}", formattedNum, ignoreCase = true)
+                expr = expr.replace("[Col ${idx + 1}]", formattedNum, ignoreCase = true)
+                expr = expr.replace("[Col${idx + 1}]", formattedNum, ignoreCase = true)
+            }
+        }
+
+        return try {
+            val result = parseAndEval(expr)
+            if (result.isNaN() || result.isInfinite()) {
+                "#DIV/0!"
+            } else if (result == result.toLong().toDouble()) {
+                result.toLong().toString()
+            } else {
+                String.format(Locale.US, "%.2f", result).trimEnd('0').trimEnd('.')
+            }
+        } catch (_: Exception) {
+            "#ERR"
+        }
+    }
+
+    private fun parseAndEval(str: String): Double {
+        var pos = -1
+        var ch = 0
+
+        fun nextChar() {
+            ch = if (++pos < str.length) str[pos].code else -1
+        }
+
+        fun eat(charToEat: Int): Boolean {
+            while (ch == ' '.code) nextChar()
+            if (ch == charToEat) {
+                nextChar()
+                return true
+            }
+            return false
+        }
+
+        fun parseExpression(): Double {
+            var x = parseTerm()
+            while (true) {
+                when {
+                    eat('+'.code) -> x += parseTerm()
+                    eat('-'.code) -> x -= parseTerm()
+                    else -> return x
+                }
+            }
+        }
+
+        fun parseTerm(): Double {
+            var x = parseFactor()
+            while (true) {
+                when {
+                    eat('*'.code) || eat('×'.code) -> x *= parseFactor()
+                    eat('/'.code) || eat('÷'.code) -> {
+                        val divisor = parseFactor()
+                        if (divisor == 0.0) throw ArithmeticException("Div by zero")
+                        x /= divisor
+                    }
+                    eat('%'.code) -> x %= parseFactor()
+                    else -> return x
+                }
+            }
+        }
+
+        fun parseFactor(): Double {
+            if (eat('+'.code)) return +parseFactor()
+            if (eat('-'.code)) return -parseFactor()
+
+            var x: Double
+            val startPos = pos
+            if (eat('('.code)) {
+                x = parseExpression()
+                eat(')'.code)
+            } else if ((ch in '0'.code..'9'.code) || ch == '.'.code) {
+                while ((ch in '0'.code..'9'.code) || ch == '.'.code) nextChar()
+                x = str.substring(startPos, pos).toDouble()
+            } else if (ch in 'a'.code..'z'.code || ch in 'A'.code..'Z'.code) {
+                while (ch in 'a'.code..'z'.code || ch in 'A'.code..'Z'.code) nextChar()
+                val func = str.substring(startPos, pos).uppercase(Locale.US)
+                if (eat('('.code)) {
+                    val args = mutableListOf<Double>()
+                    if (!eat(')'.code)) {
+                        do {
+                            args.add(parseExpression())
+                        } while (eat(','.code))
+                        eat(')'.code)
+                    }
+                    x = when (func) {
+                        "SUM" -> args.sum()
+                        "AVG", "AVERAGE" -> if (args.isNotEmpty()) args.average() else 0.0
+                        "MIN" -> args.minOrNull() ?: 0.0
+                        "MAX" -> args.maxOrNull() ?: 0.0
+                        "ROUND" -> if (args.isNotEmpty()) args[0].roundToLong().toDouble() else 0.0
+                        "ABS" -> if (args.isNotEmpty()) abs(args[0]) else 0.0
+                        "SQRT" -> if (args.isNotEmpty()) sqrt(args[0]) else 0.0
+                        else -> throw RuntimeException("Unknown func: $func")
+                    }
+                } else {
+                    x = 0.0
+                }
+            } else {
+                x = 0.0
+            }
+
+            if (eat('^'.code)) x = x.pow(parseFactor())
+            return x
+        }
+
+        nextChar()
+        return parseExpression()
+    }
+}
 
 class TableData(
     initialId: String = UUID.randomUUID().toString(),
@@ -89,6 +225,25 @@ class TableData(
         tableDateTime = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
     }
 
+    fun recomputeFormulas() {
+        headers.forEachIndexed { colIdx, colDef ->
+            if (colDef.type == ColumnType.FORMULA && colDef.formula.isNotBlank()) {
+                for (rIdx in rows.indices) {
+                    while (rows[rIdx].size <= colIdx) {
+                        rows[rIdx].add("")
+                    }
+                    val evaluated = FormulaEvaluator.evaluate(
+                        formula = colDef.formula,
+                        headers = headers,
+                        rowValues = rows[rIdx],
+                        targetColIdx = colIdx
+                    )
+                    rows[rIdx][colIdx] = evaluated
+                }
+            }
+        }
+    }
+
     fun getCellValue(rowIndex: Int, colIndex: Int): String {
         return if (rowIndex in rows.indices && colIndex in headers.indices) {
             rows[rowIndex].getOrElse(colIndex) { "" }
@@ -103,6 +258,7 @@ class TableData(
                 rows[rowIndex].add("")
             }
             rows[rowIndex][colIndex] = value
+            recomputeFormulas()
             markUpdated()
         }
     }
@@ -112,14 +268,20 @@ class TableData(
         val newRow = mutableStateListOf(*Array(headers.size) { "" })
         rows.add(safeIndex, newRow)
         rowNames.add(safeIndex, name)
+        recomputeFormulas()
         markUpdated()
     }
 
-    fun addColumn(name: String = "Col ${headers.size + 1}", type: ColumnType = ColumnType.TEXT) {
-        headers.add(ColumnDef(name, type))
+    fun addColumn(
+        name: String = "Col ${headers.size + 1}",
+        type: ColumnType = ColumnType.TEXT,
+        formula: String = ""
+    ) {
+        headers.add(ColumnDef(name, type, formula))
         for (row in rows) {
             row.add("")
         }
+        recomputeFormulas()
         markUpdated()
     }
 
@@ -127,6 +289,7 @@ class TableData(
         if (index in rows.indices) {
             rows.removeAt(index)
             if (index in rowNames.indices) rowNames.removeAt(index)
+            recomputeFormulas()
             markUpdated()
         }
     }
@@ -137,6 +300,7 @@ class TableData(
             for (row in rows) {
                 if (index in row.indices) row.removeAt(index)
             }
+            recomputeFormulas()
             markUpdated()
         }
     }
@@ -158,6 +322,7 @@ class TableData(
             val c = row.removeAt(fromIndex)
             row.add(toIndex, c)
         }
+        recomputeFormulas()
         markUpdated()
     }
 
@@ -167,6 +332,7 @@ class TableData(
                 r[c] = ""
             }
         }
+        recomputeFormulas()
         markUpdated()
     }
 
@@ -176,6 +342,7 @@ class TableData(
                 rows[r][c] = ""
             }
         }
+        recomputeFormulas()
         markUpdated()
     }
 
@@ -192,7 +359,10 @@ class TableData(
             if (isCut) rows[r][c] = ""
             ClipboardItem(r - minR, c - minC, v)
         }
-        if (isCut) markUpdated()
+        if (isCut) {
+            recomputeFormulas()
+            markUpdated()
+        }
         return CellClipboard(items, isCut)
     }
 
@@ -236,6 +406,7 @@ class TableData(
                 pasted.add(Pair(targetR, targetC))
             }
         }
+        recomputeFormulas()
         markUpdated()
         return pasted
     }
@@ -280,6 +451,7 @@ class TableData(
             rows[newR][newC] = value
             updatedCoords.add(Pair(newR, newC))
         }
+        recomputeFormulas()
         markUpdated()
         return updatedCoords
     }
@@ -308,6 +480,69 @@ class TableData(
             }
             rows.add(mutableStateListOf(*newRowData.toTypedArray()))
         }
+        recomputeFormulas()
+        markUpdated()
+    }
+
+    fun replaceTableWithStructuredTokens(
+        tokens: List<String>,
+        columnCount: Int,
+        firstRowAsHeader: Boolean,
+        excludedRowsCount: Int
+    ) {
+        val colCount = columnCount.coerceAtLeast(1)
+        var chunked = tokens.chunked(colCount)
+        if (excludedRowsCount > 0) {
+            chunked = chunked.drop(excludedRowsCount.coerceAtMost(chunked.size))
+        }
+
+        headers.clear()
+        rows.clear()
+        rowNames.clear()
+
+        if (firstRowAsHeader && chunked.isNotEmpty()) {
+            val headerNames = chunked.first()
+            for (c in 0 until colCount) {
+                headers.add(ColumnDef(headerNames.getOrElse(c) { "Col ${c + 1}" }))
+            }
+            chunked = chunked.drop(1)
+        } else {
+            for (c in 1..colCount) {
+                headers.add(ColumnDef("Col $c"))
+            }
+        }
+
+        chunked.forEachIndexed { idx, rowVals ->
+            rowNames.add("Row ${idx + 1}")
+            val padded = rowVals + List((colCount - rowVals.size).coerceAtLeast(0)) { "" }
+            rows.add(mutableStateListOf(*padded.toTypedArray()))
+        }
+        recomputeFormulas()
+        markUpdated()
+    }
+
+    fun appendStructuredTokens(
+        tokens: List<String>,
+        columnCount: Int,
+        excludedRowsCount: Int
+    ) {
+        val colCount = columnCount.coerceAtLeast(1)
+        while (headers.size < colCount) {
+            headers.add(ColumnDef("Col ${headers.size + 1}"))
+        }
+
+        var chunked = tokens.chunked(colCount)
+        if (excludedRowsCount > 0) {
+            chunked = chunked.drop(excludedRowsCount.coerceAtMost(chunked.size))
+        }
+
+        val startR = rows.size
+        chunked.forEachIndexed { idx, rowVals ->
+            rowNames.add("Row ${startR + idx + 1}")
+            val padded = rowVals + List((headers.size - rowVals.size).coerceAtLeast(0)) { "" }
+            rows.add(mutableStateListOf(*padded.toTypedArray()))
+        }
+        recomputeFormulas()
         markUpdated()
     }
 
@@ -316,7 +551,7 @@ class TableData(
         selectedRowIndices: List<Int>,
         selectedColIndices: List<Int>
     ): TableData {
-        val subHeaders = selectedColIndices.mapNotNull { headers.getOrNull(it) }
+        val subHeaders = selectedColIndices.mapNotNull { headers.getOrNull(it)?.copy() }
         val subRows = mutableListOf<List<String>>()
         val subRowNames = mutableListOf<String>()
 
@@ -330,13 +565,15 @@ class TableData(
             }
         }
 
-        return TableData(
+        val subTable = TableData(
             initialName = newTableName,
             initialCorner = cornerHeader,
             initialHeaders = if (subHeaders.isNotEmpty()) subHeaders else listOf(ColumnDef("Col 1")),
             initialRows = subRows,
             initialRowNames = subRowNames
         )
+        subTable.recomputeFormulas()
+        return subTable
     }
 
     fun loadExtractedData(newHeaders: List<String>, newRows: List<List<String>>) {
@@ -350,6 +587,7 @@ class TableData(
             val safeRow = rowData + List((newHeaders.size - rowData.size).coerceAtLeast(0)) { "" }
             rows.add(mutableStateListOf(*safeRow.toTypedArray()))
         }
+        recomputeFormulas()
         markUpdated()
     }
 
@@ -364,6 +602,7 @@ class TableData(
             val padded = rowData + List((headers.size - rowData.size).coerceAtLeast(0)) { "" }
             rows.add(mutableStateListOf(*padded.toTypedArray()))
         }
+        recomputeFormulas()
         markUpdated()
     }
 
@@ -439,6 +678,7 @@ class TableData(
         for (r in snapshot.rows) {
             rows.add(mutableStateListOf(*r.toTypedArray()))
         }
+        recomputeFormulas()
         markUpdated()
     }
 }
@@ -504,6 +744,7 @@ object TableRepository {
                         val hObj = JSONObject().apply {
                             put("name", h.name)
                             put("type", h.type.name)
+                            put("formula", h.formula)
                         }
                         hArr.put(hObj)
                     }
@@ -557,8 +798,9 @@ object TableRepository {
                     val hObj = hArr.getJSONObject(hIdx)
                     val hName = hObj.getString("name")
                     val hTypeStr = hObj.optString("type", "TEXT")
+                    val hFormula = hObj.optString("formula", "")
                     val hType = try { ColumnType.valueOf(hTypeStr) } catch (_: Exception) { ColumnType.TEXT }
-                    headersList.add(ColumnDef(hName, hType))
+                    headersList.add(ColumnDef(hName, hType, hFormula))
                 }
 
                 val rnArr = obj.optJSONArray("rowNames")
@@ -589,6 +831,7 @@ object TableRepository {
                     initialRows = rowsList,
                     initialRowNames = rowNamesList
                 )
+                table.recomputeFormulas()
                 tables.add(table)
             }
         } catch (e: Exception) {

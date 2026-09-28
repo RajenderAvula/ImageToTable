@@ -182,6 +182,12 @@ fun MobileTableEditorScreen() {
     var editingRowIndex by remember { mutableIntStateOf(0) }
     var showAddDateColumnDialog by remember { mutableStateOf(false) }
 
+    // Custom Row and Column Show/Hide Dialog States
+    var showColumnVisibilityDialog by remember { mutableStateOf(false) }
+    var showRowVisibilityDialog by remember { mutableStateOf(false) }
+    val hiddenColumns = remember { mutableStateListOf<Int>() }
+    val hiddenRows = remember { mutableStateListOf<Int>() }
+
     var activeFilterColIdx by remember { mutableStateOf<Int?>(null) }
 
     var showGeneratedPdfInspector by remember { mutableStateOf(false) }
@@ -195,7 +201,6 @@ fun MobileTableEditorScreen() {
     var activeExportFormat by remember { mutableStateOf(ExportFormat.PDF) }
 
     var globalSearchQuery by remember { mutableStateOf("") }
-    val hiddenColumns = remember { mutableStateListOf<Int>() }
     var drawerSearchQuery by remember { mutableStateOf("") }
     val columnValueFilters = remember { mutableStateMapOf<Int, Set<String>>() }
 
@@ -206,7 +211,7 @@ fun MobileTableEditorScreen() {
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
 
-    // --- SYNCHRONIZED SAVE & CANCEL FUNCTIONS (ACCROSS ALL UIS) ---
+    // --- SYNCHRONIZED SAVE & CANCEL FUNCTIONS (ACROSS ALL UIS) ---
     fun performSynchronizedSave() {
         currentTable.markUpdated()
         TableRepository.saveOrUpdate(currentTable)
@@ -297,6 +302,7 @@ fun MobileTableEditorScreen() {
             tableSnapshot = next.createSnapshot()
             columnValueFilters.clear()
             hiddenColumns.clear()
+            hiddenRows.clear()
             hiddenChartDateIndices.clear()
             globalSearchQuery = ""
             selectedCells.clear()
@@ -747,6 +753,7 @@ fun MobileTableEditorScreen() {
                 tableSnapshot = newTable.createSnapshot()
                 columnValueFilters.clear()
                 hiddenColumns.clear()
+                hiddenRows.clear()
                 hiddenChartDateIndices.clear()
                 globalSearchQuery = ""
                 selectedCells.clear(); selectedCells.add(Pair(0, 0))
@@ -857,6 +864,8 @@ fun MobileTableEditorScreen() {
                 onDeleteColumn = { colIdx ->
                     currentTable.deleteColumn(colIdx)
                     columnValueFilters.remove(colIdx)
+                    hiddenColumns.remove(colIdx)
+                    hiddenChartDateIndices.remove(colIdx)
                     currentTable.markUpdated()
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
@@ -895,6 +904,7 @@ fun MobileTableEditorScreen() {
                 },
                 onDeleteRow = {
                     currentTable.deleteRow(safeIndex)
+                    hiddenRows.remove(safeIndex)
                     currentTable.markUpdated()
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
@@ -1021,19 +1031,22 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    if (showChartDateSelectorDialog) {
-        val allDateCols = currentTable.headers.indices.filter { idx ->
+    // SHOW / HIDE ATTENDANCE DATES IN CHART
+    val dateColIndices = remember(currentTable.headers) {
+        currentTable.headers.indices.filter { idx ->
             val def = currentTable.headers[idx]
             def.type == ColumnType.DATE || parseDateFromHeader(def.name) != null
         }
+    }
 
+    if (showChartDateSelectorDialog) {
         AlertDialog(
             onDismissRequest = { showChartDateSelectorDialog = false },
             title = {
                 Text("Show / Hide Dates in Attendance Chart", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFF1565C0))
             },
             text = {
-                if (allDateCols.isEmpty()) {
+                if (dateColIndices.isEmpty()) {
                     Text("No date columns found in this table. Add date columns first.", fontSize = 12.sp, color = Color.Gray)
                 } else {
                     Column(
@@ -1042,8 +1055,8 @@ fun MobileTableEditorScreen() {
                     ) {
                         Text("Uncheck any date to hide it from the daily attendance chart:", fontSize = 11.sp, color = Color.DarkGray)
                         Spacer(modifier = Modifier.height(4.dp))
-                        allDateCols.forEach { colIdx ->
-                            val colName = currentTable.headers[colIdx].name
+                        allDateColsLoop@ for (colIdx in dateColIndices) {
+                            val colName = currentTable.headers.getOrNull(colIdx)?.name ?: "Date $colIdx"
                             val isVisible = !hiddenChartDateIndices.contains(colIdx)
 
                             Row(
@@ -1078,6 +1091,197 @@ fun MobileTableEditorScreen() {
                 ) {
                     Text("Done", color = Color.White)
                 }
+            }
+        )
+    }
+
+    // SHOW / HIDE CUSTOM COLUMNS DIALOG
+    if (showColumnVisibilityDialog) {
+        var colSearchQuery by remember { mutableStateOf("") }
+        val filteredColsForDialog = remember(currentTable.headers, colSearchQuery) {
+            currentTable.headers.indices.filter { idx ->
+                colSearchQuery.isBlank() || currentTable.headers[idx].name.contains(colSearchQuery, ignoreCase = true)
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showColumnVisibilityDialog = false },
+            title = {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Show / Hide Columns", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1565C0))
+                    Text("${currentTable.headers.size - hiddenColumns.size}/${currentTable.headers.size} Visible", fontSize = 11.sp, color = Color.Gray)
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                    OutlinedTextField(
+                        value = colSearchQuery,
+                        onValueChange = { colSearchQuery = it },
+                        placeholder = { Text("Search columns...", fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        singleLine = true,
+                        textStyle = TextStyle(fontSize = 12.sp)
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { hiddenColumns.clear() },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(2.dp)
+                        ) { Text("Show All", fontSize = 11.sp) }
+
+                        OutlinedButton(
+                            onClick = {
+                                hiddenColumns.clear()
+                                hiddenColumns.addAll(currentTable.headers.indices.drop(1))
+                            },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(2.dp)
+                        ) { Text("Hide Others", fontSize = 11.sp) }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Divider()
+
+                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        itemsIndexed(filteredColsForDialog) { _, cIdx ->
+                            val colDef = currentTable.headers[cIdx]
+                            val isVisible = !hiddenColumns.contains(cIdx)
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isVisible) {
+                                            if (currentTable.headers.size - hiddenColumns.size > 1) {
+                                                hiddenColumns.add(cIdx)
+                                            } else {
+                                                Toast.makeText(context, "At least 1 column must stay visible", Toast.LENGTH_SHORT).show()
+                                            }
+                                        } else {
+                                            hiddenColumns.remove(cIdx)
+                                        }
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isVisible,
+                                    onCheckedChange = { checked ->
+                                        if (checked) hiddenColumns.remove(cIdx)
+                                        else if (currentTable.headers.size - hiddenColumns.size > 1) hiddenColumns.add(cIdx)
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = colDef.name, fontSize = 13.sp, fontWeight = if (isVisible) FontWeight.SemiBold else FontWeight.Normal)
+                                    Text(text = "[${colDef.type.label}]", fontSize = 10.sp, color = Color.Gray)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showColumnVisibilityDialog = false }) { Text("Done") }
+            }
+        )
+    }
+
+    // SHOW / HIDE CUSTOM ROWS DIALOG
+    if (showRowVisibilityDialog) {
+        var rowSearchQueryInDialog by remember { mutableStateOf("") }
+        val filteredRowsForDialog = remember(currentTable.rows, currentTable.rowNames, rowSearchQueryInDialog) {
+            currentTable.rows.indices.filter { idx ->
+                val rName = currentTable.rowNames.getOrElse(idx) { "Row ${idx + 1}" }
+                rowSearchQueryInDialog.isBlank() ||
+                rName.contains(rowSearchQueryInDialog, ignoreCase = true) ||
+                currentTable.rows[idx].any { it.contains(rowSearchQueryInDialog, ignoreCase = true) }
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showRowVisibilityDialog = false },
+            title = {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Show / Hide Rows", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1565C0))
+                    Text("${currentTable.rows.size - hiddenRows.size}/${currentTable.rows.size} Visible", fontSize = 11.sp, color = Color.Gray)
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                    OutlinedTextField(
+                        value = rowSearchQueryInDialog,
+                        onValueChange = { rowSearchQueryInDialog = it },
+                        placeholder = { Text("Search rows...", fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        singleLine = true,
+                        textStyle = TextStyle(fontSize = 12.sp)
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { hiddenRows.clear() },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(2.dp)
+                        ) { Text("Show All", fontSize = 11.sp) }
+
+                        OutlinedButton(
+                            onClick = {
+                                hiddenRows.clear()
+                                hiddenRows.addAll(currentTable.rows.indices)
+                            },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(2.dp)
+                        ) { Text("Hide All", fontSize = 11.sp) }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Divider()
+
+                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        itemsIndexed(filteredRowsForDialog) { _, rIdx ->
+                            val rName = currentTable.rowNames.getOrElse(rIdx) { "Row ${rIdx + 1}" }
+                            val isVisible = !hiddenRows.contains(rIdx)
+                            val firstCellVal = currentTable.rows.getOrNull(rIdx)?.firstOrNull().orEmpty()
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isVisible) hiddenRows.add(rIdx)
+                                        else hiddenRows.remove(rIdx)
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isVisible,
+                                    onCheckedChange = { checked ->
+                                        if (checked) hiddenRows.remove(rIdx)
+                                        else hiddenRows.add(rIdx)
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = rName, fontSize = 13.sp, fontWeight = if (isVisible) FontWeight.SemiBold else FontWeight.Normal)
+                                    if (firstCellVal.isNotBlank()) {
+                                        Text(text = "Preview: $firstCellVal", fontSize = 10.sp, color = Color.Gray, maxLines = 1)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showRowVisibilityDialog = false }) { Text("Done") }
             }
         )
     }
@@ -1131,9 +1335,12 @@ fun MobileTableEditorScreen() {
         )
     }
 
+    // Filter computation with custom hidden rows and columns support
     val visibleColIndices = currentTable.headers.indices.filter { !hiddenColumns.contains(it) }
 
     val filteredRowIndices = currentTable.rows.indices.filter { rIdx ->
+        if (hiddenRows.contains(rIdx)) return@filter false
+
         val nameMatch = currentTable.rowNames.getOrElse(rIdx) { "" }.contains(globalSearchQuery, ignoreCase = true)
         val cellMatch = currentTable.rows[rIdx].any { it.contains(globalSearchQuery, ignoreCase = true) }
         val matchesGlobal = globalSearchQuery.isBlank() || nameMatch || cellMatch
@@ -1368,14 +1575,14 @@ fun MobileTableEditorScreen() {
                                         .padding(horizontal = 8.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = "${currentTable.rows.size} Rows × ${currentTable.headers.size} Cols",
+                                        text = "${filteredRowIndices.size}/${currentTable.rows.size} Rows • ${visibleColIndices.size}/${currentTable.headers.size} Cols",
                                         color = Color(0xFF0369A1),
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 11.sp
                                     )
                                 }
                                 Text(
-                                    text = statusMessage.take(24),
+                                    text = statusMessage.take(20),
                                     fontSize = 11.sp,
                                     color = Color.Gray,
                                     maxLines = 1
@@ -1412,7 +1619,6 @@ fun MobileTableEditorScreen() {
                     }
                 }
             } else {
-                // Full Screen Mode Header with Permanent Clean Save & Cancel Buttons
                 Surface(
                     color = Color(0xFFFFFFFF),
                     elevation = 3.dp,
@@ -1513,7 +1719,6 @@ fun MobileTableEditorScreen() {
                 .padding(paddingValues)
                 .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
         ) {
-            // TAB 0: MERGED TABLE AND SCAN & CONVERT WORKSPACE (VERTICAL SCROLL ENABLED SO CELLS NEVER GET HIDDEN)
             if (selectedTabIndex == 0 || isFullScreen) {
                 key(currentTable.id) {
                     val tab0VerticalScrollState = rememberScrollState()
@@ -1535,6 +1740,39 @@ fun MobileTableEditorScreen() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Button(onClick = { showNewTableDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
+
+                            // SHOW / HIDE CUSTOM COLUMNS BUTTON
+                            Button(
+                                onClick = { showColumnVisibilityDialog = true },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF334155)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("👁 Columns (${visibleColIndices.size}/${currentTable.headers.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            // SHOW / HIDE CUSTOM ROWS BUTTON
+                            Button(
+                                onClick = { showRowVisibilityDialog = true },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF475569)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("👁 Rows (${currentTable.rows.size - hiddenRows.size}/${currentTable.rows.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            // RESET HIDDEN ROWS & COLUMNS CHIP (Shows whenever anything is hidden)
+                            if (hiddenColumns.isNotEmpty() || hiddenRows.isNotEmpty()) {
+                                Button(
+                                    onClick = {
+                                        hiddenColumns.clear()
+                                        hiddenRows.clear()
+                                        statusMessage = "Restored all hidden rows and columns"
+                                    },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD97706)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text("✕ Reset Hidden (${hiddenColumns.size}c, ${hiddenRows.size}r)", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
 
                             // ADD DATE ATTENDANCE COLUMN BUTTON
                             Button(
@@ -1561,6 +1799,7 @@ fun MobileTableEditorScreen() {
                                 tableSnapshot = subTable.createSnapshot()
                                 columnValueFilters.clear()
                                 hiddenColumns.clear()
+                                hiddenRows.clear()
                                 hiddenChartDateIndices.clear()
                                 globalSearchQuery = ""
                                 selectedCells.clear(); selectedCells.add(Pair(0, 0))
@@ -1593,17 +1832,15 @@ fun MobileTableEditorScreen() {
                                 currentTable.addRow()
                                 currentTable.markUpdated()
                                 TableRepository.saveOrUpdate(currentTable)
-                                tableSnapshot = currentTable.createSnapshot()
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Row", color = Color.White, fontSize = 11.sp) }
                             Button(onClick = {
                                 currentTable.addColumn("Col ${currentTable.headers.size + 1}")
                                 currentTable.markUpdated()
                                 TableRepository.saveOrUpdate(currentTable)
-                                tableSnapshot = currentTable.createSnapshot()
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                         }
 
-                        // SCROLLABLE MONTHLY ATTENDANCE CHART (WITH MULTI-DATE SHOW / HIDE FILTER)
+                        // ATTENDANCE CHART
                         if (showAttendanceChart) {
                             val allDateColIndices = remember(currentTable.headers) {
                                 currentTable.headers.indices.filter { idx ->
@@ -1627,32 +1864,31 @@ fun MobileTableEditorScreen() {
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = "📊 Daily Attendance Chart (${filteredRowIndices.size} filtered rows)",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF1565C0)
-                                        )
-
-                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            if (allDateColIndices.isNotEmpty()) {
-                                                Button(
-                                                    onClick = { showChartDateSelectorDialog = true },
-                                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
-                                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                                    modifier = Modifier.height(26.dp)
-                                                ) {
-                                                    Text("⚙ Select Dates (${dateColIndices.size}/${allDateColIndices.size})", color = Color.White, fontSize = 10.sp)
-                                                }
-                                            }
-
+                                        Column {
+                                            Text(
+                                                text = "📊 Daily Attendance Chart (${filteredRowIndices.size} filtered rows)",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF1565C0)
+                                            )
                                             if (dateColIndices.isNotEmpty()) {
                                                 Text(
-                                                    text = "${dateColIndices.size} Shown",
-                                                    fontSize = 11.sp,
+                                                    text = "${dateColIndices.size} of ${allDateColIndices.size} Dates Visible",
+                                                    fontSize = 10.sp,
                                                     color = Color.Gray,
-                                                    fontWeight = FontWeight.SemiBold
+                                                    fontWeight = FontWeight.Medium
                                                 )
+                                            }
+                                        }
+
+                                        if (allDateColIndices.isNotEmpty()) {
+                                            Button(
+                                                onClick = { showChartDateSelectorDialog = true },
+                                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
+                                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                                modifier = Modifier.height(26.dp)
+                                            ) {
+                                                Text("⚙ Select Dates (${dateColIndices.size}/${allDateColIndices.size})", color = Color.White, fontSize = 10.sp)
                                             }
                                         }
                                     }
@@ -1758,7 +1994,7 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // EXPANDED SCANNER WORKSPACE: CROPPED IMAGE WITH PINCH-TO-ZOOM + SPACIOUS TOKENS UI
+                        // SCANNER WORKSPACE
                         if (showScanWorkspaceInTable) {
                             val activeDisplayBitmap = previewCroppedBitmap ?: selectedBitmap
                             var scannerViewMode by remember { mutableIntStateOf(0) }
@@ -2212,7 +2448,7 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE (VERTICALLY EXPANDED, NEVER HIDDEN)
+                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2239,14 +2475,29 @@ fun MobileTableEditorScreen() {
                                             Column {
                                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                                     BasicTextField(value = colDef.name, onValueChange = { currentTable.headers[colIdx] = colDef.copy(name = it); currentTable.markUpdated() }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 13.sp), modifier = Modifier.weight(1f))
-                                                    Text("✕", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) {
-                                                        currentTable.deleteColumn(colIdx)
-                                                        columnValueFilters.remove(colIdx)
-                                                        hiddenChartDateIndices.remove(colIdx)
-                                                        currentTable.markUpdated()
-                                                        TableRepository.saveOrUpdate(currentTable)
-                                                        tableSnapshot = currentTable.createSnapshot()
-                                                    })
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                        Text(
+                                                            "👁",
+                                                            fontSize = 12.sp,
+                                                            modifier = Modifier.clickable {
+                                                                if (currentTable.headers.size - hiddenColumns.size > 1) {
+                                                                    hiddenColumns.add(colIdx)
+                                                                    statusMessage = "Hidden column '${colDef.name}'"
+                                                                } else {
+                                                                    Toast.makeText(context, "At least 1 column must stay visible", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                            }.padding(horizontal = 2.dp)
+                                                        )
+                                                        Text("✕", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) {
+                                                            currentTable.deleteColumn(colIdx)
+                                                            columnValueFilters.remove(colIdx)
+                                                            hiddenColumns.remove(colIdx)
+                                                            hiddenChartDateIndices.remove(colIdx)
+                                                            currentTable.markUpdated()
+                                                            TableRepository.saveOrUpdate(currentTable)
+                                                            tableSnapshot = currentTable.createSnapshot()
+                                                        })
+                                                    }
                                                 }
                                                 Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                                     var typeExpanded by remember { mutableStateOf(false) }
@@ -2306,8 +2557,8 @@ fun MobileTableEditorScreen() {
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
-                                            text = if (globalSearchQuery.isNotBlank() || columnValueFilters.isNotEmpty()) 
-                                                "No rows match the search or filter criteria." 
+                                            text = if (globalSearchQuery.isNotBlank() || columnValueFilters.isNotEmpty() || hiddenRows.isNotEmpty()) 
+                                                "No rows match the search, filter, or visibility criteria." 
                                             else "Table is empty. Tap '+ Row' above to add rows.",
                                             color = Color.Gray,
                                             fontSize = 13.sp
@@ -2327,6 +2578,10 @@ fun MobileTableEditorScreen() {
                                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                                                         BasicTextField(value = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" }, onValueChange = { currentTable.rowNames[origRIdx] = it; currentTable.markUpdated() }, textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)), modifier = Modifier.weight(1f))
                                                         Text("✎", fontSize = 13.sp, color = Color(0xFF00897B), fontWeight = FontWeight.Bold, modifier = Modifier.clickable { editingRowIndex = origRIdx; showRowEditorDialog = true }.padding(horizontal = 2.dp))
+                                                        Text("👁", fontSize = 12.sp, modifier = Modifier.clickable {
+                                                            hiddenRows.add(origRIdx)
+                                                            statusMessage = "Hidden Row ${origRIdx + 1}"
+                                                        }.padding(horizontal = 2.dp))
                                                         Text("▲", modifier = Modifier.clickable(enabled = origRIdx > 0) {
                                                             currentTable.moveRow(origRIdx, origRIdx - 1)
                                                             currentTable.markUpdated()
@@ -2339,6 +2594,7 @@ fun MobileTableEditorScreen() {
                                                         }, fontSize = 11.sp)
                                                         Text("✕", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable {
                                                             currentTable.deleteRow(origRIdx)
+                                                            hiddenRows.remove(origRIdx)
                                                             currentTable.markUpdated()
                                                             TableRepository.saveOrUpdate(currentTable)
                                                         })
@@ -2758,6 +3014,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
+            // TAB 2: SAVED TABLES LIST & HISTORY
             if (selectedTabIndex == 2 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -2775,6 +3032,7 @@ fun MobileTableEditorScreen() {
                                         tableSnapshot = t.createSnapshot()
                                         columnValueFilters.clear()
                                         hiddenColumns.clear()
+                                        hiddenRows.clear()
                                         hiddenChartDateIndices.clear()
                                         globalSearchQuery = ""
                                         selectedCells.clear(); selectedCells.add(Pair(0, 0))
@@ -2793,6 +3051,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
+            // TAB 3: SETTINGS & CACHE MANAGER
             if (selectedTabIndex == 3 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text("Settings & App Maintenance", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
@@ -2817,6 +3076,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
+    // SAVED TABLES DRAWER
     if (showTableHistoryDrawer) {
         AlertDialog(
             onDismissRequest = { showTableHistoryDrawer = false },
@@ -2847,6 +3107,7 @@ fun MobileTableEditorScreen() {
                                     tableSnapshot = t.createSnapshot()
                                     columnValueFilters.clear()
                                     hiddenColumns.clear()
+                                    hiddenRows.clear()
                                     hiddenChartDateIndices.clear()
                                     globalSearchQuery = ""
                                     selectedCells.clear(); selectedCells.add(Pair(0, 0))

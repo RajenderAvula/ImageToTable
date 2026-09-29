@@ -36,6 +36,28 @@ class AndroidOcrService(
         val centerX: Int
     )
 
+    private data class DetectedGrid(
+        val hLines: List<Float>,
+        val vLines: List<Float>
+    ) {
+        val rows: Int get() = (hLines.size - 1).coerceAtLeast(0)
+        val cols: Int get() = (vLines.size - 1).coerceAtLeast(0)
+
+        fun findRowIndex(y: Float): Int {
+            for (i in 0 until rows) {
+                if (y >= hLines[i] && y <= hLines[i + 1]) return i
+            }
+            return -1
+        }
+
+        fun findColIndex(x: Float): Int {
+            for (j in 0 until cols) {
+                if (x >= vLines[j] && x <= vLines[j + 1]) return j
+            }
+            return -1
+        }
+    }
+
     suspend fun extractTable(
         bitmap: Bitmap,
         excludeHeaders: Boolean = false
@@ -47,7 +69,27 @@ class AndroidOcrService(
         val inputImage = InputImage.fromBitmap(bitmap, 0)
         val visionText = processImageAsync(inputImage)
 
-        // 1. Collect all detected text elements
+        if (visionText.textBlocks.isEmpty()) {
+            return@withContext Pair(listOf("Col 1", "Col 2"), emptyList())
+        }
+
+        // 1. Detect if physical grid border lines exist
+        val detectedGrid = detectTableBorders(bitmap)
+
+        if (detectedGrid != null && detectedGrid.rows > 1 && detectedGrid.cols > 0) {
+            withContext(Dispatchers.Main) {
+                onStatusUpdate("Extracting bordered cells as single tokens...")
+            }
+            // Within border lines: words separated by space in a cell form a single token
+            return@withContext extractBorderedTable(visionText, detectedGrid, excludeHeaders)
+        }
+
+        withContext(Dispatchers.Main) {
+            onStatusUpdate("Extracting borderless text elements...")
+        }
+
+        // 2. Borderless mode: Collect individual space-separated words as discrete elements
+        // "Jane Doe is a good person" on a single line produces 6 separate elements
         val elements = mutableListOf<TextElementBox>()
         for (block in visionText.textBlocks) {
             for (line in block.lines) {
@@ -64,7 +106,7 @@ class AndroidOcrService(
             return@withContext Pair(listOf("Col 1", "Col 2"), emptyList())
         }
 
-        // 2. Global Column Interval Detection (Prevents merged or blank cells from shifting columns)
+        // 3. Global Column Interval Detection (Distinguishes individual words across the line)
         val sortedByX = elements.sortedBy { it.rect.left }
         val columnClusters = mutableListOf<MutableList<TextElementBox>>()
 
@@ -97,7 +139,7 @@ class AndroidOcrService(
         }
         val totalCols = columns.size.coerceAtLeast(1)
 
-        // 3. Row Clustering with Multi-Line Single-Cell Detection
+        // 4. Row Clustering with Multi-Line Single-Cell Detection
         val sortedByY = elements.sortedBy { it.rect.top }
         val rowBands = mutableListOf<MutableList<TextElementBox>>()
 
@@ -127,7 +169,7 @@ class AndroidOcrService(
 
         rowBands.sortBy { rowList -> rowList.minOf { it.rect.top } }
 
-        // 4. Map Elements into Column Buckets & Concatenate Multi-Line Cells
+        // 5. Map Elements into Column Buckets & Concatenate Multi-Line Cells
         val gridRows = mutableListOf<List<String>>()
 
         for (rowElements in rowBands) {
@@ -147,7 +189,7 @@ class AndroidOcrService(
                 cellBuckets[bestColIdx].add(elem)
             }
 
-            // Concatenate multi-line text into a single cell
+            // Concatenate vertically stacked lines into a single cell, keeping horizontal words distinct
             val rowValues = cellBuckets.map { bucketElements ->
                 if (bucketElements.isEmpty()) {
                     ""
@@ -155,22 +197,12 @@ class AndroidOcrService(
                     bucketElements.sortWith(compareBy<TextElementBox> { it.rect.top }.thenBy { it.rect.left })
 
                     val cellBuilder = StringBuilder()
-                    var lastBox: Rect? = null
-
                     for (b in bucketElements) {
-                        if (lastBox == null) {
+                        if (cellBuilder.isEmpty()) {
                             cellBuilder.append(b.text)
                         } else {
-                            val isNewLine = (b.rect.top - lastBox.bottom) > -4 &&
-                                    (b.rect.top - lastBox.top) > (lastBox.height() * 0.6)
-
-                            if (isNewLine) {
-                                cellBuilder.append(" ").append(b.text)
-                            } else {
-                                cellBuilder.append(" ").append(b.text)
-                            }
+                            cellBuilder.append(" ").append(b.text)
                         }
-                        lastBox = b.rect
                     }
                     cellBuilder.toString().trim()
                 }
@@ -185,7 +217,7 @@ class AndroidOcrService(
             return@withContext Pair(List(totalCols) { "Col ${it + 1}" }, emptyList())
         }
 
-        // 5. Exclude Headers vs Parse Headers
+        // 6. Exclude Headers vs Parse Headers
         if (excludeHeaders) {
             val defaultHeaders = List(totalCols) { "Col ${it + 1}" }
             Pair(defaultHeaders, gridRows)
@@ -196,6 +228,143 @@ class AndroidOcrService(
             val dataRows = if (gridRows.size > 1) gridRows.drop(1) else emptyList()
             Pair(headers, dataRows)
         }
+    }
+
+    /**
+     * Extracts tokens across the table.
+     * In bordered mode: words inside a border cell are grouped into 1 token.
+     * In borderless mode: words in "Jane Doe is a good person" are returned as 6 separate tokens.
+     */
+    suspend fun extractTokens(bitmap: Bitmap): List<String> = withContext(Dispatchers.Default) {
+        val (headers, rows) = extractTable(bitmap, excludeHeaders = false)
+        val tokens = mutableListOf<String>()
+        headers.filter { it.isNotBlank() }.forEach { tokens.add(it) }
+        rows.flatten().filter { it.isNotBlank() }.forEach { tokens.add(it) }
+        tokens
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // BORDERED EXTRACTION: All space-separated words within a cell border form a single token
+    // -----------------------------------------------------------------------------------------
+    private fun extractBorderedTable(
+        visionText: Text,
+        grid: DetectedGrid,
+        excludeHeaders: Boolean
+    ): Pair<List<String>, List<List<String>>> {
+        val cellMatrix = Array(grid.rows) { Array(grid.cols) { mutableListOf<String>() } }
+
+        for (block in visionText.textBlocks) {
+            for (line in block.lines) {
+                for (elem in line.elements) {
+                    val box = elem.boundingBox ?: continue
+                    val centerX = box.centerX().toFloat()
+                    val centerY = box.centerY().toFloat()
+
+                    val rIdx = grid.findRowIndex(centerY)
+                    val cIdx = grid.findColIndex(centerX)
+
+                    if (rIdx in 0 until grid.rows && cIdx in 0 until grid.cols) {
+                        val elemText = elem.text.trim()
+                        if (elemText.isNotBlank()) {
+                            cellMatrix[rIdx][cIdx].add(elemText)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Words separated by space within the same bordered cell are joined into a single token
+        val rawRows = cellMatrix.map { rowCells ->
+            rowCells.map { cellWords ->
+                cellWords.joinToString(" ").trim()
+            }
+        }
+
+        val nonEmptyRows = rawRows.filter { row -> row.any { it.isNotBlank() } }
+
+        if (nonEmptyRows.isEmpty()) {
+            return Pair(List(grid.cols) { "Col ${it + 1}" }, emptyList())
+        }
+
+        return if (excludeHeaders) {
+            val headers = List(grid.cols) { "Col ${it + 1}" }
+            Pair(headers, nonEmptyRows)
+        } else {
+            val headers = nonEmptyRows.first().mapIndexed { idx, cellText ->
+                cellText.ifBlank { "Col ${idx + 1}" }
+            }
+            val dataRows = if (nonEmptyRows.size > 1) nonEmptyRows.drop(1) else emptyList()
+            Pair(headers, dataRows)
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // BORDER DETECTION VIA PROJECTION PROFILES
+    // -----------------------------------------------------------------------------------------
+    private fun detectTableBorders(bitmap: Bitmap): DetectedGrid? {
+        val sampleW = 400
+        val sampleH = (bitmap.height * (400f / bitmap.width)).toInt().coerceAtLeast(100)
+        val scaled = Bitmap.createScaledBitmap(bitmap, sampleW, sampleH, false)
+
+        val hProfile = IntArray(sampleH)
+        val vProfile = IntArray(sampleW)
+
+        for (y in 0 until sampleH) {
+            for (x in 0 until sampleW) {
+                val pixel = scaled.getPixel(x, y)
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+                val luminance = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+
+                if (luminance < 140) {
+                    hProfile[y]++
+                    vProfile[x]++
+                }
+            }
+        }
+
+        val hThreshold = (sampleW * 0.40).toInt()
+        val vThreshold = (sampleH * 0.35).toInt()
+
+        val scaleXBack = bitmap.width.toFloat() / sampleW
+        val scaleYBack = bitmap.height.toFloat() / sampleH
+
+        val hLines = extractLinePeaks(hProfile, hThreshold).map { it * scaleYBack }
+        val vLines = extractLinePeaks(vProfile, vThreshold).map { it * scaleXBack }
+
+        return if (hLines.size >= 2 && vLines.size >= 2) {
+            DetectedGrid(
+                hLines = hLines.sorted(),
+                vLines = vLines.sorted()
+            )
+        } else {
+            null
+        }
+    }
+
+    private fun extractLinePeaks(profile: IntArray, threshold: Int): List<Float> {
+        val peaks = mutableListOf<Float>()
+        var inPeak = false
+        var peakStart = 0
+
+        for (i in profile.indices) {
+            if (profile[i] >= threshold) {
+                if (!inPeak) {
+                    inPeak = true
+                    peakStart = i
+                }
+            } else {
+                if (inPeak) {
+                    peaks.add((peakStart + i - 1) / 2f)
+                    inPeak = false
+                }
+            }
+        }
+        if (inPeak) {
+            peaks.add((peakStart + profile.size - 1) / 2f)
+        }
+        return peaks
     }
 
     private suspend fun processImageAsync(image: InputImage): Text =

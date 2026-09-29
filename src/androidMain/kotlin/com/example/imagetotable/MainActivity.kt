@@ -662,7 +662,7 @@ fun MobileTableEditorScreen() {
                                     statusMessage = "Inserted '$text' into active cell ($tr, $tc)"
                                 }
                             } else {
-                                val (h, r) = service.extractTable(cropped)
+                                /*val (h, r) = service.extractTable(cropped)
                                 withContext(Dispatchers.Main) {
                                     detectedWords.clear()
                                     h.forEach { detectedWords.add(it) }
@@ -671,7 +671,29 @@ fun MobileTableEditorScreen() {
                                     pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
                                     pendingExtractedRows = r
                                     showExtractionPreviewDialog = true
-                                }
+                                }*/
+                                val (h, r) = service.extractTable(cropped)
+val individualWordTokens = service.extractTokens(cropped)
+
+withContext(Dispatchers.Main) {
+    detectedWords.clear()
+    
+    // Splits every line and phrase into individual words (e.g. 6 tokens for "Jane Doe is a good person")
+    if (individualWordTokens.isNotEmpty()) {
+        detectedWords.addAll(individualWordTokens)
+    } else {
+        // Fallback: split headers and row text by whitespace
+        (h + r.flatten())
+            .flatMap { it.trim().split(Regex("\\s+")) }
+            .filter { it.isNotBlank() }
+            .forEach { detectedWords.add(it) }
+    }
+
+    pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
+    pendingExtractedRows = r
+    showExtractionPreviewDialog = true
+}
+
                             }
                         } catch (e: Exception) {
                             statusMessage = "OCR error: ${e.message}"

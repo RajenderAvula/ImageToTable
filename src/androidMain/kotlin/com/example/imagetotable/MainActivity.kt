@@ -662,7 +662,7 @@ fun MobileTableEditorScreen() {
                                     statusMessage = "Inserted '$text' into active cell ($tr, $tc)"
                                 }
                             } else {
-                                /*val (h, r) = service.extractTable(cropped)
+                                val (h, r) = service.extractTable(cropped)
                                 withContext(Dispatchers.Main) {
                                     detectedWords.clear()
                                     h.forEach { detectedWords.add(it) }
@@ -671,8 +671,8 @@ fun MobileTableEditorScreen() {
                                     pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
                                     pendingExtractedRows = r
                                     showExtractionPreviewDialog = true
-                                }*/
-                                val (h, r) = service.extractTable(cropped)
+                                }
+                                /*val (h, r) = service.extractTable(cropped)
 val individualWordTokens = service.extractTokens(cropped)
 
 withContext(Dispatchers.Main) {
@@ -692,7 +692,7 @@ withContext(Dispatchers.Main) {
     pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
     pendingExtractedRows = r
     showExtractionPreviewDialog = true
-}
+}*/
 
                             }
                         } catch (e: Exception) {

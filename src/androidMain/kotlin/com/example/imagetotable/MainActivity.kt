@@ -24,6 +24,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -228,6 +229,88 @@ fun MobileTableEditorScreen() {
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
+
+    // --- ACCURATE INDEX SHIFTING FUNCTIONS (FIXES HIDDEN ROWS/COLS REAPPEARING) ---
+    fun deleteColumnAndRemapIndices(cIdx: Int) {
+        if (cIdx !in currentTable.headers.indices || currentTable.headers.size <= 1) return
+
+        currentTable.deleteColumn(cIdx)
+
+        val newHiddenCols = hiddenColumns
+            .filter { it != cIdx }
+            .map { if (it > cIdx) it - 1 else it }
+            .distinct()
+        hiddenColumns.clear()
+        hiddenColumns.addAll(newHiddenCols)
+
+        val newHiddenChartDates = hiddenChartDateIndices
+            .filter { it != cIdx }
+            .map { if (it > cIdx) it - 1 else it }
+            .distinct()
+        hiddenChartDateIndices.clear()
+        hiddenChartDateIndices.addAll(newHiddenChartDates)
+
+        val newColFilters = mutableMapOf<Int, Set<String>>()
+        columnValueFilters.forEach { (key, set) ->
+            if (key != cIdx) {
+                val newKey = if (key > cIdx) key - 1 else key
+                newColFilters[newKey] = set
+            }
+        }
+        columnValueFilters.clear()
+        columnValueFilters.putAll(newColFilters)
+
+        val newSelected = selectedCells.mapNotNull { (r, c) ->
+            when {
+                c == cIdx -> null
+                c > cIdx -> Pair(r, c - 1)
+                else -> Pair(r, c)
+            }
+        }
+        selectedCells.clear()
+        selectedCells.addAll(newSelected)
+        if (anchorCell.second == cIdx) {
+            anchorCell = Pair(anchorCell.first, 0.coerceAtMost(currentTable.headers.size - 1))
+        } else if (anchorCell.second > cIdx) {
+            anchorCell = Pair(anchorCell.first, anchorCell.second - 1)
+        }
+
+        currentTable.markUpdated()
+        TableRepository.saveOrUpdate(currentTable)
+        tableSnapshot = currentTable.createSnapshot()
+    }
+
+    fun deleteRowAndRemapIndices(rIdx: Int) {
+        if (rIdx !in currentTable.rows.indices) return
+
+        currentTable.deleteRow(rIdx)
+
+        val newHiddenRows = hiddenRows
+            .filter { it != rIdx }
+            .map { if (it > rIdx) it - 1 else it }
+            .distinct()
+        hiddenRows.clear()
+        hiddenRows.addAll(newHiddenRows)
+
+        val newSelected = selectedCells.mapNotNull { (r, c) ->
+            when {
+                r == rIdx -> null
+                r > rIdx -> Pair(r - 1, c)
+                else -> Pair(r, c)
+            }
+        }
+        selectedCells.clear()
+        selectedCells.addAll(newSelected)
+        if (anchorCell.first == rIdx) {
+            anchorCell = Pair(0.coerceAtMost(currentTable.rows.size - 1), anchorCell.second)
+        } else if (anchorCell.first > rIdx) {
+            anchorCell = Pair(anchorCell.first - 1, anchorCell.second)
+        }
+
+        currentTable.markUpdated()
+        TableRepository.saveOrUpdate(currentTable)
+        tableSnapshot = currentTable.createSnapshot()
+    }
 
     // Synchronized Save and Cancel Across All UIs
     fun performSynchronizedSave() {
@@ -881,7 +964,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // ADVANCED ROW EDITOR DIALOG - Navigates smoothly across Prev/Next without closing/reopening the dialog window
+    // ADVANCED ROW EDITOR DIALOG - Stays open smoothly across Prev/Next navigation without tearing down
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
         key(currentTable.id) {
@@ -926,13 +1009,7 @@ fun MobileTableEditorScreen() {
                     tableSnapshot = currentTable.createSnapshot()
                 },
                 onDeleteColumn = { colIdx ->
-                    currentTable.deleteColumn(colIdx)
-                    columnValueFilters.remove(colIdx)
-                    hiddenColumns.remove(colIdx)
-                    hiddenChartDateIndices.remove(colIdx)
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
+                    deleteColumnAndRemapIndices(colIdx)
                 },
                 onMoveColumn = { from, to ->
                     currentTable.moveColumn(from, to)
@@ -967,11 +1044,7 @@ fun MobileTableEditorScreen() {
                     editingRowIndex = safeIndex + 1
                 },
                 onDeleteRow = {
-                    currentTable.deleteRow(safeIndex)
-                    hiddenRows.remove(safeIndex)
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
+                    deleteRowAndRemapIndices(safeIndex)
                     showRowEditorDialog = false
                     statusMessage = "Row ${safeIndex + 1} deleted."
                 }
@@ -1361,13 +1434,7 @@ fun MobileTableEditorScreen() {
             confirmButton = {
                 Button(
                     onClick = {
-                        currentTable.deleteColumn(cIdx)
-                        columnValueFilters.remove(cIdx)
-                        hiddenColumns.remove(cIdx)
-                        hiddenChartDateIndices.remove(cIdx)
-                        currentTable.markUpdated()
-                        TableRepository.saveOrUpdate(currentTable)
-                        tableSnapshot = currentTable.createSnapshot()
+                        deleteColumnAndRemapIndices(cIdx)
                         colPendingDeleteIdx = null
                         statusMessage = "Column '$colName' deleted."
                     },
@@ -1391,11 +1458,7 @@ fun MobileTableEditorScreen() {
             confirmButton = {
                 Button(
                     onClick = {
-                        currentTable.deleteRow(rIdx)
-                        hiddenRows.remove(rIdx)
-                        currentTable.markUpdated()
-                        TableRepository.saveOrUpdate(currentTable)
-                        tableSnapshot = currentTable.createSnapshot()
+                        deleteRowAndRemapIndices(rIdx)
                         rowPendingDeleteIdx = null
                         statusMessage = "Row '$rName' deleted."
                     },
@@ -1833,7 +1896,6 @@ fun MobileTableEditorScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                // Clicking outside the table releases keyboard focus and active cell selection
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = {
                         focusManager.clearFocus()
@@ -1862,7 +1924,6 @@ fun MobileTableEditorScreen() {
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // View / Edit Mode Switcher on Home UI
                             Button(
                                 onClick = { isViewMode = !isViewMode },
                                 colors = ButtonDefaults.buttonColors(
@@ -1878,7 +1939,6 @@ fun MobileTableEditorScreen() {
                                 )
                             }
 
-                            // Quick Zoom Buttons
                             Button(
                                 onClick = { tableZoomScale = (tableZoomScale * 1.15f).coerceAtMost(2.5f) },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
@@ -1893,7 +1953,6 @@ fun MobileTableEditorScreen() {
                                 modifier = Modifier.height(28.dp)
                             ) { Text("🔍-", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
 
-                            // Zoom Indicator & Quick Reset
                             if (tableZoomScale != 1.0f) {
                                 Box(
                                     modifier = Modifier
@@ -1912,7 +1971,6 @@ fun MobileTableEditorScreen() {
 
                             Button(onClick = { showNewTableDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
 
-                            // ADD FORMULA COLUMN BUTTON
                             Button(
                                 onClick = {
                                     formulaEditingColIndex = -1
@@ -1926,7 +1984,6 @@ fun MobileTableEditorScreen() {
                                 Text("fx + Formula Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            // SHOW / HIDE CUSTOM COLUMNS BUTTON
                             Button(
                                 onClick = { showColumnVisibilityDialog = true },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF334155)),
@@ -1935,7 +1992,6 @@ fun MobileTableEditorScreen() {
                                 Text("👁 Columns (${visibleColIndices.size}/${currentTable.headers.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            // SHOW / HIDE CUSTOM ROWS BUTTON
                             Button(
                                 onClick = { showRowVisibilityDialog = true },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF475569)),
@@ -1944,7 +2000,6 @@ fun MobileTableEditorScreen() {
                                 Text("👁 Rows (${currentTable.rows.size - hiddenRows.size}/${currentTable.rows.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            // RESET HIDDEN ROWS & COLUMNS CHIP
                             if (hiddenColumns.isNotEmpty() || hiddenRows.isNotEmpty()) {
                                 Button(
                                     onClick = {
@@ -1959,7 +2014,6 @@ fun MobileTableEditorScreen() {
                                 }
                             }
 
-                            // ADD DATE ATTENDANCE COLUMN BUTTON
                             Button(
                                 onClick = { showAddDateColumnDialog = true },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
@@ -1968,7 +2022,6 @@ fun MobileTableEditorScreen() {
                                 Text("📅 + Date Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            // ATTENDANCE CHART TOGGLE BUTTON
                             Button(
                                 onClick = { showAttendanceChart = !showAttendanceChart },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = if (showAttendanceChart) Color(0xFF303F9F) else Color(0xFF5C6BC0)),
@@ -2638,7 +2691,6 @@ fun MobileTableEditorScreen() {
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp, vertical = 6.dp)
                                 .horizontalScroll(tableHorizontalScrollState)
-                                // Multi-finger pinch-to-zoom detector: ONLY intercepts 2+ fingers, leaves 1-finger horizontal scroll completely unblocked
                                 .pointerInput(Unit) {
                                     awaitPointerEventScope {
                                         while (true) {
@@ -3002,97 +3054,46 @@ fun MobileTableEditorScreen() {
                                                                                             currentTable.markUpdated()
                                                                                         }
                                                                                         .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                                    ) {
-                                                                                        Text("P", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
-                                                                                    }
+                                                                                ) {
+                                                                                    Text("P", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
+                                                                                }
 
-                                                                                    Box(
-                                                                                        modifier = Modifier
-                                                                                            .background(
-                                                                                                if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
-                                                                                                RoundedCornerShape(3.dp)
-                                                                                            )
-                                                                                            .clickable {
-                                                                                                val newVal = if (isAbsent) "" else "Absent"
+                                                                                Box(
+                                                                                    modifier = Modifier
+                                                                                        .background(
+                                                                                            if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
+                                                                                            RoundedCornerShape(3.dp)
+                                                                                        )
+                                                                                        .clickable {
+                                                                                            val newVal = if (isAbsent) "" else "Absent"
                                                                                             currentTable.setCellValue(origRIdx, colIdx, newVal)
                                                                                             currentTable.markUpdated()
                                                                                         }
                                                                                         .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                                    ) {
-                                                                                        Text("A", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
-                                                                                    }
+                                                                                ) {
+                                                                                    Text("A", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
                                                                                 }
                                                                             }
                                                                         }
+                                                                    }
 
-                                                                        ColumnType.NUMBER -> {
-                                                                            Row(
-                                                                                modifier = Modifier.fillMaxWidth(),
-                                                                                verticalAlignment = Alignment.CenterVertically,
-                                                                                horizontalArrangement = Arrangement.SpaceBetween
-                                                                            ) {
-                                                                                BasicTextField(
-                                                                                    value = cellValue,
-                                                                                    onValueChange = { newVal ->
-                                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '-' })
-                                                                                        currentTable.markUpdated()
-                                                                                    },
-                                                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                                                                    enabled = !isMultiSelectMode,
-                                                                                    textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
-                                                                                    modifier = Modifier
-                                                                                        .weight(1f)
-                                                                                        .onFocusChanged {
-                                                                                            if (it.isFocused && !isMultiSelectMode) {
-                                                                                                anchorCell = cellCoord
-                                                                                                selectedCells.clear()
-                                                                                                selectedCells.add(cellCoord)
-                                                                                            }
-                                                                                        }
-                                                                                )
-
-                                                                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                                                                    Box(
-                                                                                        modifier = Modifier
-                                                                                            .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                        .clickable {
-                                                                                            val num = cellValue.toIntOrNull() ?: 0
-                                                                                            currentTable.setCellValue(origRIdx, colIdx, (num - 1).toString())
-                                                                                            currentTable.markUpdated()
-                                                                                        }
-                                                                                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                                    ) {
-                                                                                        Text("-", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                                                                    }
-
-                                                                                    Box(
-                                                                                        modifier = Modifier
-                                                                                            .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                        .clickable {
-                                                                                            val num = cellValue.toIntOrNull() ?: 0
-                                                                                            currentTable.setCellValue(origRIdx, colIdx, (num + 1).toString())
-                                                                                            currentTable.markUpdated()
-                                                                                        }
-                                                                                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                                    ) {
-                                                                                        Text("+", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-
-                                                                        ColumnType.DECIMAL -> {
+                                                                    ColumnType.NUMBER -> {
+                                                                        Row(
+                                                                            modifier = Modifier.fillMaxWidth(),
+                                                                            verticalAlignment = Alignment.CenterVertically,
+                                                                            horizontalArrangement = Arrangement.SpaceBetween
+                                                                        ) {
                                                                             BasicTextField(
                                                                                 value = cellValue,
                                                                                 onValueChange = { newVal ->
-                                                                                    currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '.' || it == '-' })
+                                                                                    currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '-' })
                                                                                     currentTable.markUpdated()
                                                                                 },
-                                                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                                                 enabled = !isMultiSelectMode,
                                                                                 textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
                                                                                 modifier = Modifier
-                                                                                    .fillMaxWidth()
+                                                                                    .weight(1f)
                                                                                     .onFocusChanged {
                                                                                         if (it.isFocused && !isMultiSelectMode) {
                                                                                             anchorCell = cellCoord
@@ -3101,28 +3102,78 @@ fun MobileTableEditorScreen() {
                                                                                         }
                                                                                     }
                                                                             )
-                                                                        }
 
-                                                                        ColumnType.TEXT -> {
-                                                                            BasicTextField(
-                                                                                value = cellValue,
-                                                                                onValueChange = {
-                                                                                    currentTable.setCellValue(origRIdx, colIdx, it)
-                                                                                    currentTable.markUpdated()
-                                                                                },
-                                                                                enabled = !isMultiSelectMode,
-                                                                                textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
-                                                                                modifier = Modifier
-                                                                                    .fillMaxWidth()
-                                                                                    .onFocusChanged {
-                                                                                        if (it.isFocused && !isMultiSelectMode) {
-                                                                                            anchorCell = cellCoord
-                                                                                            selectedCells.clear()
-                                                                                            selectedCells.add(cellCoord)
-                                                                                        }
+                                                                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                                                Box(
+                                                                                    modifier = Modifier
+                                                                                        .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                                    .clickable {
+                                                                                        val num = cellValue.toIntOrNull() ?: 0
+                                                                                        currentTable.setCellValue(origRIdx, colIdx, (num - 1).toString())
+                                                                                        currentTable.markUpdated()
                                                                                     }
-                                                                            )
+                                                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                ) {
+                                                                                    Text("-", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                                                }
+
+                                                                                Box(
+                                                                                    modifier = Modifier
+                                                                                        .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                                    .clickable {
+                                                                                        val num = cellValue.toIntOrNull() ?: 0
+                                                                                        currentTable.setCellValue(origRIdx, colIdx, (num + 1).toString())
+                                                                                        currentTable.markUpdated()
+                                                                                    }
+                                                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                ) {
+                                                                                    Text("+", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                                                }
+                                                                            }
                                                                         }
+                                                                    }
+
+                                                                    ColumnType.DECIMAL -> {
+                                                                        BasicTextField(
+                                                                            value = cellValue,
+                                                                            onValueChange = { newVal ->
+                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '.' || it == '-' })
+                                                                                currentTable.markUpdated()
+                                                                            },
+                                                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                                                            enabled = !isMultiSelectMode,
+                                                                            textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                            modifier = Modifier
+                                                                                .fillMaxWidth()
+                                                                                .onFocusChanged {
+                                                                                    if (it.isFocused && !isMultiSelectMode) {
+                                                                                        anchorCell = cellCoord
+                                                                                        selectedCells.clear()
+                                                                                        selectedCells.add(cellCoord)
+                                                                                    }
+                                                                                }
+                                                                        )
+                                                                    }
+
+                                                                    ColumnType.TEXT -> {
+                                                                        BasicTextField(
+                                                                            value = cellValue,
+                                                                            onValueChange = {
+                                                                                currentTable.setCellValue(origRIdx, colIdx, it)
+                                                                                currentTable.markUpdated()
+                                                                            },
+                                                                            enabled = !isMultiSelectMode,
+                                                                            textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                            modifier = Modifier
+                                                                                .fillMaxWidth()
+                                                                                .onFocusChanged {
+                                                                                    if (it.isFocused && !isMultiSelectMode) {
+                                                                                        anchorCell = cellCoord
+                                                                                        selectedCells.clear()
+                                                                                        selectedCells.add(cellCoord)
+                                                                                    }
+                                                                                }
+                                                                        )
                                                                     }
                                                                 }
                                                             }

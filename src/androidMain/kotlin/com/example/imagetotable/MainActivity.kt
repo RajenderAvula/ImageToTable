@@ -3532,3 +3532,4 @@ fun MobileTableEditorScreen() {
         )
     }
 }
+}

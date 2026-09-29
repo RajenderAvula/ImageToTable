@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -151,6 +152,12 @@ fun MobileTableEditorScreen() {
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
 
+    // Mode Switcher: View Mode vs Edit Mode on Home UI
+    var isViewMode by remember { mutableStateOf(false) }
+
+    // Pinch-to-zoom across Table UI
+    var tableZoomScale by remember { mutableFloatStateOf(1.0f) }
+
     var isMultiSelectMode by remember { mutableStateOf(false) }
     val selectedCells = remember { mutableStateListOf<Pair<Int, Int>>(Pair(0, 0)) }
     var anchorCell by remember { mutableStateOf(Pair(0, 0)) }
@@ -181,6 +188,10 @@ fun MobileTableEditorScreen() {
     var showRowEditorDialog by remember { mutableStateOf(false) }
     var editingRowIndex by remember { mutableIntStateOf(0) }
     var showAddDateColumnDialog by remember { mutableStateOf(false) }
+
+    // Deletion confirmation states for table rows & columns
+    var colPendingDeleteIdx by remember { mutableStateOf<Int?>(null) }
+    var rowPendingDeleteIdx by remember { mutableStateOf<Int?>(null) }
 
     // Formula Builder Dialog State
     var showFormulaBuilderDialog by remember { mutableStateOf(false) }
@@ -665,35 +676,13 @@ fun MobileTableEditorScreen() {
                                 val (h, r) = service.extractTable(cropped)
                                 withContext(Dispatchers.Main) {
                                     detectedWords.clear()
-                                    h.forEach { detectedWords.add(it) }
+                                    h.filter { it.isNotBlank() }.forEach { detectedWords.add(it) }
                                     r.flatten().filter { it.isNotBlank() }.forEach { detectedWords.add(it) }
 
                                     pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
                                     pendingExtractedRows = r
                                     showExtractionPreviewDialog = true
                                 }
-                                /*val (h, r) = service.extractTable(cropped)
-val individualWordTokens = service.extractTokens(cropped)
-
-withContext(Dispatchers.Main) {
-    detectedWords.clear()
-    
-    // Splits every line and phrase into individual words (e.g. 6 tokens for "Jane Doe is a good person")
-    if (individualWordTokens.isNotEmpty()) {
-        detectedWords.addAll(individualWordTokens)
-    } else {
-        // Fallback: split headers and row text by whitespace
-        (h + r.flatten())
-            .flatMap { it.trim().split(Regex("\\s+")) }
-            .filter { it.isNotBlank() }
-            .forEach { detectedWords.add(it) }
-    }
-
-    pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
-    pendingExtractedRows = r
-    showExtractionPreviewDialog = true
-}*/
-
                             }
                         } catch (e: Exception) {
                             statusMessage = "OCR error: ${e.message}"
@@ -891,9 +880,10 @@ withContext(Dispatchers.Main) {
         )
     }
 
+    // ADVANCED ROW EDITOR DIALOG - Stays open smoothly across Prev/Next navigation without tearing down
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
-        key(currentTable.id, safeIndex) {
+        key(currentTable.id) {
             AdvancedRowEditorDialog(
                 initialTableName = currentTable.tableName,
                 initialTableDateTime = currentTable.tableDateTime,
@@ -1359,6 +1349,64 @@ withContext(Dispatchers.Main) {
         )
     }
 
+    // CONFIRM DELETE COLUMN DIALOG
+    if (colPendingDeleteIdx != null) {
+        val cIdx = colPendingDeleteIdx!!
+        val colName = currentTable.headers.getOrNull(cIdx)?.name ?: "Column ${cIdx + 1}"
+        AlertDialog(
+            onDismissRequest = { colPendingDeleteIdx = null },
+            title = { Text("Delete Column?", fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to delete column '$colName'? All data within this column will be permanently removed.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        currentTable.deleteColumn(cIdx)
+                        columnValueFilters.remove(cIdx)
+                        hiddenColumns.remove(cIdx)
+                        hiddenChartDateIndices.remove(cIdx)
+                        currentTable.markUpdated()
+                        TableRepository.saveOrUpdate(currentTable)
+                        tableSnapshot = currentTable.createSnapshot()
+                        colPendingDeleteIdx = null
+                        statusMessage = "Column '$colName' deleted."
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
+                ) { Text("Delete", color = Color.White, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { colPendingDeleteIdx = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // CONFIRM DELETE ROW DIALOG
+    if (rowPendingDeleteIdx != null) {
+        val rIdx = rowPendingDeleteIdx!!
+        val rName = currentTable.rowNames.getOrElse(rIdx) { "Row ${rIdx + 1}" }
+        AlertDialog(
+            onDismissRequest = { rowPendingDeleteIdx = null },
+            title = { Text("Delete Row?", fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to delete '$rName' (Row #${rIdx + 1})?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        currentTable.deleteRow(rIdx)
+                        hiddenRows.remove(rIdx)
+                        currentTable.markUpdated()
+                        TableRepository.saveOrUpdate(currentTable)
+                        tableSnapshot = currentTable.createSnapshot()
+                        rowPendingDeleteIdx = null
+                        statusMessage = "Row '$rName' deleted."
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
+                ) { Text("Delete", color = Color.White, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { rowPendingDeleteIdx = null }) { Text("Cancel") }
+            }
+        )
+    }
+
     if (showClearTableConfirm) {
         AlertDialog(
             onDismissRequest = { showClearTableConfirm = false },
@@ -1495,9 +1543,7 @@ withContext(Dispatchers.Main) {
                             },
                             modifier = Modifier.weight(1f),
                             contentPadding = PaddingValues(2.dp)
-                        ) {
-                            Text("Select All", fontSize = 10.sp)
-                        }
+                        ) { Text("Select All", fontSize = 10.sp) }
 
                         OutlinedButton(
                             onClick = {
@@ -1507,9 +1553,7 @@ withContext(Dispatchers.Main) {
                             },
                             modifier = Modifier.weight(1f),
                             contentPadding = PaddingValues(2.dp)
-                        ) {
-                            Text("Clear All", fontSize = 10.sp)
-                        }
+                        ) { Text("Clear All", fontSize = 10.sp) }
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
@@ -1787,7 +1831,14 @@ withContext(Dispatchers.Main) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
+                // Clicking outside the table releases the keyboard and resets active cell cursor
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = {
+                        focusManager.clearFocus()
+                        selectedCells.clear()
+                        anchorCell = Pair(-1, -1)
+                    })
+                }
         ) {
             if (selectedTabIndex == 0 || isFullScreen) {
                 key(currentTable.id) {
@@ -1809,6 +1860,39 @@ withContext(Dispatchers.Main) {
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // View / Edit Mode Switcher on Home UI
+                            Button(
+                                onClick = { isViewMode = !isViewMode },
+                                colors = ButtonDefaults.buttonColors(
+                                    backgroundColor = if (isViewMode) Color(0xFF00897B) else Color(0xFF1565C0)
+                                ),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = if (isViewMode) "👁 View Mode" else "✎ Edit Mode",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            // Zoom Indicator & Quick Reset
+                            if (tableZoomScale != 1.0f) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(Color(0xFF263238), RoundedCornerShape(4.dp))
+                                        .clickable { tableZoomScale = 1.0f }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "🔍 ${(tableZoomScale * 100).toInt()}% (Reset)",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
                             Button(onClick = { showNewTableDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
 
                             // ADD FORMULA COLUMN BUTTON
@@ -2531,14 +2615,27 @@ withContext(Dispatchers.Main) {
                             }
                         }
 
-                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE
+                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE (WITH PINCH-TO-ZOOM)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp, vertical = 6.dp)
                                 .horizontalScroll(rememberScrollState())
+                                .pointerInput(Unit) {
+                                    detectTransformGestures { _, _, zoom, _ ->
+                                        tableZoomScale = (tableZoomScale * zoom).coerceIn(0.6f, 2.5f)
+                                    }
+                                }
                         ) {
-                            Column(modifier = Modifier.width(totalTableWidth)) {
+                            Column(
+                                modifier = Modifier
+                                    .width(totalTableWidth)
+                                    .graphicsLayer {
+                                        scaleX = tableZoomScale
+                                        scaleY = tableZoomScale
+                                        transformOrigin = TransformOrigin(0f, 0f)
+                                    }
+                            ) {
                                 // Table Header Row
                                 Row(
                                     modifier = Modifier
@@ -2579,13 +2676,7 @@ withContext(Dispatchers.Main) {
                                                             }.padding(horizontal = 2.dp)
                                                         )
                                                         Text("✕", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) {
-                                                            currentTable.deleteColumn(colIdx)
-                                                            columnValueFilters.remove(colIdx)
-                                                            hiddenColumns.remove(colIdx)
-                                                            hiddenChartDateIndices.remove(colIdx)
-                                                            currentTable.markUpdated()
-                                                            TableRepository.saveOrUpdate(currentTable)
-                                                            tableSnapshot = currentTable.createSnapshot()
+                                                            colPendingDeleteIdx = colIdx
                                                         })
                                                     }
                                                 }
@@ -2701,7 +2792,17 @@ withContext(Dispatchers.Main) {
                                             ) {
                                                 Box(modifier = Modifier.width(actionColWidth).border(0.5.dp, Color(0xFFCFD8DC)).background(Color(0xFFF9FAFB)).padding(6.dp)) {
                                                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                                        BasicTextField(value = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" }, onValueChange = { currentTable.rowNames[origRIdx] = it; currentTable.markUpdated() }, textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)), modifier = Modifier.weight(1f))
+                                                        if (isViewMode) {
+                                                            Text(
+                                                                text = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" },
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                                color = Color(0xFF1565C0),
+                                                                modifier = Modifier.weight(1f)
+                                                            )
+                                                        } else {
+                                                            BasicTextField(value = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" }, onValueChange = { currentTable.rowNames[origRIdx] = it; currentTable.markUpdated() }, textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)), modifier = Modifier.weight(1f))
+                                                        }
                                                         Text("✎", fontSize = 13.sp, color = Color(0xFF00897B), fontWeight = FontWeight.Bold, modifier = Modifier.clickable { editingRowIndex = origRIdx; showRowEditorDialog = true }.padding(horizontal = 2.dp))
                                                         Text("👁", fontSize = 12.sp, modifier = Modifier.clickable {
                                                             hiddenRows.add(origRIdx)
@@ -2718,10 +2819,7 @@ withContext(Dispatchers.Main) {
                                                             TableRepository.saveOrUpdate(currentTable)
                                                         }, fontSize = 11.sp)
                                                         Text("✕", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable {
-                                                            currentTable.deleteRow(origRIdx)
-                                                            hiddenRows.remove(origRIdx)
-                                                            currentTable.markUpdated()
-                                                            TableRepository.saveOrUpdate(currentTable)
+                                                            rowPendingDeleteIdx = origRIdx
                                                         })
                                                     }
                                                 }
@@ -2761,43 +2859,215 @@ withContext(Dispatchers.Main) {
                                                             .background(cellBg)
                                                             .padding(horizontal = 6.dp, vertical = 4.dp)
                                                     ) {
-                                                        when (colDef.type) {
-                                                            ColumnType.FORMULA -> {
-                                                                Row(
-                                                                    modifier = Modifier
-                                                                        .fillMaxWidth()
-                                                                        .clickable {
-                                                                            formulaEditingColIndex = colIdx
-                                                                            formulaInitialColName = colDef.name
-                                                                            formulaInitialExpression = colDef.formula
-                                                                            showFormulaBuilderDialog = true
-                                                                        },
-                                                                    verticalAlignment = Alignment.CenterVertically,
-                                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                                ) {
-                                                                    Text(
-                                                                        text = cellValue.ifBlank { "0" },
-                                                                        fontSize = 12.sp,
-                                                                        fontWeight = FontWeight.Bold,
-                                                                        color = if (cellValue.startsWith("#")) Color.Red else Color(0xFF1B5E20),
-                                                                        modifier = Modifier.weight(1f)
-                                                                    )
-                                                                    Box(
+                                                        if (isViewMode) {
+                                                            // VIEW MODE: Read-only representation without triggering soft keyboard
+                                                            Text(
+                                                                text = cellValue.ifBlank { " " },
+                                                                fontSize = 12.sp,
+                                                                color = when {
+                                                                    isPresent -> Color(0xFF2E7D32)
+                                                                    isAbsent -> Color(0xFFC62828)
+                                                                    else -> Color.Black
+                                                                },
+                                                                fontWeight = if (isPresent || isAbsent || isFormulaCol) FontWeight.Bold else FontWeight.Normal,
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .clickable {
+                                                                        anchorCell = cellCoord
+                                                                        selectedCells.clear()
+                                                                        selectedCells.add(cellCoord)
+                                                                    }
+                                                            )
+                                                        } else {
+                                                            // EDIT MODE: Direct in-cell editing
+                                                            when (colDef.type) {
+                                                                ColumnType.FORMULA -> {
+                                                                    Row(
                                                                         modifier = Modifier
-                                                                            .background(Color(0xFFDCEDC8), RoundedCornerShape(3.dp))
-                                                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                            .fillMaxWidth()
+                                                                            .clickable {
+                                                                                formulaEditingColIndex = colIdx
+                                                                                formulaInitialColName = colDef.name
+                                                                                formulaInitialExpression = colDef.formula
+                                                                                showFormulaBuilderDialog = true
+                                                                            },
+                                                                        verticalAlignment = Alignment.CenterVertically,
+                                                                        horizontalArrangement = Arrangement.SpaceBetween
                                                                     ) {
-                                                                        Text("fx", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                        Text(
+                                                                            text = cellValue.ifBlank { "0" },
+                                                                            fontSize = 12.sp,
+                                                                            fontWeight = FontWeight.Bold,
+                                                                            color = if (cellValue.startsWith("#")) Color.Red else Color(0xFF1B5E20),
+                                                                            modifier = Modifier.weight(1f)
+                                                                        )
+                                                                        Box(
+                                                                            modifier = Modifier
+                                                                                .background(Color(0xFFDCEDC8), RoundedCornerShape(3.dp))
+                                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                        ) {
+                                                                            Text("fx", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                        }
                                                                     }
                                                                 }
-                                                            }
 
-                                                            ColumnType.DATE -> {
-                                                                Row(
-                                                                    modifier = Modifier.fillMaxWidth(),
-                                                                    verticalAlignment = Alignment.CenterVertically,
-                                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                                ) {
+                                                                ColumnType.DATE -> {
+                                                                    Row(
+                                                                        modifier = Modifier.fillMaxWidth(),
+                                                                        verticalAlignment = Alignment.CenterVertically,
+                                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                                    ) {
+                                                                        BasicTextField(
+                                                                            value = cellValue,
+                                                                            onValueChange = {
+                                                                                currentTable.setCellValue(origRIdx, colIdx, it)
+                                                                                currentTable.markUpdated()
+                                                                            },
+                                                                            enabled = !isMultiSelectMode,
+                                                                            textStyle = TextStyle(
+                                                                                fontSize = 11.sp,
+                                                                                fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
+                                                                                color = when {
+                                                                                    isPresent -> Color(0xFF2E7D32)
+                                                                                    isAbsent -> Color(0xFFC62828)
+                                                                                    else -> Color.Black
+                                                                                }
+                                                                            ),
+                                                                            modifier = Modifier
+                                                                                .weight(1f)
+                                                                                .onFocusChanged {
+                                                                                    if (it.isFocused && !isMultiSelectMode) {
+                                                                                        anchorCell = cellCoord
+                                                                                        selectedCells.clear()
+                                                                                        selectedCells.add(cellCoord)
+                                                                                    }
+                                                                                }
+                                                                        )
+
+                                                                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                                            Box(
+                                                                                modifier = Modifier
+                                                                                    .background(Color(0xFFE3F2FD), RoundedCornerShape(3.dp))
+                                                                                .clickable { openDatePickerForCell(origRIdx, colIdx) }
+                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                            ) {
+                                                                                Text("📅", fontSize = 11.sp)
+                                                                            }
+
+                                                                            Box(
+                                                                                modifier = Modifier
+                                                                                    .background(
+                                                                                        if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
+                                                                                        RoundedCornerShape(3.dp)
+                                                                                    )
+                                                                                    .clickable {
+                                                                                        val newVal = if (isPresent) "" else "Present"
+                                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                                        currentTable.markUpdated()
+                                                                                    }
+                                                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                            ) {
+                                                                                Text("P", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
+                                                                            }
+
+                                                                            Box(
+                                                                                modifier = Modifier
+                                                                                    .background(
+                                                                                        if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
+                                                                                        RoundedCornerShape(3.dp)
+                                                                                    )
+                                                                                    .clickable {
+                                                                                        val newVal = if (isAbsent) "" else "Absent"
+                                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                                        currentTable.markUpdated()
+                                                                                    }
+                                                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                            ) {
+                                                                                Text("A", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+
+                                                                ColumnType.NUMBER -> {
+                                                                    Row(
+                                                                        modifier = Modifier.fillMaxWidth(),
+                                                                        verticalAlignment = Alignment.CenterVertically,
+                                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                                    ) {
+                                                                        BasicTextField(
+                                                                            value = cellValue,
+                                                                            onValueChange = { newVal ->
+                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '-' })
+                                                                                currentTable.markUpdated()
+                                                                            },
+                                                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                                            enabled = !isMultiSelectMode,
+                                                                            textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                            modifier = Modifier
+                                                                                .weight(1f)
+                                                                                .onFocusChanged {
+                                                                                    if (it.isFocused && !isMultiSelectMode) {
+                                                                                        anchorCell = cellCoord
+                                                                                        selectedCells.clear()
+                                                                                        selectedCells.add(cellCoord)
+                                                                                    }
+                                                                                }
+                                                                        )
+
+                                                                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                                            Box(
+                                                                                modifier = Modifier
+                                                                                    .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                                .clickable {
+                                                                                    val num = cellValue.toIntOrNull() ?: 0
+                                                                                    currentTable.setCellValue(origRIdx, colIdx, (num - 1).toString())
+                                                                                    currentTable.markUpdated()
+                                                                                }
+                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                            ) {
+                                                                                Text("-", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                                            }
+
+                                                                            Box(
+                                                                                modifier = Modifier
+                                                                                    .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                                .clickable {
+                                                                                    val num = cellValue.toIntOrNull() ?: 0
+                                                                                    currentTable.setCellValue(origRIdx, colIdx, (num + 1).toString())
+                                                                                    currentTable.markUpdated()
+                                                                                }
+                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                            ) {
+                                                                                Text("+", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+
+                                                                ColumnType.DECIMAL -> {
+                                                                    BasicTextField(
+                                                                        value = cellValue,
+                                                                        onValueChange = { newVal ->
+                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '.' || it == '-' })
+                                                                            currentTable.markUpdated()
+                                                                        },
+                                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                                                        enabled = !isMultiSelectMode,
+                                                                        textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                        modifier = Modifier
+                                                                            .fillMaxWidth()
+                                                                            .onFocusChanged {
+                                                                                if (it.isFocused && !isMultiSelectMode) {
+                                                                                    anchorCell = cellCoord
+                                                                                    selectedCells.clear()
+                                                                                    selectedCells.add(cellCoord)
+                                                                                }
+                                                                            }
+                                                                    )
+                                                                }
+
+                                                                ColumnType.TEXT -> {
                                                                     BasicTextField(
                                                                         value = cellValue,
                                                                         onValueChange = {
@@ -2805,88 +3075,9 @@ withContext(Dispatchers.Main) {
                                                                             currentTable.markUpdated()
                                                                         },
                                                                         enabled = !isMultiSelectMode,
-                                                                        textStyle = TextStyle(
-                                                                            fontSize = 11.sp,
-                                                                            fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
-                                                                            color = when {
-                                                                                isPresent -> Color(0xFF2E7D32)
-                                                                                isAbsent -> Color(0xFFC62828)
-                                                                                else -> Color.Black
-                                                                            }
-                                                                        ),
-                                                                        modifier = Modifier
-                                                                            .weight(1f)
-                                                                            .onFocusChanged {
-                                                                                if (it.isFocused && !isMultiSelectMode) {
-                                                                                    anchorCell = cellCoord
-                                                                                    selectedCells.clear()
-                                                                                    selectedCells.add(cellCoord)
-                                                                                }
-                                                                            }
-                                                                    )
-
-                                                                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                                        Box(
-                                                                            modifier = Modifier
-                                                                                .background(Color(0xFFE3F2FD), RoundedCornerShape(3.dp))
-                                                                                .clickable { openDatePickerForCell(origRIdx, colIdx) }
-                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                        ) {
-                                                                            Text("📅", fontSize = 11.sp)
-                                                                        }
-
-                                                                        Box(
-                                                                            modifier = Modifier
-                                                                                .background(
-                                                                                    if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
-                                                                                    RoundedCornerShape(3.dp)
-                                                                                )
-                                                                                .clickable {
-                                                                                    val newVal = if (isPresent) "" else "Present"
-                                                                                    currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                                    currentTable.markUpdated()
-                                                                                }
-                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                        ) {
-                                                                            Text("P", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
-                                                                        }
-
-                                                                        Box(
-                                                                            modifier = Modifier
-                                                                                .background(
-                                                                                    if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
-                                                                                    RoundedCornerShape(3.dp)
-                                                                                )
-                                                                                .clickable {
-                                                                                    val newVal = if (isAbsent) "" else "Absent"
-                                                                                    currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                                    currentTable.markUpdated()
-                                                                                }
-                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                        ) {
-                                                                            Text("A", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-
-                                                            ColumnType.NUMBER -> {
-                                                                Row(
-                                                                    modifier = Modifier.fillMaxWidth(),
-                                                                    verticalAlignment = Alignment.CenterVertically,
-                                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                                ) {
-                                                                    BasicTextField(
-                                                                        value = cellValue,
-                                                                        onValueChange = { newVal ->
-                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '-' })
-                                                                            currentTable.markUpdated()
-                                                                        },
-                                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                                                        enabled = !isMultiSelectMode,
                                                                         textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
                                                                         modifier = Modifier
-                                                                            .weight(1f)
+                                                                            .fillMaxWidth()
                                                                             .onFocusChanged {
                                                                                 if (it.isFocused && !isMultiSelectMode) {
                                                                                     anchorCell = cellCoord
@@ -2895,78 +3086,7 @@ withContext(Dispatchers.Main) {
                                                                                 }
                                                                             }
                                                                     )
-
-                                                                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                                                        Box(
-                                                                            modifier = Modifier
-                                                                                .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                .clickable {
-                                                                                    val num = cellValue.toIntOrNull() ?: 0
-                                                                                    currentTable.setCellValue(origRIdx, colIdx, (num - 1).toString())
-                                                                                    currentTable.markUpdated()
-                                                                                }
-                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                        ) {
-                                                                            Text("-", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                                                        }
-
-                                                                        Box(
-                                                                            modifier = Modifier
-                                                                                .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                .clickable {
-                                                                                    val num = cellValue.toIntOrNull() ?: 0
-                                                                                    currentTable.setCellValue(origRIdx, colIdx, (num + 1).toString())
-                                                                                    currentTable.markUpdated()
-                                                                                }
-                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                        ) {
-                                                                            Text("+", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                                                        }
-                                                                    }
                                                                 }
-                                                            }
-
-                                                            ColumnType.DECIMAL -> {
-                                                                BasicTextField(
-                                                                    value = cellValue,
-                                                                    onValueChange = { newVal ->
-                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '.' || it == '-' })
-                                                                        currentTable.markUpdated()
-                                                                    },
-                                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                                                    enabled = !isMultiSelectMode,
-                                                                    textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
-                                                                    modifier = Modifier
-                                                                        .fillMaxWidth()
-                                                                        .onFocusChanged {
-                                                                            if (it.isFocused && !isMultiSelectMode) {
-                                                                                anchorCell = cellCoord
-                                                                                selectedCells.clear()
-                                                                                selectedCells.add(cellCoord)
-                                                                            }
-                                                                        }
-                                                                )
-                                                            }
-
-                                                            ColumnType.TEXT -> {
-                                                                BasicTextField(
-                                                                    value = cellValue,
-                                                                    onValueChange = {
-                                                                        currentTable.setCellValue(origRIdx, colIdx, it)
-                                                                        currentTable.markUpdated()
-                                                                    },
-                                                                    enabled = !isMultiSelectMode,
-                                                                    textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
-                                                                    modifier = Modifier
-                                                                        .fillMaxWidth()
-                                                                        .onFocusChanged {
-                                                                            if (it.isFocused && !isMultiSelectMode) {
-                                                                                anchorCell = cellCoord
-                                                                                selectedCells.clear()
-                                                                                selectedCells.add(cellCoord)
-                                                                            }
-                                                                        }
-                                                                )
                                                             }
                                                         }
 
@@ -3218,7 +3338,7 @@ withContext(Dispatchers.Main) {
                             Text("Cache & Storage", fontWeight = FontWeight.Bold)
                             Text("Current App Cache: $cacheSizeText", fontSize = 13.sp, color = Color.DarkGray)
                             Button(onClick = { CacheManager.clearCache(context); cacheSizeText = CacheManager.getFormattedCacheSize(context); statusMessage = "Cache cleared!" }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)), modifier = Modifier.fillMaxWidth()) {
-                                Text("🗑 Clear App Cache", color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("🗑 Clear App Cache", color = Color.White)
                             }
                         }
                     }
@@ -3239,9 +3359,10 @@ withContext(Dispatchers.Main) {
         AlertDialog(
             onDismissRequest = { showTableHistoryDrawer = false },
             title = {
+                Text("Saved Tables History", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
                 Column {
-                    Text("Saved Tables History", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
                     OutlinedTextField(
                         value = drawerSearchQuery,
                         onValueChange = { drawerSearchQuery = it },
@@ -3250,33 +3371,32 @@ withContext(Dispatchers.Main) {
                         textStyle = TextStyle(fontSize = 12.sp),
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     )
-                }
-            },
-            text = {
-                val filteredTables = TableRepository.tables.filter {
-                    drawerSearchQuery.isBlank() || it.tableName.contains(drawerSearchQuery, ignoreCase = true) || it.tableDateTime.contains(drawerSearchQuery, ignoreCase = true)
-                }
-                LazyColumn(modifier = Modifier.fillMaxWidth().height(260.dp)) {
-                    itemsIndexed(filteredTables) { _, t ->
-                        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), elevation = 2.dp) {
-                            Row(modifier = Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Column(modifier = Modifier.weight(1f).clickable {
-                                    currentTable = t
-                                    tableSnapshot = t.createSnapshot()
-                                    columnValueFilters.clear()
-                                    hiddenColumns.clear()
-                                    hiddenRows.clear()
-                                    hiddenChartDateIndices.clear()
-                                    globalSearchQuery = ""
-                                    selectedCells.clear(); selectedCells.add(Pair(0, 0))
-                                    anchorCell = Pair(0, 0)
-                                    showTableHistoryDrawer = false
-                                    statusMessage = "Loaded: ${t.tableName}"
-                                }) {
-                                    Text(t.tableName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Text("📅 ${t.tableDateTime} • ${t.rows.size} rows", fontSize = 11.sp, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    val filteredTables = TableRepository.tables.filter {
+                        drawerSearchQuery.isBlank() || it.tableName.contains(drawerSearchQuery, ignoreCase = true) || it.tableDateTime.contains(drawerSearchQuery, ignoreCase = true)
+                    }
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(260.dp)) {
+                        itemsIndexed(filteredTables) { _, t ->
+                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), elevation = 2.dp) {
+                                Row(modifier = Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f).clickable {
+                                        currentTable = t
+                                        tableSnapshot = t.createSnapshot()
+                                        columnValueFilters.clear()
+                                        hiddenColumns.clear()
+                                        hiddenRows.clear()
+                                        hiddenChartDateIndices.clear()
+                                        globalSearchQuery = ""
+                                        selectedCells.clear(); selectedCells.add(Pair(0, 0))
+                                        anchorCell = Pair(0, 0)
+                                        showTableHistoryDrawer = false
+                                        statusMessage = "Loaded: ${t.tableName}"
+                                    }) {
+                                        Text(t.tableName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Text("📅 ${t.tableDateTime} • ${t.rows.size} rows", fontSize = 11.sp, color = Color.Gray)
+                                    }
+                                    IconButton(onClick = { tablePendingDelete = t }) { Text("🗑", fontSize = 16.sp) }
                                 }
-                                IconButton(onClick = { tablePendingDelete = t }) { Text("🗑", fontSize = 16.sp) }
                             }
                         }
                     }

@@ -47,8 +47,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -236,6 +238,7 @@ fun MobileTableEditorScreen() {
 
         currentTable.deleteColumn(cIdx)
 
+        // 1. Remap hiddenColumns (shift any index > cIdx down by 1)
         val newHiddenCols = hiddenColumns
             .filter { it != cIdx }
             .map { if (it > cIdx) it - 1 else it }
@@ -243,6 +246,7 @@ fun MobileTableEditorScreen() {
         hiddenColumns.clear()
         hiddenColumns.addAll(newHiddenCols)
 
+        // 2. Remap hiddenChartDateIndices (shift any index > cIdx down by 1)
         val newHiddenChartDates = hiddenChartDateIndices
             .filter { it != cIdx }
             .map { if (it > cIdx) it - 1 else it }
@@ -250,6 +254,7 @@ fun MobileTableEditorScreen() {
         hiddenChartDateIndices.clear()
         hiddenChartDateIndices.addAll(newHiddenChartDates)
 
+        // 3. Remap columnValueFilters map keys
         val newColFilters = mutableMapOf<Int, Set<String>>()
         columnValueFilters.forEach { (key, set) ->
             if (key != cIdx) {
@@ -260,6 +265,7 @@ fun MobileTableEditorScreen() {
         columnValueFilters.clear()
         columnValueFilters.putAll(newColFilters)
 
+        // 4. Adjust selected cells and anchor cell coordinates
         val newSelected = selectedCells.mapNotNull { (r, c) ->
             when {
                 c == cIdx -> null
@@ -285,6 +291,7 @@ fun MobileTableEditorScreen() {
 
         currentTable.deleteRow(rIdx)
 
+        // 1. Remap hiddenRows (shift any index > rIdx down by 1)
         val newHiddenRows = hiddenRows
             .filter { it != rIdx }
             .map { if (it > rIdx) it - 1 else it }
@@ -292,6 +299,7 @@ fun MobileTableEditorScreen() {
         hiddenRows.clear()
         hiddenRows.addAll(newHiddenRows)
 
+        // 2. Adjust selected cells and anchor cell coordinates
         val newSelected = selectedCells.mapNotNull { (r, c) ->
             when {
                 r == rIdx -> null
@@ -1702,6 +1710,17 @@ fun MobileTableEditorScreen() {
     val totalTableWidth = actionColWidth + (dataColWidth * visibleColIndices.size) + 90.dp
     val tableHorizontalScrollState = rememberScrollState()
 
+    // Dynamic unscaled pixel height of the table contents
+    var tableContentHeightPx by remember(currentTable.id, currentTable.rows.size, visibleColIndices.size) { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+
+    // Dynamically scales layout bounds to prevent clipping and enable continuous vertical and horizontal scrolling
+    val tableScaledHeight = if (tableContentHeightPx > 0) {
+        with(density) { (tableContentHeightPx * max(1f, tableZoomScale)).toDp() }
+    } else {
+        null
+    }
+
     Scaffold(
         topBar = {
             if (!isFullScreen) {
@@ -1896,6 +1915,7 @@ fun MobileTableEditorScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                // Clicking outside the table releases the keyboard and resets active cell cursor
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = {
                         focusManager.clearFocus()
@@ -1924,6 +1944,7 @@ fun MobileTableEditorScreen() {
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // View / Edit Mode Switcher on Home UI
                             Button(
                                 onClick = { isViewMode = !isViewMode },
                                 colors = ButtonDefaults.buttonColors(
@@ -1939,6 +1960,7 @@ fun MobileTableEditorScreen() {
                                 )
                             }
 
+                            // Quick Zoom Buttons
                             Button(
                                 onClick = { tableZoomScale = (tableZoomScale * 1.15f).coerceAtMost(2.5f) },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
@@ -1953,6 +1975,7 @@ fun MobileTableEditorScreen() {
                                 modifier = Modifier.height(28.dp)
                             ) { Text("🔍-", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
 
+                            // Zoom Indicator & Quick Reset
                             if (tableZoomScale != 1.0f) {
                                 Box(
                                     modifier = Modifier
@@ -1971,6 +1994,7 @@ fun MobileTableEditorScreen() {
 
                             Button(onClick = { showNewTableDialog = true }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ New Table", color = Color.White, fontSize = 11.sp) }
 
+                            // ADD FORMULA COLUMN BUTTON
                             Button(
                                 onClick = {
                                     formulaEditingColIndex = -1
@@ -1984,6 +2008,7 @@ fun MobileTableEditorScreen() {
                                 Text("fx + Formula Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
+                            // SHOW / HIDE CUSTOM COLUMNS BUTTON
                             Button(
                                 onClick = { showColumnVisibilityDialog = true },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF334155)),
@@ -1992,6 +2017,7 @@ fun MobileTableEditorScreen() {
                                 Text("👁 Columns (${visibleColIndices.size}/${currentTable.headers.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
+                            // SHOW / HIDE CUSTOM ROWS BUTTON
                             Button(
                                 onClick = { showRowVisibilityDialog = true },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF475569)),
@@ -2000,6 +2026,7 @@ fun MobileTableEditorScreen() {
                                 Text("👁 Rows (${currentTable.rows.size - hiddenRows.size}/${currentTable.rows.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
+                            // RESET HIDDEN ROWS & COLUMNS CHIP
                             if (hiddenColumns.isNotEmpty() || hiddenRows.isNotEmpty()) {
                                 Button(
                                     onClick = {
@@ -2014,6 +2041,7 @@ fun MobileTableEditorScreen() {
                                 }
                             }
 
+                            // ADD DATE ATTENDANCE COLUMN BUTTON
                             Button(
                                 onClick = { showAddDateColumnDialog = true },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
@@ -2022,6 +2050,7 @@ fun MobileTableEditorScreen() {
                                 Text("📅 + Date Col", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
+                            // ATTENDANCE CHART TOGGLE BUTTON
                             Button(
                                 onClick = { showAttendanceChart = !showAttendanceChart },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = if (showAttendanceChart) Color(0xFF303F9F) else Color(0xFF5C6BC0)),
@@ -2685,12 +2714,13 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE (MULTI-TOUCH PINCH + SMOOTH HORIZONTAL PAN)
+                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE (MULTI-TOUCH PINCH + SMOOTH HORIZONTAL/VERTICAL SCROLL)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp, vertical = 6.dp)
                                 .horizontalScroll(tableHorizontalScrollState)
+                                // Multi-finger pinch-to-zoom detector: ONLY intercepts 2+ fingers, leaves 1-finger horizontal/vertical scroll completely unblocked
                                 .pointerInput(Unit) {
                                     awaitPointerEventScope {
                                         while (true) {
@@ -2713,11 +2743,18 @@ fun MobileTableEditorScreen() {
                                 }
                         ) {
                             Box(
-                                modifier = Modifier.width(totalTableWidth * max(1f, tableZoomScale))
+                                modifier = Modifier
+                                    .width(totalTableWidth * max(1f, tableZoomScale))
+                                    .then(if (tableScaledHeight != null) Modifier.height(tableScaledHeight) else Modifier.wrapContentHeight())
                             ) {
                                 Column(
                                     modifier = Modifier
                                         .width(totalTableWidth)
+                                        .onSizeChanged { size ->
+                                            if (size.height > 0) {
+                                                tableContentHeightPx = size.height
+                                            }
+                                        }
                                         .graphicsLayer {
                                             scaleX = tableZoomScale
                                             scaleY = tableZoomScale
@@ -2780,65 +2817,64 @@ fun MobileTableEditorScreen() {
                                                                     .background(if (isFormulaCol) Color(0xFFDCEDC8) else Color(0xFFE1F5FE), RoundedCornerShape(3.dp))
                                                                     .clickable { typeExpanded = true }
                                                                     .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                            )
-                                                            DropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
-                                                                if (isFormulaCol) {
-                                                                    DropdownMenuItem(onClick = {
+                                                        )
+                                                        DropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
+                                                            if (isFormulaCol) {
+                                                                DropdownMenuItem(onClick = {
+                                                                    formulaEditingColIndex = colIdx
+                                                                    formulaInitialColName = colDef.name
+                                                                    formulaInitialExpression = colDef.formula
+                                                                    showFormulaBuilderDialog = true
+                                                                    typeExpanded = false
+                                                                }) {
+                                                                    Text("✎ Edit Formula Expression", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                }
+                                                                Divider()
+                                                            }
+                                                            ColumnType.values().forEach { ct ->
+                                                                DropdownMenuItem(onClick = {
+                                                                    if (ct == ColumnType.FORMULA) {
                                                                         formulaEditingColIndex = colIdx
                                                                         formulaInitialColName = colDef.name
                                                                         formulaInitialExpression = colDef.formula
                                                                         showFormulaBuilderDialog = true
-                                                                        typeExpanded = false
-                                                                    }) {
-                                                                        Text("✎ Edit Formula Expression", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                    } else {
+                                                                        currentTable.headers[colIdx] = colDef.copy(type = ct, formula = "")
+                                                                        currentTable.recomputeFormulas()
+                                                                        currentTable.markUpdated()
                                                                     }
-                                                                    Divider()
-                                                                }
-                                                                ColumnType.values().forEach { ct ->
-                                                                    DropdownMenuItem(onClick = {
-                                                                        if (ct == ColumnType.FORMULA) {
-                                                                            formulaEditingColIndex = colIdx
-                                                                            formulaInitialColName = colDef.name
-                                                                            formulaInitialExpression = colDef.formula
-                                                                            showFormulaBuilderDialog = true
-                                                                        } else {
-                                                                            currentTable.headers[colIdx] = colDef.copy(type = ct, formula = "")
-                                                                            currentTable.recomputeFormulas()
-                                                                            currentTable.markUpdated()
-                                                                        }
-                                                                        typeExpanded = false
-                                                                    }) { Text(ct.label) }
-                                                                }
+                                                                    typeExpanded = false
+                                                                }) { Text(ct.label) }
                                                             }
                                                         }
+                                                    }
 
-                                                        // COLUMN VALUE FILTER BUTTON
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .background(if (isColFiltered) Color(0xFFFF6F00) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                .clickable { activeFilterColIdx = colIdx }
-                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                        ) {
-                                                            Text(
-                                                                text = if (isColFiltered) "⚲ Filtered" else "⚲ Filter",
-                                                                fontSize = 10.sp,
-                                                                fontWeight = if (isColFiltered) FontWeight.Bold else FontWeight.Normal,
-                                                                color = if (isColFiltered) Color.White else Color(0xFF37474F)
-                                                            )
-                                                        }
+                                                    // COLUMN VALUE FILTER BUTTON
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .background(if (isColFiltered) Color(0xFFFF6F00) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                            .clickable { activeFilterColIdx = colIdx }
+                                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = if (isColFiltered) "⚲ Filtered" else "⚲ Filter",
+                                                            fontSize = 10.sp,
+                                                            fontWeight = if (isColFiltered) FontWeight.Bold else FontWeight.Normal,
+                                                            color = if (isColFiltered) Color.White else Color(0xFF37474F)
+                                                        )
+                                                    }
 
-                                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                            Text("◀", modifier = Modifier.clickable(enabled = colIdx > 0) {
-                                                                currentTable.moveColumn(colIdx, colIdx - 1)
-                                                                currentTable.markUpdated()
-                                                                TableRepository.saveOrUpdate(currentTable)
-                                                            }, fontSize = 12.sp)
-                                                            Text("▶", modifier = Modifier.clickable(enabled = colIdx < currentTable.headers.size - 1) {
-                                                                currentTable.moveColumn(colIdx, colIdx + 1)
-                                                                currentTable.markUpdated()
-                                                                TableRepository.saveOrUpdate(currentTable)
-                                                            }, fontSize = 12.sp)
-                                                        }
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                        Text("◀", modifier = Modifier.clickable(enabled = colIdx > 0) {
+                                                            currentTable.moveColumn(colIdx, colIdx - 1)
+                                                            currentTable.markUpdated()
+                                                            TableRepository.saveOrUpdate(currentTable)
+                                                        }, fontSize = 12.sp)
+                                                        Text("▶", modifier = Modifier.clickable(enabled = colIdx < currentTable.headers.size - 1) {
+                                                            currentTable.moveColumn(colIdx, colIdx + 1)
+                                                            currentTable.markUpdated()
+                                                            TableRepository.saveOrUpdate(currentTable)
+                                                        }, fontSize = 12.sp)
                                                     }
                                                 }
                                             }
@@ -3001,7 +3037,8 @@ fun MobileTableEditorScreen() {
 
                                                                     ColumnType.DATE -> {
                                                                         Row(
-                                                                            modifier = Modifier.fillMaxWidth(),
+                                                                            modifier = Modifier
+                                                                                .fillMaxWidth(),
                                                                             verticalAlignment = Alignment.CenterVertically,
                                                                             horizontalArrangement = Arrangement.SpaceBetween
                                                                         ) {
@@ -3045,15 +3082,15 @@ fun MobileTableEditorScreen() {
                                                                                 Box(
                                                                                     modifier = Modifier
                                                                                         .background(
-                                                                                            if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
-                                                                                            RoundedCornerShape(3.dp)
-                                                                                        )
-                                                                                        .clickable {
-                                                                                            val newVal = if (isPresent) "" else "Present"
-                                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                                            currentTable.markUpdated()
-                                                                                        }
-                                                                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                        if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
+                                                                                        RoundedCornerShape(3.dp)
+                                                                                    )
+                                                                                    .clickable {
+                                                                                        val newVal = if (isPresent) "" else "Present"
+                                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                                        currentTable.markUpdated()
+                                                                                    }
+                                                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                                 ) {
                                                                                     Text("P", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
                                                                                 }
@@ -3061,15 +3098,15 @@ fun MobileTableEditorScreen() {
                                                                                 Box(
                                                                                     modifier = Modifier
                                                                                         .background(
-                                                                                            if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
-                                                                                            RoundedCornerShape(3.dp)
-                                                                                        )
-                                                                                        .clickable {
-                                                                                            val newVal = if (isAbsent) "" else "Absent"
-                                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                                            currentTable.markUpdated()
-                                                                                        }
-                                                                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                        if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
+                                                                                        RoundedCornerShape(3.dp)
+                                                                                    )
+                                                                                    .clickable {
+                                                                                        val newVal = if (isAbsent) "" else "Absent"
+                                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal)
+                                                                                        currentTable.markUpdated()
+                                                                                    }
+                                                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                                 ) {
                                                                                     Text("A", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
                                                                                 }

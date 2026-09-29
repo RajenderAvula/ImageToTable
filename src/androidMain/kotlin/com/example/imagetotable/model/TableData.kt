@@ -61,6 +61,104 @@ data class TableSnapshot(
     val rows: List<List<String>>
 )
 
+// Dedicated class-level recursive-descent parser resolving Kotlin local function mutual recursion
+private class ExpressionParser(private val str: String) {
+    private var pos = -1
+    private var ch = 0
+
+    private fun nextChar() {
+        ch = if (++pos < str.length) str[pos].code else -1
+    }
+
+    private fun eat(charToEat: Int): Boolean {
+        while (ch == ' '.code) nextChar()
+        if (ch == charToEat) {
+            nextChar()
+            return true
+        }
+        return false
+    }
+
+    fun parse(): Double {
+        nextChar()
+        val x = parseExpression()
+        return x
+    }
+
+    private fun parseExpression(): Double {
+        var x = parseTerm()
+        while (true) {
+            when {
+                eat('+'.code) -> x += parseTerm()
+                eat('-'.code) -> x -= parseTerm()
+                else -> return x
+            }
+        }
+    }
+
+    private fun parseTerm(): Double {
+        var x = parseFactor()
+        while (true) {
+            when {
+                eat('*'.code) || eat('×'.code) -> x *= parseFactor()
+                eat('/'.code) || eat('÷'.code) -> {
+                    val divisor = parseFactor()
+                    if (divisor == 0.0) throw ArithmeticException("Division by zero")
+                    x /= divisor
+                }
+                eat('%'.code) -> x %= parseFactor()
+                else -> return x
+            }
+        }
+    }
+
+    private fun parseFactor(): Double {
+        if (eat('+'.code)) return +parseFactor()
+        if (eat('-'.code)) return -parseFactor()
+
+        var x: Double
+        val startPos = pos
+        if (eat('('.code)) {
+            x = parseExpression()
+            eat(')'.code)
+        } else if ((ch in '0'.code..'9'.code) || ch == '.'.code) {
+            while ((ch in '0'.code..'9'.code) || ch == '.'.code) nextChar()
+            x = str.substring(startPos, pos).toDoubleOrNull() ?: 0.0
+        } else if (ch in 'a'.code..'z'.code || ch in 'A'.code..'Z'.code) {
+            while (ch in 'a'.code..'z'.code || ch in 'A'.code..'Z'.code) nextChar()
+            val func = str.substring(startPos, pos).uppercase(Locale.US)
+            if (eat('('.code)) {
+                val args = mutableListOf<Double>()
+                if (!eat(')'.code)) {
+                    do {
+                        args.add(parseExpression())
+                    } while (eat(','.code))
+                    eat(')'.code)
+                }
+                x = when (func) {
+                    "SUM" -> args.sum()
+                    "AVG", "AVERAGE" -> if (args.isNotEmpty()) args.average() else 0.0
+                    "MIN" -> args.minOrNull() ?: 0.0
+                    "MAX" -> args.maxOrNull() ?: 0.0
+                    "ROUND" -> if (args.isNotEmpty()) args[0].roundToLong().toDouble() else 0.0
+                    "ABS" -> if (args.isNotEmpty()) abs(args[0]) else 0.0
+                    "SQRT" -> if (args.isNotEmpty()) sqrt(args[0]) else 0.0
+                    else -> 0.0
+                }
+            } else {
+                x = 0.0
+            }
+        } else {
+            x = 0.0
+            if (ch != -1) nextChar()
+        }
+
+        if (eat('^'.code)) x = x.pow(parseFactor())
+        return x
+    }
+}
+
+// Zero-dependency Mathematical and Statistical Expression Parser
 object FormulaEvaluator {
     fun evaluate(
         formula: String,
@@ -73,6 +171,7 @@ object FormulaEvaluator {
         if (expr.startsWith("=")) expr = expr.substring(1).trim()
         if (expr.isBlank()) return ""
 
+        // Replace bracketed column references [Column Name] or [Col 1] with current row numeric values
         headers.forEachIndexed { idx, col ->
             if (idx != targetColIdx) {
                 val raw = rowValues.getOrElse(idx) { "" }.trim()
@@ -87,7 +186,7 @@ object FormulaEvaluator {
         }
 
         return try {
-            val result = parseAndEval(expr)
+            val result = ExpressionParser(expr).parse()
             if (result.isNaN() || result.isInfinite()) {
                 "#DIV/0!"
             } else if (result == result.toLong().toDouble()) {
@@ -98,98 +197,6 @@ object FormulaEvaluator {
         } catch (_: Exception) {
             "#ERR"
         }
-    }
-
-    private fun parseAndEval(str: String): Double {
-        var pos = -1
-        var ch = 0
-
-        fun nextChar() {
-            ch = if (++pos < str.length) str[pos].code else -1
-        }
-
-        fun eat(charToEat: Int): Boolean {
-            while (ch == ' '.code) nextChar()
-            if (ch == charToEat) {
-                nextChar()
-                return true
-            }
-            return false
-        }
-
-        fun parseExpression(): Double {
-            var x = parseTerm()
-            while (true) {
-                when {
-                    eat('+'.code) -> x += parseTerm()
-                    eat('-'.code) -> x -= parseTerm()
-                    else -> return x
-                }
-            }
-        }
-
-        fun parseTerm(): Double {
-            var x = parseFactor()
-            while (true) {
-                when {
-                    eat('*'.code) || eat('×'.code) -> x *= parseFactor()
-                    eat('/'.code) || eat('÷'.code) -> {
-                        val divisor = parseFactor()
-                        if (divisor == 0.0) throw ArithmeticException("Div by zero")
-                        x /= divisor
-                    }
-                    eat('%'.code) -> x %= parseFactor()
-                    else -> return x
-                }
-            }
-        }
-
-        fun parseFactor(): Double {
-            if (eat('+'.code)) return +parseFactor()
-            if (eat('-'.code)) return -parseFactor()
-
-            var x: Double
-            val startPos = pos
-            if (eat('('.code)) {
-                x = parseExpression()
-                eat(')'.code)
-            } else if ((ch in '0'.code..'9'.code) || ch == '.'.code) {
-                while ((ch in '0'.code..'9'.code) || ch == '.'.code) nextChar()
-                x = str.substring(startPos, pos).toDouble()
-            } else if (ch in 'a'.code..'z'.code || ch in 'A'.code..'Z'.code) {
-                while (ch in 'a'.code..'z'.code || ch in 'A'.code..'Z'.code) nextChar()
-                val func = str.substring(startPos, pos).uppercase(Locale.US)
-                if (eat('('.code)) {
-                    val args = mutableListOf<Double>()
-                    if (!eat(')'.code)) {
-                        do {
-                            args.add(parseExpression())
-                        } while (eat(','.code))
-                        eat(')'.code)
-                    }
-                    x = when (func) {
-                        "SUM" -> args.sum()
-                        "AVG", "AVERAGE" -> if (args.isNotEmpty()) args.average() else 0.0
-                        "MIN" -> args.minOrNull() ?: 0.0
-                        "MAX" -> args.maxOrNull() ?: 0.0
-                        "ROUND" -> if (args.isNotEmpty()) args[0].roundToLong().toDouble() else 0.0
-                        "ABS" -> if (args.isNotEmpty()) abs(args[0]) else 0.0
-                        "SQRT" -> if (args.isNotEmpty()) sqrt(args[0]) else 0.0
-                        else -> throw RuntimeException("Unknown func: $func")
-                    }
-                } else {
-                    x = 0.0
-                }
-            } else {
-                x = 0.0
-            }
-
-            if (eat('^'.code)) x = x.pow(parseFactor())
-            return x
-        }
-
-        nextChar()
-        return parseExpression()
     }
 }
 
@@ -225,6 +232,7 @@ class TableData(
         tableDateTime = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
     }
 
+    // Recomputes all formula columns across all rows in real-time
     fun recomputeFormulas() {
         headers.forEachIndexed { colIdx, colDef ->
             if (colDef.type == ColumnType.FORMULA && colDef.formula.isNotBlank()) {

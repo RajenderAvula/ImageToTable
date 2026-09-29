@@ -3238,6 +3238,7 @@ fun MobileTableEditorScreen() {
                                 }
                             }
                         }
+                        }
 
                         Spacer(modifier = Modifier.height(80.dp))
                     }
@@ -3532,4 +3533,4 @@ fun MobileTableEditorScreen() {
         )
     }
 }
-}
+

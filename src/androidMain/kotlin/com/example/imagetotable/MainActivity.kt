@@ -157,7 +157,7 @@ fun MobileTableEditorScreen() {
     // Mode Switcher: View Mode vs Edit Mode on Home UI
     var isViewMode by remember { mutableStateOf(false) }
 
-    // Pinch-to-zoom across Table UI (scales dimensions smoothly from 0.75x to 2.0x)
+    // Magnification Zoom Scale (controls font sizes and cell dimensions)
     var tableZoomScale by remember { mutableFloatStateOf(1.0f) }
 
     var isMultiSelectMode by remember { mutableStateOf(false) }
@@ -1697,10 +1697,17 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Dynamic width computation based on zoom scale: provides continuous layout bounds without 0-height clipping
-    val actionColWidth = (190.dp * tableZoomScale).coerceAtLeast(140.dp)
-    val dataColWidth = (195.dp * tableZoomScale).coerceAtLeast(140.dp)
-    val totalTableWidth = actionColWidth + (dataColWidth * visibleColIndices.size) + 90.dp
+    // Dynamic typography scaling: values magnify and grow directly with tableZoomScale
+    val cellFontSize = (12 * tableZoomScale).sp
+    val headerFontSize = (13 * tableZoomScale).sp
+    val subTextFontSize = (10 * tableZoomScale).sp
+    val badgeFontSize = (9 * tableZoomScale).sp
+    val dateBtnFontSize = (11 * tableZoomScale).sp
+
+    // Proportional column dimensions: expand cleanly with magnified typography to eliminate truncation
+    val actionColWidth = (190 * tableZoomScale).dp.coerceAtLeast(140.dp)
+    val dataColWidth = (195 * tableZoomScale).dp.coerceAtLeast(140.dp)
+    val totalTableWidth = actionColWidth + (dataColWidth * visibleColIndices.size) + (90 * tableZoomScale).dp
     val tableHorizontalScrollState = rememberScrollState()
 
     Scaffold(
@@ -1897,7 +1904,6 @@ fun MobileTableEditorScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                // Clicking outside the table releases the keyboard and resets active cell cursor
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = {
                         focusManager.clearFocus()
@@ -1941,6 +1947,7 @@ fun MobileTableEditorScreen() {
                                 )
                             }
 
+                            // Quick Magnification Buttons
                             Button(
                                 onClick = { tableZoomScale = (tableZoomScale * 1.15f).coerceAtMost(2.0f) },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
@@ -2728,7 +2735,7 @@ fun MobileTableEditorScreen() {
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Box(modifier = Modifier.width(actionColWidth).border(1.dp, Color.LightGray).background(Color(0xFFECEFF1)).padding(6.dp)) {
-                                        BasicTextField(value = currentTable.cornerHeader, onValueChange = { currentTable.cornerHeader = it }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF0D47A1)))
+                                        BasicTextField(value = currentTable.cornerHeader, onValueChange = { currentTable.cornerHeader = it }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = cellFontSize, color = Color(0xFF0D47A1)))
                                     }
                                     visibleColIndices.forEach { colIdx ->
                                         val colDef = currentTable.headers[colIdx]
@@ -2744,11 +2751,11 @@ fun MobileTableEditorScreen() {
                                         ) {
                                             Column {
                                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                                    BasicTextField(value = colDef.name, onValueChange = { currentTable.headers[colIdx] = colDef.copy(name = it); currentTable.markUpdated() }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 13.sp), modifier = Modifier.weight(1f))
+                                                    BasicTextField(value = colDef.name, onValueChange = { currentTable.headers[colIdx] = colDef.copy(name = it); currentTable.markUpdated() }, textStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = headerFontSize), modifier = Modifier.weight(1f))
                                                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                                                         Text(
                                                             "👁",
-                                                            fontSize = 12.sp,
+                                                            fontSize = cellFontSize,
                                                             modifier = Modifier.clickable {
                                                                 if (currentTable.headers.size - hiddenColumns.size > 1) {
                                                                     hiddenColumns.add(colIdx)
@@ -2758,7 +2765,7 @@ fun MobileTableEditorScreen() {
                                                                 }
                                                             }.padding(horizontal = 2.dp)
                                                         )
-                                                        Text("✕", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) {
+                                                        Text("✕", color = Color.Red, fontSize = cellFontSize, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = currentTable.headers.size > 1) {
                                                             colPendingDeleteIdx = colIdx
                                                         })
                                                     }
@@ -2768,7 +2775,7 @@ fun MobileTableEditorScreen() {
                                                     Box {
                                                         Text(
                                                             text = if (isFormulaCol) "[fx: ${colDef.formula.take(10)} ▼]" else "[${colDef.type.label.take(7)} ▼]",
-                                                            fontSize = 10.sp,
+                                                            fontSize = subTextFontSize,
                                                             color = if (isFormulaCol) Color(0xFF2E7D32) else Color(0xFF0D47A1),
                                                             fontWeight = if (isFormulaCol) FontWeight.Bold else FontWeight.Normal,
                                                             modifier = Modifier
@@ -2816,7 +2823,7 @@ fun MobileTableEditorScreen() {
                                                     ) {
                                                         Text(
                                                             text = if (isColFiltered) "⚲ Filtered" else "⚲ Filter",
-                                                            fontSize = 10.sp,
+                                                            fontSize = subTextFontSize,
                                                             fontWeight = if (isColFiltered) FontWeight.Bold else FontWeight.Normal,
                                                             color = if (isColFiltered) Color.White else Color(0xFF37474F)
                                                         )
@@ -2827,24 +2834,24 @@ fun MobileTableEditorScreen() {
                                                             currentTable.moveColumn(colIdx, colIdx - 1)
                                                             currentTable.markUpdated()
                                                             TableRepository.saveOrUpdate(currentTable)
-                                                        }, fontSize = 12.sp)
+                                                        }, fontSize = cellFontSize)
                                                         Text("▶", modifier = Modifier.clickable(enabled = colIdx < currentTable.headers.size - 1) {
                                                             currentTable.moveColumn(colIdx, colIdx + 1)
                                                             currentTable.markUpdated()
                                                             TableRepository.saveOrUpdate(currentTable)
-                                                        }, fontSize = 12.sp)
+                                                        }, fontSize = cellFontSize)
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                    Box(modifier = Modifier.width(90.dp).padding(4.dp), contentAlignment = Alignment.Center) {
+                                    Box(modifier = Modifier.width((90 * tableZoomScale).dp).padding(4.dp), contentAlignment = Alignment.Center) {
                                         Button(onClick = {
                                             currentTable.addColumn("Col ${currentTable.headers.size + 1}")
                                             currentTable.markUpdated()
                                             TableRepository.saveOrUpdate(currentTable)
                                             tableSnapshot = currentTable.createSnapshot()
-                                        }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
+                                        }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = cellFontSize) }
                                     }
                                 }
 
@@ -2860,7 +2867,7 @@ fun MobileTableEditorScreen() {
                                                 "No rows match the search, filter, or visibility criteria." 
                                             else "Table is empty. Tap '+ Row' above to add rows.",
                                             color = Color.Gray,
-                                            fontSize = 13.sp
+                                            fontSize = cellFontSize
                                         )
                                     }
                                 } else {
@@ -2878,16 +2885,16 @@ fun MobileTableEditorScreen() {
                                                         if (isViewMode) {
                                                             Text(
                                                                 text = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" },
-                                                                fontSize = 12.sp,
+                                                                fontSize = cellFontSize,
                                                                 fontWeight = FontWeight.SemiBold,
                                                                 color = Color(0xFF1565C0),
                                                                 modifier = Modifier.weight(1f)
                                                             )
                                                         } else {
-                                                            BasicTextField(value = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" }, onValueChange = { currentTable.rowNames[origRIdx] = it; currentTable.markUpdated() }, textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)), modifier = Modifier.weight(1f))
+                                                            BasicTextField(value = currentTable.rowNames.getOrElse(origRIdx) { "Row ${origRIdx + 1}" }, onValueChange = { currentTable.rowNames[origRIdx] = it; currentTable.markUpdated() }, textStyle = TextStyle(fontSize = cellFontSize, fontWeight = FontWeight.SemiBold, color = Color(0xFF1565C0)), modifier = Modifier.weight(1f))
                                                         }
-                                                        Text("✎", fontSize = 13.sp, color = Color(0xFF00897B), fontWeight = FontWeight.Bold, modifier = Modifier.clickable { editingRowIndex = origRIdx; showRowEditorDialog = true }.padding(horizontal = 2.dp))
-                                                        Text("👁", fontSize = 12.sp, modifier = Modifier.clickable {
+                                                        Text("✎", fontSize = headerFontSize, color = Color(0xFF00897B), fontWeight = FontWeight.Bold, modifier = Modifier.clickable { editingRowIndex = origRIdx; showRowEditorDialog = true }.padding(horizontal = 2.dp))
+                                                        Text("👁", fontSize = cellFontSize, modifier = Modifier.clickable {
                                                             hiddenRows.add(origRIdx)
                                                             statusMessage = "Hidden Row ${origRIdx + 1}"
                                                         }.padding(horizontal = 2.dp))
@@ -2895,13 +2902,13 @@ fun MobileTableEditorScreen() {
                                                             currentTable.moveRow(origRIdx, origRIdx - 1)
                                                             currentTable.markUpdated()
                                                             TableRepository.saveOrUpdate(currentTable)
-                                                        }, fontSize = 11.sp)
+                                                        }, fontSize = dateBtnFontSize)
                                                         Text("▼", modifier = Modifier.clickable(enabled = origRIdx < currentTable.rows.size - 1) {
                                                             currentTable.moveRow(origRIdx, origRIdx + 1)
                                                             currentTable.markUpdated()
                                                             TableRepository.saveOrUpdate(currentTable)
-                                                        }, fontSize = 11.sp)
-                                                        Text("✕", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable {
+                                                        }, fontSize = dateBtnFontSize)
+                                                        Text("✕", color = Color.Red, fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold, modifier = Modifier.clickable {
                                                             rowPendingDeleteIdx = origRIdx
                                                         })
                                                     }
@@ -2940,12 +2947,13 @@ fun MobileTableEditorScreen() {
                                                             .width(dataColWidth)
                                                             .border(width = if (isSelected || isAnchor) 2.dp else 0.5.dp, color = cellBorder)
                                                             .background(cellBg)
-                                                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                                                            .padding(horizontal = (6 * tableZoomScale).dp, vertical = (4 * tableZoomScale).dp)
                                                     ) {
                                                         if (isViewMode) {
+                                                            // VIEW MODE: Magnified read-only text value without triggering soft keyboard
                                                             Text(
                                                                 text = cellValue.ifBlank { " " },
-                                                                fontSize = 12.sp,
+                                                                fontSize = cellFontSize,
                                                                 color = when {
                                                                     isPresent -> Color(0xFF2E7D32)
                                                                     isAbsent -> Color(0xFFC62828)
@@ -2961,6 +2969,7 @@ fun MobileTableEditorScreen() {
                                                                     }
                                                             )
                                                         } else {
+                                                            // EDIT MODE: Magnified direct in-cell editing
                                                             when (colDef.type) {
                                                                 ColumnType.FORMULA -> {
                                                                     Row(
@@ -2977,7 +2986,7 @@ fun MobileTableEditorScreen() {
                                                                     ) {
                                                                         Text(
                                                                             text = cellValue.ifBlank { "0" },
-                                                                            fontSize = 12.sp,
+                                                                            fontSize = cellFontSize,
                                                                             fontWeight = FontWeight.Bold,
                                                                             color = if (cellValue.startsWith("#")) Color.Red else Color(0xFF1B5E20),
                                                                             modifier = Modifier.weight(1f)
@@ -2987,7 +2996,7 @@ fun MobileTableEditorScreen() {
                                                                                 .background(Color(0xFFDCEDC8), RoundedCornerShape(3.dp))
                                                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                                                         ) {
-                                                                            Text("fx", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                            Text("fx", fontSize = badgeFontSize, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
                                                                         }
                                                                     }
                                                                 }
@@ -3006,7 +3015,7 @@ fun MobileTableEditorScreen() {
                                                                             },
                                                                             enabled = !isMultiSelectMode,
                                                                             textStyle = TextStyle(
-                                                                                fontSize = 11.sp,
+                                                                                fontSize = dateBtnFontSize,
                                                                                 fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
                                                                                 color = when {
                                                                                     isPresent -> Color(0xFF2E7D32)
@@ -3032,7 +3041,7 @@ fun MobileTableEditorScreen() {
                                                                                 .clickable { openDatePickerForCell(origRIdx, colIdx) }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                             ) {
-                                                                                Text("📅", fontSize = 11.sp)
+                                                                                Text("📅", fontSize = dateBtnFontSize)
                                                                             }
 
                                                                             Box(
@@ -3048,7 +3057,7 @@ fun MobileTableEditorScreen() {
                                                                                     }
                                                                                     .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                             ) {
-                                                                                Text("P", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
+                                                                                Text("P", fontSize = subTextFontSize, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
                                                                             }
 
                                                                             Box(
@@ -3064,7 +3073,7 @@ fun MobileTableEditorScreen() {
                                                                                     }
                                                                                     .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                             ) {
-                                                                                Text("A", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
+                                                                                Text("A", fontSize = subTextFontSize, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
                                                                             }
                                                                         }
                                                                     }
@@ -3084,7 +3093,7 @@ fun MobileTableEditorScreen() {
                                                                             },
                                                                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                                             enabled = !isMultiSelectMode,
-                                                                            textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                            textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
                                                                             modifier = Modifier
                                                                                 .weight(1f)
                                                                                 .onFocusChanged {
@@ -3107,7 +3116,7 @@ fun MobileTableEditorScreen() {
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                             ) {
-                                                                                Text("-", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                                                Text("-", fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold)
                                                                             }
 
                                                                             Box(
@@ -3120,7 +3129,7 @@ fun MobileTableEditorScreen() {
                                                                                 }
                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                             ) {
-                                                                                Text("+", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                                                Text("+", fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold)
                                                                             }
                                                                         }
                                                                     }
@@ -3135,7 +3144,7 @@ fun MobileTableEditorScreen() {
                                                                         },
                                                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                                                         enabled = !isMultiSelectMode,
-                                                                        textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                        textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
                                                                         modifier = Modifier
                                                                             .fillMaxWidth()
                                                                             .onFocusChanged {
@@ -3156,7 +3165,7 @@ fun MobileTableEditorScreen() {
                                                                             currentTable.markUpdated()
                                                                         },
                                                                         enabled = !isMultiSelectMode,
-                                                                        textStyle = TextStyle(fontSize = 12.sp, color = Color.Black),
+                                                                        textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
                                                                         modifier = Modifier
                                                                             .fillMaxWidth()
                                                                             .onFocusChanged {

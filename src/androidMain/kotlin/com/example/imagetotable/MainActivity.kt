@@ -3218,7 +3218,7 @@ fun MobileTableEditorScreen() {
                                                             if (isMultiSelectMode) {
                                                                 Box(
                                                                     modifier = Modifier
-                                                                        .matchParentSize()
+                                                                        .fillMaxSize()
                                                                         .clickable {
                                                                             anchorCell = cellCoord
                                                                             if (selectedCells.contains(cellCoord)) {

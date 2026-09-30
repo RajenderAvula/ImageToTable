@@ -19,19 +19,32 @@ enum class AttachmentType {
 data class CellAttachment(
     val id: String = UUID.randomUUID().toString(),
     val type: AttachmentType,
-    val uriString: String,
-    val displayName: String,
+    val uriString: String = "",
+    val displayName: String = "",
     val mimeType: String = "",
     val detail: String = "" // For Contact: phone number; For File: file size
+)
+
+data class CellChecklistItem(
+    val id: String = UUID.randomUUID().toString(),
+    val text: String,
+    val isChecked: Boolean = false
+)
+
+data class CellDataPayload(
+    val displayText: String,
+    val attachments: List<CellAttachment> = emptyList(),
+    val note: String = "",
+    val checklists: List<CellChecklistItem> = emptyList()
 )
 
 object CellAttachmentHelper {
     private const val ATTACHMENT_MARKER_START = "<!--ATTACHMENTS:"
     private const val ATTACHMENT_MARKER_END = "-->"
 
-    fun parseCellContent(rawContent: String): Pair<String, List<CellAttachment>> {
+    fun parseCellContent(rawContent: String): CellDataPayload {
         if (!rawContent.contains(ATTACHMENT_MARKER_START)) {
-            return Pair(rawContent, emptyList())
+            return CellDataPayload(displayText = rawContent)
         }
         val displayText = rawContent.substringBefore(ATTACHMENT_MARKER_START).trimEnd()
         val jsonStr = rawContent
@@ -40,28 +53,81 @@ object CellAttachmentHelper {
             .trim()
 
         val attachments = mutableListOf<CellAttachment>()
+        val checklists = mutableListOf<CellChecklistItem>()
+        var note = ""
+
         try {
-            val jsonArray = JSONArray(jsonStr)
-            for (i in 0 until jsonArray.length()) {
-                val obj = jsonArray.getJSONObject(i)
-                attachments.add(
-                    CellAttachment(
-                        id = obj.optString("id", UUID.randomUUID().toString()),
-                        type = AttachmentType.valueOf(obj.optString("type", AttachmentType.FILE.name)),
-                        uriString = obj.optString("uri", ""),
-                        displayName = obj.optString("name", "Attachment"),
-                        mimeType = obj.optString("mime", ""),
-                        detail = obj.optString("detail", "")
+            if (jsonStr.startsWith("{")) {
+                val root = JSONObject(jsonStr)
+                note = root.optString("note", "")
+
+                val attArray = root.optJSONArray("attachments") ?: JSONArray()
+                for (i in 0 until attArray.length()) {
+                    val obj = attArray.getJSONObject(i)
+                    attachments.add(
+                        CellAttachment(
+                            id = obj.optString("id", UUID.randomUUID().toString()),
+                            type = AttachmentType.valueOf(obj.optString("type", AttachmentType.FILE.name)),
+                            uriString = obj.optString("uri", ""),
+                            displayName = obj.optString("name", "Attachment"),
+                            mimeType = obj.optString("mime", ""),
+                            detail = obj.optString("detail", "")
+                        )
                     )
-                )
+                }
+
+                val checkArray = root.optJSONArray("checklists") ?: JSONArray()
+                for (i in 0 until checkArray.length()) {
+                    val cObj = checkArray.getJSONObject(i)
+                    checklists.add(
+                        CellChecklistItem(
+                            id = cObj.optString("id", UUID.randomUUID().toString()),
+                            text = cObj.optString("text", ""),
+                            isChecked = cObj.optBoolean("done", false)
+                        )
+                    )
+                }
+            } else if (jsonStr.startsWith("[")) {
+                // Legacy compatibility
+                val jsonArray = JSONArray(jsonStr)
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    attachments.add(
+                        CellAttachment(
+                            id = obj.optString("id", UUID.randomUUID().toString()),
+                            type = AttachmentType.valueOf(obj.optString("type", AttachmentType.FILE.name)),
+                            uriString = obj.optString("uri", ""),
+                            displayName = obj.optString("name", "Attachment"),
+                            mimeType = obj.optString("mime", ""),
+                            detail = obj.optString("detail", "")
+                        )
+                    )
+                }
             }
         } catch (_: Exception) {}
-        return Pair(displayText, attachments)
+
+        return CellDataPayload(
+            displayText = displayText,
+            attachments = attachments,
+            note = note,
+            checklists = checklists
+        )
     }
 
-    fun formatCellContent(displayText: String, attachments: List<CellAttachment>): String {
-        if (attachments.isEmpty()) return displayText.trim()
-        val jsonArray = JSONArray()
+    fun formatCellContent(
+        displayText: String,
+        attachments: List<CellAttachment>,
+        note: String = "",
+        checklists: List<CellChecklistItem> = emptyList()
+    ): String {
+        if (attachments.isEmpty() && note.isBlank() && checklists.isEmpty()) {
+            return displayText.trim()
+        }
+
+        val root = JSONObject()
+        root.put("note", note.trim())
+
+        val attArray = JSONArray()
         for (att in attachments) {
             val obj = JSONObject().apply {
                 put("id", att.id)
@@ -71,9 +137,22 @@ object CellAttachmentHelper {
                 put("mime", att.mimeType)
                 put("detail", att.detail)
             }
-            jsonArray.put(obj)
+            attArray.put(obj)
         }
-        return "${displayText.trim()}\n$ATTACHMENT_MARKER_START$jsonArray$ATTACHMENT_MARKER_END"
+        root.put("attachments", attArray)
+
+        val checkArray = JSONArray()
+        for (item in checklists) {
+            val cObj = JSONObject().apply {
+                put("id", item.id)
+                put("text", item.text)
+                put("done", item.isChecked)
+            }
+            checkArray.put(cObj)
+        }
+        root.put("checklists", checkArray)
+
+        return "${displayText.trim()}\n$ATTACHMENT_MARKER_START$root$ATTACHMENT_MARKER_END"
     }
 
     fun queryFileNameAndSize(context: Context, uri: Uri): Pair<String, String> {

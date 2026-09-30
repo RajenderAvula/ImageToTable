@@ -854,9 +854,39 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
             )
         }
     }
+    if (activeAttachmentCellCoord != null) {
+        val (r, c) = activeAttachmentCellCoord!!
+        val rawCell = currentTable.rows.getOrNull(r)?.getOrNull(c) ?: ""
+        val payload = CellAttachmentHelper.parseCellContent(rawCell)
+        val colName = currentTable.headers.getOrNull(c)?.name ?: "Col ${c + 1}"
+
+        CellAttachmentDialog(
+            rowIndex = r,
+            columnIndex = c,
+            columnName = colName,
+            initialText = payload.displayText,
+            initialNote = payload.note,
+            initialAttachments = payload.attachments,
+            initialChecklists = payload.checklists,
+            onDismiss = { activeAttachmentCellCoord = null },
+            onSave = { updatedText, updatedNote, updatedAttachments, updatedChecklists ->
+                val encoded = CellAttachmentHelper.formatCellContent(
+                    displayText = updatedText,
+                    attachments = updatedAttachments,
+                    note = updatedNote,
+                    checklists = updatedChecklists
+                )
+                currentTable.setCellValue(r, c, encoded)
+                currentTable.markUpdated()
+                TableRepository.saveOrUpdate(currentTable)
+                tableSnapshot = currentTable.createSnapshot()
+                statusMessage = "Updated cell ($r, $c)"
+            }
+        )
+    }
 
     // CELL ATTACHMENT AND PREVIEW DIALOG
-if (activeAttachmentCellCoord != null) {
+/*if (activeAttachmentCellCoord != null) {
     val (r, c) = activeAttachmentCellCoord!!
     val rawCell = currentTable.rows.getOrNull(r)?.getOrNull(c) ?: ""
     val (parsedText, parsedAttachments) = CellAttachmentHelper.parseCellContent(rawCell)
@@ -878,7 +908,7 @@ if (activeAttachmentCellCoord != null) {
             statusMessage = "Updated cell ($r, $c) with ${updatedAttachments.size} attachment(s)"
         }
     )
-}
+}*/
 
     if (showNewTableDialog) {
         NewTableDialog(
@@ -3238,6 +3268,13 @@ if (activeAttachmentCellCoord != null) {
     val (displayVal, cellAttachments) = remember(cellValue) {
         CellAttachmentHelper.parseCellContent(cellValue)
     }
+    val payload = remember(cellValue) {
+        CellAttachmentHelper.parseCellContent(cellValue)
+    }
+    val displayVal = payload.displayText
+    val cellAttachments = payload.attachments
+    val cellChecklists = payload.checklists
+    val cellNote = payload.note
 
     val isDateCol = colDef.type == ColumnType.DATE || parseDateFromHeader(colDef.name) != null
     val isPresent = isAttendancePresent(displayVal)
@@ -3530,7 +3567,7 @@ if (activeAttachmentCellCoord != null) {
             }
 
             // Inline Previews of Attached Files & Contacts
-            if (cellAttachments.isNotEmpty()) {
+           /* if (cellAttachments.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -3561,7 +3598,60 @@ if (activeAttachmentCellCoord != null) {
                                 maxLines = 1
                             )
                         }
-                    }
+                    }*/
+
+                        // Shows status indicators for attachments, checklists, and notes directly on the grid
+    if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(top = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (cellNote.isNotBlank()) {
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFFFFF9C4), RoundedCornerShape(3.dp))
+                        .clickable { activeAttachmentCellCoord = cellCoord }
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                ) { Text("📝 Note", fontSize = badgeFontSize, color = Color(0xFFF57F17)) }
+            }
+
+            if (cellChecklists.isNotEmpty()) {
+                val done = cellChecklists.count { it.isChecked }
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
+                        .clickable { activeAttachmentCellCoord = cellCoord }
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                ) { Text("☑ $done/${cellChecklists.size}", fontSize = badgeFontSize, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold) }
+            }
+
+            cellAttachments.take(2).forEach { att ->
+                Box(
+                    modifier = Modifier
+                        .background(if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                        .clickable { activeAttachmentCellCoord = cellCoord }
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                ) {
+                    Text(
+                        text = when (att.type) {
+                            AttachmentType.IMAGE -> "🖼 ${att.displayName.take(6)}"
+                            AttachmentType.PDF -> "📄 PDF"
+                            AttachmentType.CONTACT -> "👤 ${att.displayName.take(6)}"
+                            AttachmentType.FILE -> "📁 ${att.displayName.take(6)}"
+                        },
+                        fontSize = badgeFontSize,
+                        color = Color.DarkGray,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+
                     if (cellAttachments.size > 3) {
                         Text(
                             text = "+${cellAttachments.size - 3}",

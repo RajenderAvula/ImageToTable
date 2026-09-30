@@ -63,6 +63,8 @@ import com.example.imagetotable.model.*
 import com.example.imagetotable.ocr.AndroidOcrService
 import com.example.imagetotable.ui.*
 import com.example.imagetotable.util.*
+import com.example.imagetotable.model.AttachmentType
+import com.example.imagetotable.model.CellAttachmentHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

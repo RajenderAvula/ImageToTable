@@ -3265,9 +3265,9 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
     val isAnchor = anchorCell == cellCoord
 
     // Parse visible text and embedded attachments
-    val (displayVal, cellAttachments) = remember(cellValue) {
+   /* val (displayVal, cellAttachments) = remember(cellValue) {
         CellAttachmentHelper.parseCellContent(cellValue)
-    }
+    }*/
     val payload = remember(cellValue) {
         CellAttachmentHelper.parseCellContent(cellValue)
     }
@@ -3649,12 +3649,12 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                     )
                 }
             }
-        }
-    }
+        
+    
 
-                    if (cellAttachments.size > 3) {
+                    if (cellAttachments.size > 2) {
                         Text(
-                            text = "+${cellAttachments.size - 3}",
+                            text = "+${cellAttachments.size - 2}",
                             fontSize = badgeFontSize,
                             color = Color.Gray,
                             modifier = Modifier.clickable { activeAttachmentCellCoord = cellCoord }

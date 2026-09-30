@@ -84,7 +84,7 @@ fun CellAttachmentDialog(
         }
     }
 
-    // System Contact Picker (No sensitive permission required)
+    // System Contact Picker
     val contactPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickContact()
     ) { contactUri: Uri? ->
@@ -107,8 +107,8 @@ fun CellAttachmentDialog(
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .fillMaxHeight(0.85f),
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.88f),
             shape = RoundedCornerShape(16.dp),
             color = Color(0xFFF8FAFC)
         ) {
@@ -124,7 +124,7 @@ fun CellAttachmentDialog(
                 ) {
                     Column {
                         Text(
-                            text = "📎 Cell Attachments & Previews",
+                            text = "📎 Cell Attachments & Contacts",
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
@@ -183,7 +183,7 @@ fun CellAttachmentDialog(
                     Divider()
 
                     Text(
-                        text = "Attached Previews (${attachmentsState.size})",
+                        text = "Attached Items (${attachmentsState.size})",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                         color = Color(0xFF37474F)
@@ -302,11 +302,11 @@ private fun AttachmentPreviewCard(
         backgroundColor = Color.White
     ) {
         Row(
-            modifier = Modifier.padding(8.dp),
+            modifier = Modifier.padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Visual Preview Avatar
+            // Visual Preview / Avatar
             when (attachment.type) {
                 AttachmentType.IMAGE -> {
                     val bmp = remember(attachment.uriString) {
@@ -366,7 +366,7 @@ private fun AttachmentPreviewCard(
                 }
             }
 
-            // Info Column
+            // Info & Communication Actions
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = attachment.displayName,
@@ -383,49 +383,104 @@ private fun AttachmentPreviewCard(
                     )
                 }
 
-                // Interactive Quick Actions for Contacts
+                // Interactive Quick Communication Actions for Contacts (Call, Text, WhatsApp)
                 if (attachment.type == AttachmentType.CONTACT && attachment.detail.isNotBlank()) {
+                    val rawPhone = attachment.detail.trim()
+                    // Strip special chars & plus sign for WhatsApp standard format
+                    val cleanPhoneForWa = rawPhone.replace(Regex("[^0-9]"), "")
+
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(top = 4.dp)
+                        modifier = Modifier.padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "📞 Call",
-                            color = Color(0xFF1976D2),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
+                        // 1. Phone Call Action
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFFE3F2FD),
                             modifier = Modifier.clickable {
                                 try {
-                                    val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${attachment.detail}"))
+                                    val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$rawPhone"))
                                     context.startActivity(dialIntent)
-                                } catch (_: Exception) {}
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Cannot open dialer: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
                             }
-                        )
-                        Text(
-                            text = "💬 SMS",
-                            color = Color(0xFF00897B),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
+                        ) {
+                            Text(
+                                text = "📞 Call",
+                                color = Color(0xFF1565C0),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+
+                        // 2. SMS / Text Action
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFFE0F2F1),
                             modifier = Modifier.clickable {
                                 try {
-                                    val smsIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${attachment.detail}"))
+                                    val smsIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$rawPhone"))
                                     context.startActivity(smsIntent)
-                                } catch (_: Exception) {}
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Cannot open SMS: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
                             }
-                        )
+                        ) {
+                            Text(
+                                text = "💬 SMS",
+                                color = Color(0xFF00796B),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+
+                        // 3. WhatsApp Action
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFFE8F5E9),
+                            modifier = Modifier.clickable {
+                                try {
+                                    val waUri = Uri.parse("https://api.whatsapp.com/send?phone=$cleanPhoneForWa")
+                                    val waIntent = Intent(Intent.ACTION_VIEW, waUri).apply {
+                                        setPackage("com.whatsapp")
+                                    }
+                                    context.startActivity(waIntent)
+                                } catch (_: Exception) {
+                                    // Fallback to browser link if WhatsApp app direct launch fails
+                                    try {
+                                        val webWaIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?phone=$cleanPhoneForWa"))
+                                        context.startActivity(webWaIntent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "WhatsApp is not available: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) {
+                            Text(
+                                text = "🟢 WhatsApp",
+                                color = Color(0xFF2E7D32),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            // Action Buttons
+            // Right-side actions (View file & Delete item)
             if (attachment.type != AttachmentType.CONTACT) {
-                IconButton(onClick = onOpenClick, modifier = Modifier.size(30.dp)) {
+                IconButton(onClick = onOpenClick, modifier = Modifier.size(28.dp)) {
                     Text("👁", fontSize = 16.sp)
                 }
             }
 
-            IconButton(onClick = onDeleteClick, modifier = Modifier.size(30.dp)) {
-                Text("✕", color = Color.Red, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            IconButton(onClick = onDeleteClick, modifier = Modifier.size(28.dp)) {
+                Text("✕", color = Color.Red, fontWeight = FontWeight.Bold, fontSize = 15.sp)
             }
         }
     }

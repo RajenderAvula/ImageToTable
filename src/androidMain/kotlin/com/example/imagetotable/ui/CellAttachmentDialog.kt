@@ -232,7 +232,7 @@ fun CellAttachmentDialog(
         )
     }
 
-    // Multi-File Picker (Images, PDFs, Documents)
+    // Multi-File Picker (Images, Videos, Audio, PDFs, Documents)
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
@@ -249,6 +249,8 @@ fun CellAttachmentDialog(
                 val (name, size) = CellAttachmentHelper.queryFileNameAndSize(context, uri)
                 val type = when {
                     mime.startsWith("image/") || name.endsWith(".jpg", true) || name.endsWith(".png", true) -> AttachmentType.IMAGE
+                    mime.startsWith("video/") || name.endsWith(".mp4", true) || name.endsWith(".mkv", true) -> AttachmentType.VIDEO
+                    mime.startsWith("audio/") || name.endsWith(".mp3", true) || name.endsWith(".m4a", true) || name.endsWith(".wav", true) -> AttachmentType.VOICE
                     mime.contains("pdf") || name.endsWith(".pdf", true) -> AttachmentType.PDF
                     else -> AttachmentType.FILE
                 }
@@ -1079,6 +1081,22 @@ private fun AttachmentPreviewCard(
                             contentAlignment = Alignment.Center
                         ) { Text("🖼", fontSize = 20.sp) }
                     }
+                }
+                AttachmentType.VIDEO -> {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .background(Color(0xFFEDE7F6), RoundedCornerShape(6.dp)),
+                        contentAlignment = Alignment.Center
+                    ) { Text("🎬", fontSize = 20.sp) }
+                }
+                AttachmentType.VOICE -> {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .background(Color(0xFFFFF3E0), RoundedCornerShape(6.dp)),
+                        contentAlignment = Alignment.Center
+                    ) { Text("🎤", fontSize = 20.sp) }
                 }
                 AttachmentType.PDF -> {
                     Box(

@@ -43,7 +43,6 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -56,6 +55,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -87,9 +87,7 @@ fun parseDateFromHeader(header: String): Date? {
         SimpleDateFormat("yyyy/MM/dd", Locale.getDefault())
     )
     for (sdf in formats) {
-        try {
-            return sdf.parse(header.trim())
-        } catch (_: Exception) {}
+        try { return sdf.parse(header.trim()) } catch (_: Exception) {}
     }
     return null
 }
@@ -152,12 +150,11 @@ fun MobileTableEditorScreen() {
     var currentTable by remember { mutableStateOf(initialTable) }
     var tableSnapshot by remember { mutableStateOf(initialTable.createSnapshot()) }
 
+    // Table Navigation Backstack (Supports linking, opening & reverting tables)
+    val tableBackStack = remember { mutableStateListOf<TableData>() }
+
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-
-    // Mode Switcher: View Mode vs Edit Mode on Home UI
     var isViewMode by remember { mutableStateOf(false) }
-
-    // Magnification Zoom Scale (controls font sizes and cell dimensions)
     var tableZoomScale by remember { mutableFloatStateOf(1.0f) }
 
     var isMultiSelectMode by remember { mutableStateOf(false) }
@@ -165,7 +162,6 @@ fun MobileTableEditorScreen() {
     var anchorCell by remember { mutableStateOf(Pair(0, 0)) }
     var cellClipboard by remember { mutableStateOf<CellClipboard?>(null) }
 
-    // Multi-edit batch value dialog state
     var showBatchEditDialog by remember { mutableStateOf(false) }
     var batchEditText by remember { mutableStateOf("") }
 
@@ -182,7 +178,6 @@ fun MobileTableEditorScreen() {
     val hiddenChartDateIndices = remember { mutableStateListOf<Int>() }
     var showChartDateSelectorDialog by remember { mutableStateOf(false) }
 
-    // Dialog Visibilities
     var showCropperDialog by remember { mutableStateOf(false) }
     var cropperTargetPageIndex by remember { mutableStateOf<Int?>(null) }
     var showDedicatedEditor by remember { mutableStateOf(false) }
@@ -196,17 +191,14 @@ fun MobileTableEditorScreen() {
     var editingRowIndex by remember { mutableIntStateOf(0) }
     var showAddDateColumnDialog by remember { mutableStateOf(false) }
 
-    // Deletion confirmation states for table rows & columns
     var colPendingDeleteIdx by remember { mutableStateOf<Int?>(null) }
     var rowPendingDeleteIdx by remember { mutableStateOf<Int?>(null) }
 
-    // Formula Builder Dialog State
     var showFormulaBuilderDialog by remember { mutableStateOf(false) }
     var formulaEditingColIndex by remember { mutableIntStateOf(-1) }
     var formulaInitialColName by remember { mutableStateOf("Total") }
     var formulaInitialExpression by remember { mutableStateOf("") }
 
-    // Custom Row and Column Show/Hide Dialog States
     var showColumnVisibilityDialog by remember { mutableStateOf(false) }
     var showRowVisibilityDialog by remember { mutableStateOf(false) }
     val hiddenColumns = remember { mutableStateListOf<Int>() }
@@ -235,35 +227,74 @@ fun MobileTableEditorScreen() {
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
 
-    // Accurate Index Remapping Helpers
+    // Table Navigation: Open Linked Table
+    fun openLinkedTable(targetTableId: String) {
+        val target = TableRepository.tables.firstOrNull { it.id == targetTableId }
+        if (target != null) {
+            tableBackStack.add(currentTable)
+            currentTable = target
+            tableSnapshot = target.createSnapshot()
+            columnValueFilters.clear()
+            hiddenColumns.clear()
+            hiddenRows.clear()
+            hiddenChartDateIndices.clear()
+            globalSearchQuery = ""
+            selectedCells.clear(); selectedCells.add(Pair(0, 0))
+            anchorCell = Pair(0, 0)
+            statusMessage = "Opened linked table '${target.tableName}'"
+        } else {
+            Toast.makeText(context, "Linked table not found", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Table Navigation: Return / Revert to Parent Table
+    fun returnToParentTable(revertChanges: Boolean) {
+        if (tableBackStack.isNotEmpty()) {
+            if (revertChanges) {
+                currentTable.tableName = tableSnapshot.tableName
+                currentTable.tableDateTime = tableSnapshot.tableDateTime
+                currentTable.headers.clear()
+                currentTable.headers.addAll(tableSnapshot.headers.map { it.copy() })
+                currentTable.rowNames.clear()
+                currentTable.rowNames.addAll(tableSnapshot.rowNames)
+                currentTable.rows.clear()
+                tableSnapshot.rows.forEach { r -> currentTable.rows.add(mutableStateListOf(*r.toTypedArray())) }
+            } else {
+                currentTable.recomputeFormulas()
+                currentTable.markUpdated()
+                TableRepository.saveOrUpdate(currentTable)
+            }
+
+            val parent = tableBackStack.removeAt(tableBackStack.size - 1)
+            currentTable = parent
+            tableSnapshot = parent.createSnapshot()
+            columnValueFilters.clear()
+            hiddenColumns.clear()
+            hiddenRows.clear()
+            hiddenChartDateIndices.clear()
+            globalSearchQuery = ""
+            selectedCells.clear(); selectedCells.add(Pair(0, 0))
+            anchorCell = Pair(0, 0)
+            statusMessage = if (revertChanges) "Reverted & returned to '${parent.tableName}'" else "Saved & returned to '${parent.tableName}'"
+        }
+    }
+
     fun deleteColumnAndRemapIndices(cIdx: Int) {
         if (cIdx !in currentTable.headers.indices || currentTable.headers.size <= 1) return
 
         currentTable.deleteColumn(cIdx)
 
-        val newHiddenCols = hiddenColumns
-            .filter { it != cIdx }
-            .map { if (it > cIdx) it - 1 else it }
-            .distinct()
-        hiddenColumns.clear()
-        hiddenColumns.addAll(newHiddenCols)
+        val newHiddenCols = hiddenColumns.filter { it != cIdx }.map { if (it > cIdx) it - 1 else it }.distinct()
+        hiddenColumns.clear(); hiddenColumns.addAll(newHiddenCols)
 
-        val newHiddenChartDates = hiddenChartDateIndices
-            .filter { it != cIdx }
-            .map { if (it > cIdx) it - 1 else it }
-            .distinct()
-        hiddenChartDateIndices.clear()
-        hiddenChartDateIndices.addAll(newHiddenChartDates)
+        val newHiddenChartDates = hiddenChartDateIndices.filter { it != cIdx }.map { if (it > cIdx) it - 1 else it }.distinct()
+        hiddenChartDateIndices.clear(); hiddenChartDateIndices.addAll(newHiddenChartDates)
 
         val newColFilters = mutableMapOf<Int, Set<String>>()
         columnValueFilters.forEach { (key, set) ->
-            if (key != cIdx) {
-                val newKey = if (key > cIdx) key - 1 else key
-                newColFilters[newKey] = set
-            }
+            if (key != cIdx) newColFilters[if (key > cIdx) key - 1 else key] = set
         }
-        columnValueFilters.clear()
-        columnValueFilters.putAll(newColFilters)
+        columnValueFilters.clear(); columnValueFilters.putAll(newColFilters)
 
         val newSelected = selectedCells.mapNotNull { (r, c) ->
             when {
@@ -272,13 +303,9 @@ fun MobileTableEditorScreen() {
                 else -> Pair(r, c)
             }
         }
-        selectedCells.clear()
-        selectedCells.addAll(newSelected)
-        if (anchorCell.second == cIdx) {
-            anchorCell = Pair(anchorCell.first, 0.coerceAtMost(currentTable.headers.size - 1))
-        } else if (anchorCell.second > cIdx) {
-            anchorCell = Pair(anchorCell.first, anchorCell.second - 1)
-        }
+        selectedCells.clear(); selectedCells.addAll(newSelected)
+        if (anchorCell.second == cIdx) anchorCell = Pair(anchorCell.first, 0.coerceAtMost(currentTable.headers.size - 1))
+        else if (anchorCell.second > cIdx) anchorCell = Pair(anchorCell.first, anchorCell.second - 1)
 
         currentTable.markUpdated()
         TableRepository.saveOrUpdate(currentTable)
@@ -290,12 +317,8 @@ fun MobileTableEditorScreen() {
 
         currentTable.deleteRow(rIdx)
 
-        val newHiddenRows = hiddenRows
-            .filter { it != rIdx }
-            .map { if (it > rIdx) it - 1 else it }
-            .distinct()
-        hiddenRows.clear()
-        hiddenRows.addAll(newHiddenRows)
+        val newHiddenRows = hiddenRows.filter { it != rIdx }.map { if (it > rIdx) it - 1 else it }.distinct()
+        hiddenRows.clear(); hiddenRows.addAll(newHiddenRows)
 
         val newSelected = selectedCells.mapNotNull { (r, c) ->
             when {
@@ -304,20 +327,15 @@ fun MobileTableEditorScreen() {
                 else -> Pair(r, c)
             }
         }
-        selectedCells.clear()
-        selectedCells.addAll(newSelected)
-        if (anchorCell.first == rIdx) {
-            anchorCell = Pair(0.coerceAtMost(currentTable.rows.size - 1), anchorCell.second)
-        } else if (anchorCell.first > rIdx) {
-            anchorCell = Pair(anchorCell.first - 1, anchorCell.second)
-        }
+        selectedCells.clear(); selectedCells.addAll(newSelected)
+        if (anchorCell.first == rIdx) anchorCell = Pair(0.coerceAtMost(currentTable.rows.size - 1), anchorCell.second)
+        else if (anchorCell.first > rIdx) anchorCell = Pair(anchorCell.first - 1, anchorCell.second)
 
         currentTable.markUpdated()
         TableRepository.saveOrUpdate(currentTable)
         tableSnapshot = currentTable.createSnapshot()
     }
 
-    // Synchronized Save and Cancel Across All UIs
     fun performSynchronizedSave() {
         currentTable.recomputeFormulas()
         currentTable.markUpdated()
@@ -336,9 +354,7 @@ fun MobileTableEditorScreen() {
         currentTable.rowNames.clear()
         currentTable.rowNames.addAll(tableSnapshot.rowNames)
         currentTable.rows.clear()
-        tableSnapshot.rows.forEach { r ->
-            currentTable.rows.add(mutableStateListOf(*r.toTypedArray()))
-        }
+        tableSnapshot.rows.forEach { r -> currentTable.rows.add(mutableStateListOf(*r.toTypedArray())) }
         currentTable.recomputeFormulas()
         currentTable.markUpdated()
         TableRepository.saveOrUpdate(currentTable)
@@ -347,9 +363,7 @@ fun MobileTableEditorScreen() {
     }
 
     LaunchedEffect(previewCroppedBitmap) {
-        zoomScale = 1f
-        panOffsetX = 0f
-        panOffsetY = 0f
+        zoomScale = 1f; panOffsetX = 0f; panOffsetY = 0f
     }
 
     fun openDatePickerForCell(rIdx: Int, cIdx: Int) {
@@ -422,8 +436,7 @@ fun MobileTableEditorScreen() {
             hiddenRows.clear()
             hiddenChartDateIndices.clear()
             globalSearchQuery = ""
-            selectedCells.clear()
-            selectedCells.add(Pair(0, 0))
+            selectedCells.clear(); selectedCells.add(Pair(0, 0))
             anchorCell = Pair(0, 0)
             detectedWords.clear()
             selectedTokens.clear()
@@ -445,19 +458,16 @@ fun MobileTableEditorScreen() {
         val targetCol = if (cc < 0) 0 else cc
         if (cr >= 0 && cr < currentTable.rows.size - 1) {
             anchorCell = Pair(cr + 1, targetCol)
-            selectedCells.clear()
-            selectedCells.add(Pair(cr + 1, targetCol))
+            selectedCells.clear(); selectedCells.add(Pair(cr + 1, targetCol))
         } else if (cr < 0 && currentTable.rows.isNotEmpty()) {
             anchorCell = Pair(0, targetCol)
-            selectedCells.clear()
-            selectedCells.add(Pair(0, targetCol))
+            selectedCells.clear(); selectedCells.add(Pair(0, targetCol))
         } else {
             currentTable.addRow("Row ${currentTable.rows.size + 1}")
             currentTable.markUpdated()
             TableRepository.saveOrUpdate(currentTable)
             anchorCell = Pair(currentTable.rows.size - 1, targetCol)
-            selectedCells.clear()
-            selectedCells.add(anchorCell)
+            selectedCells.clear(); selectedCells.add(anchorCell)
             statusMessage = "Added & jumped to new row!"
         }
     }
@@ -469,43 +479,19 @@ fun MobileTableEditorScreen() {
             FileOutputStream(cacheFile).use { out -> TableExporter.exportToPdf(currentTable, out) }
             if (printManager != null) {
                 val printAdapter = object : android.print.PrintDocumentAdapter() {
-                    override fun onLayout(
-                        oldAttributes: PrintAttributes?,
-                        newAttributes: PrintAttributes?,
-                        cancellationSignal: android.os.CancellationSignal?,
-                        callback: LayoutResultCallback?,
-                        extras: Bundle?
-                    ) {
-                        callback?.onLayoutFinished(
-                            android.print.PrintDocumentInfo.Builder("${currentTable.tableName}.pdf")
-                                .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                                .build(),
-                            true
-                        )
+                    override fun onLayout(oldAttributes: PrintAttributes?, newAttributes: PrintAttributes?, cancellationSignal: android.os.CancellationSignal?, callback: LayoutResultCallback?, extras: Bundle?) {
+                        callback?.onLayoutFinished(android.print.PrintDocumentInfo.Builder("${currentTable.tableName}.pdf").setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build(), true)
                     }
-                    override fun onWrite(
-                        pages: Array<out android.print.PageRange>?,
-                        destination: android.os.ParcelFileDescriptor?,
-                        cancellationSignal: android.os.CancellationSignal?,
-                        callback: WriteResultCallback?
-                    ) {
+                    override fun onWrite(pages: Array<out android.print.PageRange>?, destination: android.os.ParcelFileDescriptor?, cancellationSignal: android.os.CancellationSignal?, callback: WriteResultCallback?) {
                         try {
-                            destination?.let { pfd ->
-                                FileOutputStream(pfd.fileDescriptor).use { output ->
-                                    cacheFile.inputStream().use { input -> input.copyTo(output) }
-                                }
-                            }
+                            destination?.let { pfd -> FileOutputStream(pfd.fileDescriptor).use { output -> cacheFile.inputStream().use { it.copyTo(output) } } }
                             callback?.onWriteFinished(arrayOf(android.print.PageRange.ALL_PAGES))
-                        } catch (e: Exception) {
-                            callback?.onWriteFailed(e.message)
-                        }
+                        } catch (e: Exception) { callback?.onWriteFailed(e.message) }
                     }
                 }
                 printManager.print(currentTable.tableName, printAdapter, PrintAttributes.Builder().build())
             }
-        } catch (e: Exception) {
-            Toast.makeText(context, "Print failed: ${e.message}", Toast.LENGTH_LONG).show()
-        }
+        } catch (e: Exception) { Toast.makeText(context, "Print failed: ${e.message}", Toast.LENGTH_LONG).show() }
     }
 
     fun shareTablePdf() {
@@ -520,9 +506,7 @@ fun MobileTableEditorScreen() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(Intent.createChooser(shareIntent, "Share Table PDF"))
-        } catch (e: Exception) {
-            Toast.makeText(context, "Share failed: ${e.message}", Toast.LENGTH_LONG).show()
-        }
+        } catch (e: Exception) { Toast.makeText(context, "Share failed: ${e.message}", Toast.LENGTH_LONG).show() }
     }
 
     fun printPdfStudioDocument(targetKb: Int?) {
@@ -531,48 +515,22 @@ fun MobileTableEditorScreen() {
             try {
                 val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
                 val cacheFile = File(context.cacheDir, "studio_print.pdf")
-                FileOutputStream(cacheFile).use { out ->
-                    PdfCompressorExporter.exportPagesToPdf(pdfPages.toList(), targetKb, out) { statusMessage = it }
-                }
+                FileOutputStream(cacheFile).use { out -> PdfCompressorExporter.exportPagesToPdf(pdfPages.toList(), targetKb, out) { statusMessage = it } }
                 if (printManager != null) {
                     val printAdapter = object : android.print.PrintDocumentAdapter() {
-                        override fun onLayout(
-                            oldAttributes: PrintAttributes?,
-                            newAttributes: PrintAttributes?,
-                            cancellationSignal: android.os.CancellationSignal?,
-                            callback: LayoutResultCallback?,
-                            extras: Bundle?
-                        ) {
-                            callback?.onLayoutFinished(
-                                android.print.PrintDocumentInfo.Builder("Studio_Document.pdf")
-                                    .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                                    .build(),
-                                true
-                            )
+                        override fun onLayout(oldAttributes: PrintAttributes?, newAttributes: PrintAttributes?, cancellationSignal: android.os.CancellationSignal?, callback: LayoutResultCallback?, extras: Bundle?) {
+                            callback?.onLayoutFinished(android.print.PrintDocumentInfo.Builder("Studio_Document.pdf").setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build(), true)
                         }
-                        override fun onWrite(
-                            pages: Array<out android.print.PageRange>?,
-                            destination: android.os.ParcelFileDescriptor?,
-                            cancellationSignal: android.os.CancellationSignal?,
-                            callback: WriteResultCallback?
-                        ) {
+                        override fun onWrite(pages: Array<out android.print.PageRange>?, destination: android.os.ParcelFileDescriptor?, cancellationSignal: android.os.CancellationSignal?, callback: WriteResultCallback?) {
                             try {
-                                destination?.let { pfd ->
-                                    FileOutputStream(pfd.fileDescriptor).use { output ->
-                                        cacheFile.inputStream().use { input -> input.copyTo(output) }
-                                    }
-                                }
+                                destination?.let { pfd -> FileOutputStream(pfd.fileDescriptor).use { output -> cacheFile.inputStream().use { it.copyTo(output) } } }
                                 callback?.onWriteFinished(arrayOf(android.print.PageRange.ALL_PAGES))
-                            } catch (e: Exception) {
-                                callback?.onWriteFailed(e.message)
-                            }
+                            } catch (e: Exception) { callback?.onWriteFailed(e.message) }
                         }
                     }
                     printManager.print("PDF_Studio_Document", printAdapter, PrintAttributes.Builder().build())
                 }
-            } catch (e: Exception) {
-                Toast.makeText(context, "Print error: ${e.message}", Toast.LENGTH_LONG).show()
-            }
+            } catch (e: Exception) { Toast.makeText(context, "Print error: ${e.message}", Toast.LENGTH_LONG).show() }
         }
     }
 
@@ -581,9 +539,7 @@ fun MobileTableEditorScreen() {
         coroutineScope.launch {
             try {
                 val cacheFile = File(context.cacheDir, "shared_document.pdf")
-                FileOutputStream(cacheFile).use { out ->
-                    PdfCompressorExporter.exportPagesToPdf(pdfPages.toList(), targetKb, out) { statusMessage = it }
-                }
+                FileOutputStream(cacheFile).use { out -> PdfCompressorExporter.exportPagesToPdf(pdfPages.toList(), targetKb, out) { statusMessage = it } }
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", cacheFile)
                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                     type = "application/pdf"
@@ -592,13 +548,10 @@ fun MobileTableEditorScreen() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 context.startActivity(Intent.createChooser(shareIntent, "Share PDF"))
-            } catch (e: Exception) {
-                Toast.makeText(context, "Share error: ${e.message}", Toast.LENGTH_LONG).show()
-            }
+            } catch (e: Exception) { Toast.makeText(context, "Share error: ${e.message}", Toast.LENGTH_LONG).show() }
         }
     }
 
-    // Launchers
     val csvImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
             try {
@@ -613,15 +566,11 @@ fun MobileTableEditorScreen() {
                     selectedCells.clear(); selectedCells.add(Pair(0, 0))
                     statusMessage = "Imported CSV successfully!"
                 }
-            } catch (e: Exception) {
-                statusMessage = "Import error: ${e.message}"
-            }
+            } catch (e: Exception) { statusMessage = "Import error: ${e.message}" }
         }
     }
 
-    val fileSaveLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument(activeExportFormat.mime)
-    ) { uri: Uri? ->
+    val fileSaveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(activeExportFormat.mime)) { uri: Uri? ->
         if (uri != null) {
             try {
                 context.contentResolver.openOutputStream(uri)?.use { stream ->
@@ -633,36 +582,26 @@ fun MobileTableEditorScreen() {
                 }
                 cacheSizeText = CacheManager.getFormattedCacheSize(context)
                 statusMessage = "Exported as ${activeExportFormat.extension.uppercase()}!"
-            } catch (e: Exception) {
-                statusMessage = "Export failed: ${e.message}"
-            }
+            } catch (e: Exception) { statusMessage = "Export failed: ${e.message}" }
         }
     }
 
     var pendingSaveTargetKb by remember { mutableStateOf<Int?>(null) }
-    val pdfStudioSaveLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/pdf")
-    ) { uri: Uri? ->
+    val pdfStudioSaveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri: Uri? ->
         if (uri != null) {
             coroutineScope.launch {
                 try {
                     context.contentResolver.openOutputStream(uri)?.use { stream ->
-                        PdfCompressorExporter.exportPagesToPdf(pdfPages.toList(), pendingSaveTargetKb, stream) {
-                            statusMessage = it
-                        }
+                        PdfCompressorExporter.exportPagesToPdf(pdfPages.toList(), pendingSaveTargetKb, stream) { statusMessage = it }
                     }
                     cacheSizeText = CacheManager.getFormattedCacheSize(context)
                     statusMessage = "Saved PDF to storage!"
-                } catch (e: Exception) {
-                    statusMessage = "Export error: ${e.message}"
-                }
+                } catch (e: Exception) { statusMessage = "Export error: ${e.message}" }
             }
         }
     }
 
-    val pdfStudioCameraScanLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicturePreview()
-    ) { bmp: Bitmap? ->
+    val pdfStudioCameraScanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bmp: Bitmap? ->
         if (bmp != null) {
             selectedBitmap = bmp
             cropperTargetPageIndex = pdfPages.size
@@ -687,9 +626,7 @@ fun MobileTableEditorScreen() {
         if (uris.isNotEmpty()) {
             uris.forEach { u ->
                 context.contentResolver.openInputStream(u)?.use { stream ->
-                    BitmapFactory.decodeStream(stream)?.let { bmp ->
-                        pdfPages.add(PdfPageItem(bitmap = bmp))
-                    }
+                    BitmapFactory.decodeStream(stream)?.let { bmp -> pdfPages.add(PdfPageItem(bitmap = bmp)) }
                 }
             }
             statusMessage = "Loaded ${uris.size} page(s) into PDF Studio!"
@@ -703,8 +640,7 @@ fun MobileTableEditorScreen() {
                 statusMessage = "Importing pages from PDF..."
                 try {
                     val count = withContext(Dispatchers.IO) {
-                        val pfd = context.contentResolver.openFileDescriptor(uri, "r")
-                            ?: throw IllegalArgumentException("Could not open file descriptor for PDF.")
+                        val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: throw IllegalArgumentException("Could not open file descriptor.")
                         val renderer = PdfRenderer(pfd)
                         val total = renderer.pageCount
                         val newPages = mutableListOf<PdfPageItem>()
@@ -721,21 +657,13 @@ fun MobileTableEditorScreen() {
                             page.close()
                             newPages.add(PdfPageItem(bitmap = bmp))
                         }
-
                         renderer.close()
                         pfd.close()
-
-                        withContext(Dispatchers.Main) {
-                            pdfPages.addAll(newPages)
-                        }
+                        withContext(Dispatchers.Main) { pdfPages.addAll(newPages) }
                         total
                     }
                     statusMessage = "Imported $count page(s) from PDF! Ready to compress/edit."
-                } catch (e: Exception) {
-                    statusMessage = "PDF Import error: ${e.message}"
-                } finally {
-                    isProcessing = false
-                }
+                } catch (e: Exception) { statusMessage = "PDF Import error: ${e.message}" } finally { isProcessing = false }
             }
         }
     }
@@ -787,17 +715,12 @@ fun MobileTableEditorScreen() {
                                 withContext(Dispatchers.Main) {
                                     detectedWords.clear()
                                     detectedWords.addAll(allTokens)
-
                                     pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
                                     pendingExtractedRows = r
                                     showExtractionPreviewDialog = true
                                 }
                             }
-                        } catch (e: Exception) {
-                            statusMessage = "OCR error: ${e.message}"
-                        } finally {
-                            isProcessing = false
-                        }
+                        } catch (e: Exception) { statusMessage = "OCR error: ${e.message}" } finally { isProcessing = false }
                     }
                 }
             }
@@ -817,7 +740,7 @@ fun MobileTableEditorScreen() {
                     }
                     val startR = currentTable.rows.size
                     for ((idx, rData) in paddedRows.withIndex()) {
-                        currentTable.addRow("Row ${startR + idx + 1}")
+                        currentTable.addRow(if (excludeRowNames) "Row ${startR + idx + 1}" else "Row ${startR + idx + 1}")
                         val targetRowIdx = currentTable.rows.size - 1
                         rData.take(currentTable.headers.size).forEachIndexed { cIdx, v ->
                             currentTable.setCellValue(targetRowIdx, cIdx, v)
@@ -863,6 +786,10 @@ fun MobileTableEditorScreen() {
             DedicatedTableEditorDialog(
                 tableData = currentTable,
                 onDismiss = { showDedicatedEditor = false },
+                onOpenLinkedTable = { targetTableId ->
+                    showDedicatedEditor = false
+                    openLinkedTable(targetTableId)
+                },
                 onSave = {
                     currentTable.recomputeFormulas()
                     currentTable.markUpdated()
@@ -875,7 +802,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
-    // CELL ATTACHMENT, NOTES & CHECKLISTS DIALOG
+    // CELL ATTACHMENT, NOTES, CHECKLISTS & LINKED TABLE DIALOG
     if (activeAttachmentCellCoord != null) {
         val (r, c) = activeAttachmentCellCoord!!
         val rawCell = currentTable.rows.getOrNull(r)?.getOrNull(c) ?: ""
@@ -892,6 +819,10 @@ fun MobileTableEditorScreen() {
             initialAttachments = payload.attachments,
             initialChecklists = payload.checklists,
             onDismiss = { activeAttachmentCellCoord = null },
+            onOpenLinkedTable = { targetTableId ->
+                activeAttachmentCellCoord = null
+                openLinkedTable(targetTableId)
+            },
             onSave = { updatedText, updatedNote, updatedAdditionalNote, updatedAttachments, updatedChecklists ->
                 val encoded = CellAttachmentHelper.formatCellContent(
                     displayText = updatedText,
@@ -909,25 +840,15 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // BATCH MULTI-EDIT DIALOG
     if (showBatchEditDialog) {
         AlertDialog(
             onDismissRequest = { showBatchEditDialog = false },
             title = {
-                Text(
-                    text = "Multi-Edit (${selectedCells.size} Selected Cells)",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = Color(0xFF6A1B9A)
-                )
+                Text(text = "Multi-Edit (${selectedCells.size} Selected Cells)", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF6A1B9A))
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "Enter a value to set across all ${selectedCells.size} selected cells. Attachments, notes, and checklists will remain intact.",
-                        fontSize = 12.sp,
-                        color = Color.DarkGray
-                    )
+                    Text(text = "Enter a value to set across all ${selectedCells.size} selected cells. Attachments and checklists will remain intact.", fontSize = 12.sp, color = Color.DarkGray)
                     OutlinedTextField(
                         value = batchEditText,
                         onValueChange = { batchEditText = it },
@@ -960,15 +881,9 @@ fun MobileTableEditorScreen() {
                         statusMessage = "Updated ${selectedCells.size} cells with '$batchEditText'"
                     },
                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
-                ) {
-                    Text("Apply to All", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                ) { Text("Apply to All", color = Color.White, fontWeight = FontWeight.Bold) }
             },
-            dismissButton = {
-                TextButton(onClick = { showBatchEditDialog = false }) {
-                    Text("Cancel")
-                }
-            }
+            dismissButton = { TextButton(onClick = { showBatchEditDialog = false }) { Text("Cancel") } }
         )
     }
 
@@ -996,7 +911,6 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // FORMULA BUILDER MODAL
     if (showFormulaBuilderDialog) {
         FormulaBuilderDialog(
             initialColName = formulaInitialColName,
@@ -1008,17 +922,9 @@ fun MobileTableEditorScreen() {
             onConfirm = { colName, formula ->
                 if (formulaEditingColIndex >= 0 && formulaEditingColIndex < currentTable.headers.size) {
                     val existing = currentTable.headers[formulaEditingColIndex]
-                    currentTable.headers[formulaEditingColIndex] = existing.copy(
-                        name = colName,
-                        type = ColumnType.FORMULA,
-                        formula = formula
-                    )
+                    currentTable.headers[formulaEditingColIndex] = existing.copy(name = colName, type = ColumnType.FORMULA, formula = formula)
                 } else {
-                    currentTable.addColumn(
-                        name = colName,
-                        type = ColumnType.FORMULA,
-                        formula = formula
-                    )
+                    currentTable.addColumn(name = colName, type = ColumnType.FORMULA, formula = formula)
                 }
                 currentTable.recomputeFormulas()
                 currentTable.markUpdated()
@@ -1051,9 +957,7 @@ fun MobileTableEditorScreen() {
                             )
                             currentTable.setCellValue(tr, tc, updatedEncoded)
                             if (tc < currentTable.headers.size - 1) tc++ else {
-                                if (tr < currentTable.rows.size - 1) { tr++; tc = 0 } else {
-                                    currentTable.addRow(); tr++; tc = 0
-                                }
+                                if (tr < currentTable.rows.size - 1) { tr++; tc = 0 } else { currentTable.addRow(); tr++; tc = 0 }
                             }
                         }
                     }
@@ -1119,6 +1023,10 @@ fun MobileTableEditorScreen() {
                 headers = currentTable.headers,
                 rowValues = rawRowValues,
                 onDismiss = { showRowEditorDialog = false },
+                onOpenLinkedTable = { targetTableId ->
+                    showRowEditorDialog = false
+                    openLinkedTable(targetTableId)
+                },
                 onSaveRowAndTable = { newName, newDateTime, updatedRowName, updatedHeaders, updatedValues ->
                     currentTable.tableName = newName
                     currentTable.tableDateTime = newDateTime
@@ -1150,9 +1058,7 @@ fun MobileTableEditorScreen() {
                     TableRepository.saveOrUpdate(currentTable)
                     tableSnapshot = currentTable.createSnapshot()
                 },
-                onDeleteColumn = { colIdx ->
-                    deleteColumnAndRemapIndices(colIdx)
-                },
+                onDeleteColumn = { colIdx -> deleteColumnAndRemapIndices(colIdx) },
                 onMoveColumn = { from, to ->
                     currentTable.moveColumn(from, to)
                     currentTable.markUpdated()
@@ -1204,21 +1110,15 @@ fun MobileTableEditorScreen() {
                 showGeneratedPdfInspector = false
                 pdfStudioSaveLauncher.launch("Compiled_Document.pdf")
             },
-            onPrintPdf = { targetKb ->
-                printPdfStudioDocument(targetKb)
-            },
-            onSharePdf = { targetKb ->
-                sharePdfStudioDocument(targetKb)
-            }
+            onPrintPdf = { targetKb -> printPdfStudioDocument(targetKb) },
+            onSharePdf = { targetKb -> sharePdfStudioDocument(targetKb) }
         )
     }
 
     if (showAddDateColumnDialog) {
         AlertDialog(
             onDismissRequest = { showAddDateColumnDialog = false },
-            title = {
-                Text("Add Date Attendance Column", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1565C0))
-            },
+            title = { Text("Add Date Attendance Column", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1565C0)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Select how you'd like to add date columns to track Present or Absent:", fontSize = 12.sp, color = Color.DarkGray)
@@ -1236,9 +1136,7 @@ fun MobileTableEditorScreen() {
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2))
-                    ) {
-                        Text("📅 Add Today's Date", color = Color.White)
-                    }
+                    ) { Text("📅 Add Today's Date", color = Color.White) }
 
                     Button(
                         onClick = {
@@ -1256,16 +1154,12 @@ fun MobileTableEditorScreen() {
                                     tableSnapshot = currentTable.createSnapshot()
                                     statusMessage = "Added column '$dateStr' and saved to storage"
                                 },
-                                cal.get(Calendar.YEAR),
-                                cal.get(Calendar.MONTH),
-                                cal.get(Calendar.DAY_OF_MONTH)
+                                cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)
                             ).show()
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
-                    ) {
-                        Text("🗓 Pick Custom Date from Calendar", color = Color.White)
-                    }
+                    ) { Text("🗓 Pick Custom Date from Calendar", color = Color.White) }
 
                     Button(
                         onClick = {
@@ -1289,42 +1183,23 @@ fun MobileTableEditorScreen() {
                                     tableSnapshot = currentTable.createSnapshot()
                                     statusMessage = "Generated $daysInMonth daily columns in storage!"
                                 },
-                                cal.get(Calendar.YEAR),
-                                cal.get(Calendar.MONTH),
-                                1
-                            ).apply {
-                                setTitle("Select Month to Generate Daily Columns")
-                            }.show()
+                                cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), 1
+                            ).apply { setTitle("Select Month to Generate Daily Columns") }.show()
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A))
-                    ) {
-                        Text("📆 Generate Full Month (1 to 31)", color = Color.White)
-                    }
+                    ) { Text("📆 Generate Full Month (1 to 31)", color = Color.White) }
                 }
             },
             confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showAddDateColumnDialog = false }) { Text("Cancel") }
-            }
+            dismissButton = { TextButton(onClick = { showAddDateColumnDialog = false }) { Text("Cancel") } }
         )
     }
-
-    // SHOW / HIDE ATTENDANCE DATES IN CHART
-    val allDateColIndices = remember(currentTable.headers) {
-        currentTable.headers.indices.filter { idx ->
-            val def = currentTable.headers[idx]
-            def.type == ColumnType.DATE || parseDateFromHeader(def.name) != null
-        }
-    }
-    val dateColIndices = allDateColIndices.filter { !hiddenChartDateIndices.contains(it) }
 
     if (showChartDateSelectorDialog) {
         AlertDialog(
             onDismissRequest = { showChartDateSelectorDialog = false },
-            title = {
-                Text("Show / Hide Dates in Attendance Chart", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFF1565C0))
-            },
+            title = { Text("Show / Hide Dates in Attendance Chart", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFF1565C0)) },
             text = {
                 if (dateColIndices.isEmpty()) {
                     Text("No date columns found in this table. Add date columns first.", fontSize = 12.sp, color = Color.Gray)
@@ -1349,14 +1224,10 @@ fun MobileTableEditorScreen() {
                                     .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Checkbox(
-                                    checked = isVisible,
-                                    onCheckedChange = { checked ->
-                                        if (checked) hiddenChartDateIndices.remove(colIdx)
-                                        else hiddenChartDateIndices.add(colIdx)
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                )
+                                Checkbox(checked = isVisible, onCheckedChange = { checked ->
+                                    if (checked) hiddenChartDateIndices.remove(colIdx)
+                                    else hiddenChartDateIndices.add(colIdx)
+                                }, modifier = Modifier.size(28.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(text = colName, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             }
@@ -1365,17 +1236,11 @@ fun MobileTableEditorScreen() {
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = { showChartDateSelectorDialog = false },
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2))
-                ) {
-                    Text("Done", color = Color.White)
-                }
+                Button(onClick = { showChartDateSelectorDialog = false }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2))) { Text("Done", color = Color.White) }
             }
         )
     }
 
-    // SHOW / HIDE CUSTOM COLUMNS DIALOG
     if (showColumnVisibilityDialog) {
         var colSearchQuery by remember { mutableStateOf("") }
         val filteredColsForDialog = remember(currentTable.headers, colSearchQuery) {
@@ -1406,20 +1271,11 @@ fun MobileTableEditorScreen() {
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { hiddenColumns.clear() },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(2.dp)
-                        ) { Text("Show All", fontSize = 11.sp) }
-
-                        OutlinedButton(
-                            onClick = {
-                                hiddenColumns.clear()
-                                hiddenColumns.addAll(currentTable.headers.indices.drop(1))
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(2.dp)
-                        ) { Text("Hide Others", fontSize = 11.sp) }
+                        OutlinedButton(onClick = { hiddenColumns.clear() }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(2.dp)) { Text("Show All", fontSize = 11.sp) }
+                        OutlinedButton(onClick = {
+                            hiddenColumns.clear()
+                            hiddenColumns.addAll(currentTable.headers.indices.drop(1))
+                        }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(2.dp)) { Text("Hide Others", fontSize = 11.sp) }
                     }
 
                     Spacer(modifier = Modifier.height(6.dp))
@@ -1435,26 +1291,17 @@ fun MobileTableEditorScreen() {
                                     .fillMaxWidth()
                                     .clickable {
                                         if (isVisible) {
-                                            if (currentTable.headers.size - hiddenColumns.size > 1) {
-                                                hiddenColumns.add(cIdx)
-                                            } else {
-                                                Toast.makeText(context, "At least 1 column must stay visible", Toast.LENGTH_SHORT).show()
-                                            }
-                                        } else {
-                                            hiddenColumns.remove(cIdx)
-                                        }
+                                            if (currentTable.headers.size - hiddenColumns.size > 1) hiddenColumns.add(cIdx)
+                                            else Toast.makeText(context, "At least 1 column must stay visible", Toast.LENGTH_SHORT).show()
+                                        } else { hiddenColumns.remove(cIdx) }
                                     }
                                     .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Checkbox(
-                                    checked = isVisible,
-                                    onCheckedChange = { checked ->
-                                        if (checked) hiddenColumns.remove(cIdx)
-                                        else if (currentTable.headers.size - hiddenColumns.size > 1) hiddenColumns.add(cIdx)
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                )
+                                Checkbox(checked = isVisible, onCheckedChange = { checked ->
+                                    if (checked) hiddenColumns.remove(cIdx)
+                                    else if (currentTable.headers.size - hiddenColumns.size > 1) hiddenColumns.add(cIdx)
+                                }, modifier = Modifier.size(28.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(text = colDef.name, fontSize = 13.sp, fontWeight = if (isVisible) FontWeight.SemiBold else FontWeight.Normal)
@@ -1465,13 +1312,10 @@ fun MobileTableEditorScreen() {
                     }
                 }
             },
-            confirmButton = {
-                Button(onClick = { showColumnVisibilityDialog = false }) { Text("Done") }
-            }
+            confirmButton = { Button(onClick = { showColumnVisibilityDialog = false }) { Text("Done") } }
         )
     }
 
-    // SHOW / HIDE CUSTOM ROWS DIALOG
     if (showRowVisibilityDialog) {
         var rowSearchQueryInDialog by remember { mutableStateOf("") }
         val filteredRowsForDialog = remember(currentTable.rows, currentTable.rowNames, rowSearchQueryInDialog) {
@@ -1479,9 +1323,7 @@ fun MobileTableEditorScreen() {
                 val rName = currentTable.rowNames.getOrElse(idx) { "Row ${idx + 1}" }
                 rowSearchQueryInDialog.isBlank() ||
                 rName.contains(rowSearchQueryInDialog, ignoreCase = true) ||
-                currentTable.rows[idx].any {
-                    CellAttachmentHelper.parseCellContent(it).displayText.contains(rowSearchQueryInDialog, ignoreCase = true)
-                }
+                currentTable.rows[idx].any { CellAttachmentHelper.parseCellContent(it).displayText.contains(rowSearchQueryInDialog, ignoreCase = true) }
             }
         }
 
@@ -1507,20 +1349,11 @@ fun MobileTableEditorScreen() {
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { hiddenRows.clear() },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(2.dp)
-                        ) { Text("Show All", fontSize = 11.sp) }
-
-                        OutlinedButton(
-                            onClick = {
-                                hiddenRows.clear()
-                                hiddenRows.addAll(currentTable.rows.indices)
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(2.dp)
-                        ) { Text("Hide All", fontSize = 11.sp) }
+                        OutlinedButton(onClick = { hiddenRows.clear() }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(2.dp)) { Text("Show All", fontSize = 11.sp) }
+                        OutlinedButton(onClick = {
+                            hiddenRows.clear()
+                            hiddenRows.addAll(currentTable.rows.indices)
+                        }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(2.dp)) { Text("Hide All", fontSize = 11.sp) }
                     }
 
                     Spacer(modifier = Modifier.height(6.dp))
@@ -1530,28 +1363,20 @@ fun MobileTableEditorScreen() {
                         itemsIndexed(filteredRowsForDialog) { _, rIdx ->
                             val rName = currentTable.rowNames.getOrElse(rIdx) { "Row ${rIdx + 1}" }
                             val isVisible = !hiddenRows.contains(rIdx)
-                            val firstCellVal = CellAttachmentHelper.parseCellContent(
-                                currentTable.rows.getOrNull(rIdx)?.firstOrNull().orEmpty()
-                            ).displayText
+                            val firstCellVal = CellAttachmentHelper.parseCellContent(currentTable.rows.getOrNull(rIdx)?.firstOrNull().orEmpty()).displayText
 
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        if (isVisible) hiddenRows.add(rIdx)
-                                        else hiddenRows.remove(rIdx)
+                                        if (isVisible) hiddenRows.add(rIdx) else hiddenRows.remove(rIdx)
                                     }
                                     .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Checkbox(
-                                    checked = isVisible,
-                                    onCheckedChange = { checked ->
-                                        if (checked) hiddenRows.remove(rIdx)
-                                        else hiddenRows.add(rIdx)
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                )
+                                Checkbox(checked = isVisible, onCheckedChange = { checked ->
+                                    if (checked) hiddenRows.remove(rIdx) else hiddenRows.add(rIdx)
+                                }, modifier = Modifier.size(28.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(text = rName, fontSize = 13.sp, fontWeight = if (isVisible) FontWeight.SemiBold else FontWeight.Normal)
@@ -1564,13 +1389,10 @@ fun MobileTableEditorScreen() {
                     }
                 }
             },
-            confirmButton = {
-                Button(onClick = { showRowVisibilityDialog = false }) { Text("Done") }
-            }
+            confirmButton = { Button(onClick = { showRowVisibilityDialog = false }) { Text("Done") } }
         )
     }
 
-    // CONFIRM DELETE COLUMN DIALOG
     if (colPendingDeleteIdx != null) {
         val cIdx = colPendingDeleteIdx!!
         val colName = currentTable.headers.getOrNull(cIdx)?.name ?: "Column ${cIdx + 1}"
@@ -1588,13 +1410,10 @@ fun MobileTableEditorScreen() {
                     colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
                 ) { Text("Delete", color = Color.White, fontWeight = FontWeight.Bold) }
             },
-            dismissButton = {
-                TextButton(onClick = { colPendingDeleteIdx = null }) { Text("Cancel") }
-            }
+            dismissButton = { TextButton(onClick = { colPendingDeleteIdx = null }) { Text("Cancel") } }
         )
     }
 
-    // CONFIRM DELETE ROW DIALOG
     if (rowPendingDeleteIdx != null) {
         val rIdx = rowPendingDeleteIdx!!
         val rName = currentTable.rowNames.getOrElse(rIdx) { "Row ${rIdx + 1}" }
@@ -1612,9 +1431,7 @@ fun MobileTableEditorScreen() {
                     colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
                 ) { Text("Delete", color = Color.White, fontWeight = FontWeight.Bold) }
             },
-            dismissButton = {
-                TextButton(onClick = { rowPendingDeleteIdx = null }) { Text("Cancel") }
-            }
+            dismissButton = { TextButton(onClick = { rowPendingDeleteIdx = null }) { Text("Cancel") } }
         )
     }
 
@@ -1645,15 +1462,8 @@ fun MobileTableEditorScreen() {
         val isCurrentActive = targetTable.id == currentTable.id
         AlertDialog(
             onDismissRequest = { tablePendingDelete = null },
-            title = {
-                Text(
-                    text = if (isCurrentActive) "Delete Active Table?" else "Delete Table?",
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Text("Are you sure you want to delete '${targetTable.tableName}'? All data, rows, and cells will be completely deleted across the entire application and storage.")
-            },
+            title = { Text(text = if (isCurrentActive) "Delete Active Table?" else "Delete Table?", fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to delete '${targetTable.tableName}'? All data, rows, and cells will be completely deleted across the entire application and storage.") },
             confirmButton = {
                 Button(
                     onClick = {
@@ -1669,7 +1479,6 @@ fun MobileTableEditorScreen() {
 
     val visibleColIndices = currentTable.headers.indices.filter { !hiddenColumns.contains(it) }
 
-    // Strip metadata when searching and filtering rows
     val filteredRowIndices = currentTable.rows.indices.filter { rIdx ->
         if (hiddenRows.contains(rIdx)) return@filter false
 
@@ -1686,7 +1495,6 @@ fun MobileTableEditorScreen() {
         matchesGlobal && matchesColFilters
     }
 
-    // Filter values dialog: Groups purely by clean display text
     if (activeFilterColIdx != null) {
         val targetCol = activeFilterColIdx!!
         val colName = currentTable.headers.getOrNull(targetCol)?.name ?: "Column ${targetCol + 1}"
@@ -1706,23 +1514,13 @@ fun MobileTableEditorScreen() {
         val activeSelectedInDialog = remember {
             mutableStateListOf<String>().apply {
                 val existing = columnValueFilters[targetCol]
-                if (existing != null) {
-                    addAll(existing)
-                } else {
-                    addAll(allDistinctValues)
-                }
+                if (existing != null) addAll(existing) else addAll(allDistinctValues)
             }
         }
 
         val filteredItemsInDialog = remember(filterSearchQuery, distinctValuesWithCount) {
-            if (filterSearchQuery.isBlank()) {
-                distinctValuesWithCount
-            } else {
-                distinctValuesWithCount.filter { (v, _) ->
-                    val display = if (v.isEmpty()) "(Blanks)" else v
-                    display.contains(filterSearchQuery, ignoreCase = true)
-                }
-            }
+            if (filterSearchQuery.isBlank()) distinctValuesWithCount
+            else distinctValuesWithCount.filter { (v, _) -> (if (v.isEmpty()) "(Blanks)" else v).contains(filterSearchQuery, ignoreCase = true) }
         }
 
         AlertDialog(
@@ -1746,29 +1544,9 @@ fun MobileTableEditorScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                filteredItemsInDialog.forEach { (v, _) ->
-                                    if (!activeSelectedInDialog.contains(v)) activeSelectedInDialog.add(v)
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(2.dp)
-                        ) { Text("Select All", fontSize = 10.sp) }
-
-                        OutlinedButton(
-                            onClick = {
-                                filteredItemsInDialog.forEach { (v, _) ->
-                                    activeSelectedInDialog.remove(v)
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(2.dp)
-                        ) { Text("Clear All", fontSize = 10.sp) }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { filteredItemsInDialog.forEach { (v, _) -> if (!activeSelectedInDialog.contains(v)) activeSelectedInDialog.add(v) } }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(2.dp)) { Text("Select All", fontSize = 10.sp) }
+                        OutlinedButton(onClick = { filteredItemsInDialog.forEach { (v, _) -> activeSelectedInDialog.remove(v) } }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(2.dp)) { Text("Clear All", fontSize = 10.sp) }
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
@@ -1783,33 +1561,17 @@ fun MobileTableEditorScreen() {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        if (isSelected) activeSelectedInDialog.remove(valStr)
-                                        else activeSelectedInDialog.add(valStr)
+                                        if (isSelected) activeSelectedInDialog.remove(valStr) else activeSelectedInDialog.add(valStr)
                                     }
                                     .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = { chk ->
-                                        if (chk) activeSelectedInDialog.add(valStr)
-                                        else activeSelectedInDialog.remove(valStr)
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                )
+                                Checkbox(checked = isSelected, onCheckedChange = { chk ->
+                                    if (chk) activeSelectedInDialog.add(valStr) else activeSelectedInDialog.remove(valStr)
+                                }, modifier = Modifier.size(28.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = displayLabel,
-                                    fontSize = 13.sp,
-                                    color = if (valStr.isBlank()) Color.Gray else Color.Black,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    text = "($count)",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                Text(text = displayLabel, fontSize = 13.sp, color = if (valStr.isBlank()) Color.Gray else Color.Black, modifier = Modifier.weight(1f))
+                                Text(text = "($count)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -1821,41 +1583,29 @@ fun MobileTableEditorScreen() {
                         columnValueFilters.remove(targetCol)
                         statusMessage = "Cleared filter for '$colName'"
                         activeFilterColIdx = null
-                    }) {
-                        Text("Reset", color = Color.Red, fontSize = 12.sp)
-                    }
+                    }) { Text("Reset", color = Color.Red, fontSize = 12.sp) }
+
                     Button(
                         onClick = {
-                            if (activeSelectedInDialog.size == allDistinctValues.size) {
-                                columnValueFilters.remove(targetCol)
-                            } else {
-                                columnValueFilters[targetCol] = activeSelectedInDialog.toSet()
-                            }
+                            if (activeSelectedInDialog.size == allDistinctValues.size) columnValueFilters.remove(targetCol)
+                            else columnValueFilters[targetCol] = activeSelectedInDialog.toSet()
                             statusMessage = "Applied filter on '$colName'"
                             activeFilterColIdx = null
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1E88E5))
-                    ) {
-                        Text("Apply", color = Color.White, fontSize = 12.sp)
-                    }
+                    ) { Text("Apply", color = Color.White, fontSize = 12.sp) }
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { activeFilterColIdx = null }) {
-                    Text("Cancel", fontSize = 12.sp)
-                }
-            }
+            dismissButton = { TextButton(onClick = { activeFilterColIdx = null }) { Text("Cancel", fontSize = 12.sp) } }
         )
     }
 
-    // Dynamic typography scaling
     val cellFontSize = (12 * tableZoomScale).sp
     val headerFontSize = (13 * tableZoomScale).sp
     val subTextFontSize = (10 * tableZoomScale).sp
     val badgeFontSize = (9 * tableZoomScale).sp
     val dateBtnFontSize = (11 * tableZoomScale).sp
 
-    // Proportional column dimensions
     val actionColWidth = (190 * tableZoomScale).dp.coerceAtLeast(140.dp)
     val dataColWidth = (195 * tableZoomScale).dp.coerceAtLeast(140.dp)
     val totalTableWidth = actionColWidth + (dataColWidth * visibleColIndices.size) + (90 * tableZoomScale).dp
@@ -1891,7 +1641,68 @@ fun MobileTableEditorScreen() {
                         }
                     )
 
-                    // Line 2: PERMANENT CANCEL & SAVE BAR (FIXED AT TOP, UNCONGESTED, NEVER DISAPPEARS)
+                    // LINKED TABLE PARENT BREADCRUMB BANNER
+                    if (tableBackStack.isNotEmpty()) {
+                        val parentTable = tableBackStack.last()
+                        Surface(
+                            color = Color(0xFF4A148C),
+                            elevation = 4.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f, fill = false)
+                                ) {
+                                    Text("🔗", fontSize = 13.sp)
+                                    Column {
+                                        Text(
+                                            text = "Linked Table: ${currentTable.tableName}",
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "Parent: ${parentTable.tableName}",
+                                            color = Color(0xFFE1BEE7),
+                                            fontSize = 10.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Button(
+                                        onClick = { returnToParentTable(revertChanges = true) },
+                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC2185B)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(4.dp),
+                                        modifier = Modifier.height(28.dp)
+                                    ) { Text("↩ Revert", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+
+                                    Button(
+                                        onClick = { returnToParentTable(revertChanges = false) },
+                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00C853)),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(4.dp),
+                                        modifier = Modifier.height(28.dp)
+                                    ) { Text("⬅ Back to Parent", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                                }
+                            }
+                        }
+                    }
+
+                    // Line 2: PERMANENT CANCEL & SAVE BAR (PROTECTED FROM SQUISHING)
                     Surface(
                         color = Color(0xFFFFFFFF),
                         elevation = 3.dp,
@@ -1904,7 +1715,6 @@ fun MobileTableEditorScreen() {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Left summary: weight(1f, fill = false) guarantees right buttons won't squish
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1928,11 +1738,10 @@ fun MobileTableEditorScreen() {
                                     fontSize = 11.sp,
                                     color = Color.Gray,
                                     maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
 
-                            // Right Action Buttons: Guaranteed size, never crushed
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -1968,9 +1777,7 @@ fun MobileTableEditorScreen() {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -2075,10 +1882,7 @@ fun MobileTableEditorScreen() {
                     val tab0VerticalScrollState = rememberScrollState()
 
                     Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .imePadding()
-                            .verticalScroll(tab0VerticalScrollState)
+                        modifier = Modifier.fillMaxSize().imePadding().verticalScroll(tab0VerticalScrollState)
                     ) {
                         // Action Toolbar Row
                         Row(
@@ -2105,7 +1909,6 @@ fun MobileTableEditorScreen() {
                                 )
                             }
 
-                            // Quick Magnification Buttons
                             Button(
                                 onClick = { tableZoomScale = (tableZoomScale * 1.15f).coerceAtMost(2.0f) },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
@@ -2268,7 +2071,7 @@ fun MobileTableEditorScreen() {
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color(0xFF1565C0),
                                                 maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                             if (dateColIndices.isNotEmpty()) {
                                                 Text(
@@ -3507,7 +3310,7 @@ fun MobileTableEditorScreen() {
                                                                 )
                                                             }
 
-                                                            // Inline Badges: Notes, Extra Notes, Checklists & Attachments
+                                                            // INLINE BADGES: LINKED TABLE, NOTES, EXTRA NOTES, CHECKLISTS & ATTACHMENTS
                                                             if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank()) {
                                                                 Row(
                                                                     modifier = Modifier
@@ -3517,6 +3320,24 @@ fun MobileTableEditorScreen() {
                                                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                                                     verticalAlignment = Alignment.CenterVertically
                                                                 ) {
+                                                                    // Direct Clickable Linked Table Badges
+                                                                    cellAttachments.filter { it.type == AttachmentType.LINKED_TABLE }.forEach { tableAtt ->
+                                                                        Box(
+                                                                            modifier = Modifier
+                                                                                .background(Color(0xFFEDE7F6), RoundedCornerShape(3.dp))
+                                                                                .border(0.5.dp, Color(0xFFB39DDB), RoundedCornerShape(3.dp))
+                                                                                .clickable { openLinkedTable(tableAtt.detail) }
+                                                                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                                                                        ) {
+                                                                            Text(
+                                                                                text = "📊 ${tableAtt.displayName.take(8)}",
+                                                                                fontSize = badgeFontSize,
+                                                                                color = Color(0xFF4A148C),
+                                                                                fontWeight = FontWeight.Bold
+                                                                            )
+                                                                        }
+                                                                    }
+
                                                                     if (cellNote.isNotBlank()) {
                                                                         Box(
                                                                             modifier = Modifier
@@ -3547,7 +3368,7 @@ fun MobileTableEditorScreen() {
                                                                         }
                                                                     }
 
-                                                                    cellAttachments.take(2).forEach { att ->
+                                                                    cellAttachments.filter { it.type != AttachmentType.LINKED_TABLE }.take(2).forEach { att ->
                                                                         Box(
                                                                             modifier = Modifier
                                                                                 .background(if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
@@ -3560,6 +3381,7 @@ fun MobileTableEditorScreen() {
                                                                                     AttachmentType.PDF -> "📄 PDF"
                                                                                     AttachmentType.CONTACT -> "👤 ${att.displayName.take(6)}"
                                                                                     AttachmentType.FILE -> "📁 ${att.displayName.take(6)}"
+                                                                                    else -> ""
                                                                                 },
                                                                                 fontSize = badgeFontSize,
                                                                                 color = Color.DarkGray,

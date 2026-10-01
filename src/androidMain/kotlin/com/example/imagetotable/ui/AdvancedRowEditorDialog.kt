@@ -39,6 +39,7 @@ fun AdvancedRowEditorDialog(
     headers: List<ColumnDef>,
     rowValues: List<String>,
     onDismiss: () -> Unit,
+    onOpenLinkedTable: (targetTableId: String) -> Unit = {},
     onSaveRowAndTable: (
         tableName: String,
         tableDateTime: String,
@@ -75,7 +76,6 @@ fun AdvancedRowEditorDialog(
         }
     }
 
-    // Seamless navigation updates: updates values and titles without dismissing/recreating the Dialog window
     LaunchedEffect(currentRowIndex, rowName, rowValues, headers) {
         rowNameState = rowName
         headersState.clear()
@@ -90,15 +90,12 @@ fun AdvancedRowEditorDialog(
     var newColType by remember { mutableStateOf(ColumnType.TEXT) }
     var newColFormula by remember { mutableStateOf("") }
 
-    // Formula Builder Dialog State inside Row Editor
     var showFormulaEditorInDialog by remember { mutableStateOf(false) }
     var editingFormulaColIdx by remember { mutableIntStateOf(-1) }
 
-    // Deletion confirmation dialog states
     var columnPendingDeleteIdx by remember { mutableStateOf<Int?>(null) }
     var showRowDeleteConfirm by remember { mutableStateOf(false) }
 
-    // Cell Attachment Dialog state inside Row Editor
     var activeAttachmentColIdx by remember { mutableStateOf<Int?>(null) }
 
     fun commitCurrentChanges() {
@@ -230,7 +227,7 @@ fun AdvancedRowEditorDialog(
             color = Color(0xFFF8FAFC)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // DIALOG HEADER BAR WITH SMOOTH NAVIGATION
+                // DIALOG HEADER BAR WITH NAVIGATION
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -342,11 +339,7 @@ fun AdvancedRowEditorDialog(
                                         .padding(horizontal = 12.dp, vertical = 10.dp)
                                 ) {
                                     Column {
-                                        Text(
-                                            text = "Date & Time (Tap Calendar)",
-                                            fontSize = 10.sp,
-                                            color = Color.Gray
-                                        )
+                                        Text(text = "Date & Time (Tap Calendar)", fontSize = 10.sp, color = Color.Gray)
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text("📅 ", fontSize = 14.sp)
@@ -404,7 +397,7 @@ fun AdvancedRowEditorDialog(
                         }
                     }
 
-                    // SECTION 3: COLUMN LIST WITH FORMULA DISPLAY, ATTACHMENTS & EDITING
+                    // SECTION 3: COLUMN LIST WITH FORMULAS, ATTACHMENTS & LINKED TABLES
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -431,7 +424,6 @@ fun AdvancedRowEditorDialog(
                             }
                         }
 
-                        // Compute clean display values purely for formula calculations
                         val cleanValuesForFormula = remember(valuesState.toList()) {
                             valuesState.map { CellAttachmentHelper.parseCellContent(it).displayText }
                         }
@@ -458,7 +450,7 @@ fun AdvancedRowEditorDialog(
                                     modifier = Modifier.padding(12.dp),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    // Row A: Column Name, Move Arrows, and Delete with Confirmation
+                                    // Row A: Column Name, Move Arrows, and Delete
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -581,7 +573,6 @@ fun AdvancedRowEditorDialog(
                                                 }
                                             }
 
-                                            // 📎 Cell Attachment UI trigger inside Row Editor
                                             Surface(
                                                 shape = RoundedCornerShape(4.dp),
                                                 color = if (cellAttachments.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank() || cellChecklists.isNotEmpty()) {
@@ -602,7 +593,7 @@ fun AdvancedRowEditorDialog(
                                         }
                                     }
 
-                                    // Row C: ADAPTIVE VALUE INPUT WITH CELL ATTACHMENT PRESERVATION
+                                    // Row C: ADAPTIVE VALUE INPUT
                                     when (colDef.type) {
                                         ColumnType.FORMULA -> {
                                             val computedVal = remember(colDef.formula, cleanValuesForFormula, headersState.toList()) {
@@ -730,7 +721,7 @@ fun AdvancedRowEditorDialog(
                                         }
                                     }
 
-                                    // Live Inline Preview Chips inside Row Editor for Notes, Extra Notes, Checklists & Files
+                                    // Live Inline Preview Chips inside Row Editor (including Linked Tables)
                                     if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank()) {
                                         Row(
                                             modifier = Modifier
@@ -740,6 +731,22 @@ fun AdvancedRowEditorDialog(
                                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
+                                            cellAttachments.filter { it.type == AttachmentType.LINKED_TABLE }.forEach { tableAtt ->
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(Color(0xFFEDE7F6), RoundedCornerShape(3.dp))
+                                                        .border(0.5.dp, Color(0xFFB39DDB), RoundedCornerShape(3.dp))
+                                                        .clickable {
+                                                            commitCurrentChanges()
+                                                            onDismiss()
+                                                            onOpenLinkedTable(tableAtt.detail)
+                                                        }
+                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text("📊 ${tableAtt.displayName.take(8)}", fontSize = 10.sp, color = Color(0xFF4A148C), fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+
                                             if (cellNote.isNotBlank()) {
                                                 Box(
                                                     modifier = Modifier
@@ -774,7 +781,7 @@ fun AdvancedRowEditorDialog(
                                                 }
                                             }
 
-                                            cellAttachments.forEach { att ->
+                                            cellAttachments.filter { it.type != AttachmentType.LINKED_TABLE }.forEach { att ->
                                                 Box(
                                                     modifier = Modifier
                                                         .background(
@@ -790,6 +797,7 @@ fun AdvancedRowEditorDialog(
                                                             AttachmentType.PDF -> "📄 PDF"
                                                             AttachmentType.CONTACT -> "👤 ${att.displayName.take(8)}"
                                                             AttachmentType.FILE -> "📁 ${att.displayName.take(8)}"
+                                                            else -> ""
                                                         },
                                                         fontSize = 10.sp,
                                                         color = Color.DarkGray,
@@ -891,7 +899,7 @@ fun AdvancedRowEditorDialog(
                                 onNavigateRow(currentRowIndex + 1)
                             },
                             modifier = Modifier.weight(1.2f).height(44.dp),
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00796B))
                         ) {
                             Text("Save & Next ▶", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
@@ -912,7 +920,7 @@ fun AdvancedRowEditorDialog(
         }
     }
 
-    // CELL ATTACHMENT DIALOG TRIGGERED FROM WITHIN THE ROW EDITOR
+    // CELL ATTACHMENT DIALOG WITH OPEN LINKED TABLE ACTION
     if (activeAttachmentColIdx != null) {
         val cIdx = activeAttachmentColIdx!!
         val rawCell = valuesState.getOrElse(cIdx) { "" }
@@ -929,6 +937,12 @@ fun AdvancedRowEditorDialog(
             initialAttachments = payload.attachments,
             initialChecklists = payload.checklists,
             onDismiss = { activeAttachmentColIdx = null },
+            onOpenLinkedTable = { targetTableId ->
+                commitCurrentChanges()
+                activeAttachmentColIdx = null
+                onDismiss()
+                onOpenLinkedTable(targetTableId)
+            },
             onSave = { updatedText, updatedNote, updatedAdditionalNote, updatedAttachments, updatedChecklists ->
                 val encoded = CellAttachmentHelper.formatCellContent(
                     displayText = updatedText,
@@ -945,7 +959,7 @@ fun AdvancedRowEditorDialog(
         )
     }
 
-    // FORMULA BUILDER DIALOG INTEGRATED DIRECTLY IN ROW EDITOR
+    // FORMULA BUILDER DIALOG
     if (showFormulaEditorInDialog && editingFormulaColIdx in headersState.indices) {
         val targetDef = headersState[editingFormulaColIdx]
         val cleanValues = valuesState.map { CellAttachmentHelper.parseCellContent(it).displayText }

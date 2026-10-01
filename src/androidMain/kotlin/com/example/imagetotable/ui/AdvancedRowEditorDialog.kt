@@ -2,13 +2,14 @@ package com.example.imagetotable.ui
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
@@ -24,9 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.example.imagetotable.model.ColumnDef
-import com.example.imagetotable.model.ColumnType
-import com.example.imagetotable.model.FormulaEvaluator
+import com.example.imagetotable.model.*
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -99,6 +98,9 @@ fun AdvancedRowEditorDialog(
     var columnPendingDeleteIdx by remember { mutableStateOf<Int?>(null) }
     var showRowDeleteConfirm by remember { mutableStateOf(false) }
 
+    // Cell Attachment Dialog state inside Row Editor
+    var activeAttachmentColIdx by remember { mutableStateOf<Int?>(null) }
+
     fun commitCurrentChanges() {
         onSaveRowAndTable(
             tableNameState,
@@ -151,7 +153,8 @@ fun AdvancedRowEditorDialog(
 
     fun openCalendarPickerForCell(colIdx: Int) {
         val cal = Calendar.getInstance()
-        val currentVal = valuesState.getOrElse(colIdx) { "" }
+        val currentRaw = valuesState.getOrElse(colIdx) { "" }
+        val currentVal = CellAttachmentHelper.parseCellContent(currentRaw).displayText
         try {
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
             val parsed = sdf.parse(currentVal)
@@ -177,8 +180,17 @@ fun AdvancedRowEditorDialog(
                         cal.set(Calendar.HOUR_OF_DAY, hourOfDay)
                         cal.set(Calendar.MINUTE, minute)
                         val outFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                        val formattedDate = outFormat.format(cal.time)
+                        val existingPayload = CellAttachmentHelper.parseCellContent(currentRaw)
+                        val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                            displayText = formattedDate,
+                            attachments = existingPayload.attachments,
+                            note = existingPayload.note,
+                            additionalNote = existingPayload.additionalNote,
+                            checklists = existingPayload.checklists
+                        )
                         while (valuesState.size <= colIdx) valuesState.add("")
-                        valuesState[colIdx] = outFormat.format(cal.time)
+                        valuesState[colIdx] = updatedEncoded
                     },
                     cal.get(Calendar.HOUR_OF_DAY),
                     cal.get(Calendar.MINUTE),
@@ -392,7 +404,7 @@ fun AdvancedRowEditorDialog(
                         }
                     }
 
-                    // SECTION 3: COLUMN LIST WITH FORMULA DISPLAY & EDITING
+                    // SECTION 3: COLUMN LIST WITH FORMULA DISPLAY, ATTACHMENTS & EDITING
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -419,15 +431,28 @@ fun AdvancedRowEditorDialog(
                             }
                         }
 
+                        // Compute clean display values purely for formula calculations
+                        val cleanValuesForFormula = remember(valuesState.toList()) {
+                            valuesState.map { CellAttachmentHelper.parseCellContent(it).displayText }
+                        }
+
                         headersState.forEachIndexed { cIdx, colDef ->
-                            val cellValue = valuesState.getOrElse(cIdx) { "" }
+                            val rawCellValue = valuesState.getOrElse(cIdx) { "" }
+                            val payload = remember(rawCellValue) {
+                                CellAttachmentHelper.parseCellContent(rawCellValue)
+                            }
+                            val displayVal = payload.displayText
+                            val cellAttachments = payload.attachments
+                            val cellChecklists = payload.checklists
+                            val cellNote = payload.note
+                            val cellExtraNote = payload.additionalNote
 
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(10.dp),
                                 elevation = 1.dp,
                                 backgroundColor = Color.White,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
+                                border = BorderStroke(1.dp, Color(0xFFE2E8F0))
                             ) {
                                 Column(
                                     modifier = Modifier.padding(12.dp),
@@ -500,7 +525,7 @@ fun AdvancedRowEditorDialog(
                                         }
                                     }
 
-                                    // Row B: Column Data Type & Formula Edit Link
+                                    // Row B: Column Data Type, Formula Edit, and Attachment Manager Trigger
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -538,42 +563,60 @@ fun AdvancedRowEditorDialog(
                                             }
                                         }
 
-                                        if (colDef.type == ColumnType.FORMULA) {
-                                            OutlinedButton(
-                                                onClick = {
-                                                    editingFormulaColIdx = cIdx
-                                                    showFormulaEditorInDialog = true
-                                                },
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                                modifier = Modifier.height(28.dp),
-                                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2E7D32))
-                                            ) {
-                                                Text("✎ Edit Formula", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            if (colDef.type == ColumnType.FORMULA) {
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        editingFormulaColIdx = cIdx
+                                                        showFormulaEditorInDialog = true
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                    modifier = Modifier.height(28.dp),
+                                                    border = BorderStroke(1.dp, Color(0xFF2E7D32))
+                                                ) {
+                                                    Text("✎ Edit Formula", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                }
                                             }
-                                        } else {
-                                            Text(
-                                                text = "Position: Col ${cIdx + 1}",
-                                                fontSize = 11.sp,
-                                                color = Color.Gray
-                                            )
+
+                                            // 📎 Cell Attachment UI trigger inside Row Editor
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = if (cellAttachments.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank() || cellChecklists.isNotEmpty()) {
+                                                    Color(0xFFE0F2FE)
+                                                } else {
+                                                    Color(0xFFECEFF1)
+                                                },
+                                                modifier = Modifier.clickable { activeAttachmentColIdx = cIdx }
+                                            ) {
+                                                Text(
+                                                    text = if (cellAttachments.isNotEmpty()) "📎 Files (${cellAttachments.size})" else "📎 Attachments / Notes",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (cellAttachments.isNotEmpty()) Color(0xFF0D47A1) else Color(0xFF455A64),
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                                )
+                                            }
                                         }
                                     }
 
-                                    // Row C: ADAPTIVE VALUE INPUT WITH REAL-TIME FORMULA EVALUATION
+                                    // Row C: ADAPTIVE VALUE INPUT WITH CELL ATTACHMENT PRESERVATION
                                     when (colDef.type) {
                                         ColumnType.FORMULA -> {
-                                            val computedVal = remember(colDef.formula, valuesState.toList(), headersState.toList()) {
+                                            val computedVal = remember(colDef.formula, cleanValuesForFormula, headersState.toList()) {
                                                 FormulaEvaluator.evaluate(
                                                     formula = colDef.formula,
                                                     headers = headersState,
-                                                    rowValues = valuesState,
+                                                    rowValues = cleanValuesForFormula,
                                                     targetColIdx = cIdx
                                                 )
                                             }
 
                                             Card(
                                                 backgroundColor = Color(0xFFF1F8E9),
-                                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA5D6A7)),
+                                                border = BorderStroke(1.dp, Color(0xFFA5D6A7)),
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {
                                                 Row(
@@ -612,7 +655,7 @@ fun AdvancedRowEditorDialog(
                                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                                         Text("📅 ", fontSize = 13.sp)
                                                         Text(
-                                                            text = cellValue.ifBlank { "Tap to pick Date & Time" },
+                                                            text = displayVal.ifBlank { "Tap to pick Date & Time" },
                                                             fontSize = 13.sp,
                                                             fontWeight = FontWeight.SemiBold,
                                                             color = Color(0xFF1565C0)
@@ -624,10 +667,18 @@ fun AdvancedRowEditorDialog(
 
                                         ColumnType.NUMBER -> {
                                             OutlinedTextField(
-                                                value = cellValue,
+                                                value = displayVal,
                                                 onValueChange = { newVal ->
+                                                    val filtered = newVal.filter { it.isDigit() || it == '-' }
+                                                    val encoded = CellAttachmentHelper.formatCellContent(
+                                                        displayText = filtered,
+                                                        attachments = cellAttachments,
+                                                        note = cellNote,
+                                                        additionalNote = cellExtraNote,
+                                                        checklists = cellChecklists
+                                                    )
                                                     while (valuesState.size <= cIdx) valuesState.add("")
-                                                    valuesState[cIdx] = newVal.filter { it.isDigit() || it == '-' }
+                                                    valuesState[cIdx] = encoded
                                                 },
                                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                 label = { Text("Number Value (${colDef.name})") },
@@ -638,10 +689,18 @@ fun AdvancedRowEditorDialog(
 
                                         ColumnType.DECIMAL -> {
                                             OutlinedTextField(
-                                                value = cellValue,
+                                                value = displayVal,
                                                 onValueChange = { newVal ->
+                                                    val filtered = newVal.filter { it.isDigit() || it == '.' || it == '-' }
+                                                    val encoded = CellAttachmentHelper.formatCellContent(
+                                                        displayText = filtered,
+                                                        attachments = cellAttachments,
+                                                        note = cellNote,
+                                                        additionalNote = cellExtraNote,
+                                                        checklists = cellChecklists
+                                                    )
                                                     while (valuesState.size <= cIdx) valuesState.add("")
-                                                    valuesState[cIdx] = newVal.filter { it.isDigit() || it == '.' || it == '-' }
+                                                    valuesState[cIdx] = encoded
                                                 },
                                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                                 label = { Text("Decimal Value (${colDef.name})") },
@@ -652,15 +711,92 @@ fun AdvancedRowEditorDialog(
 
                                         ColumnType.TEXT -> {
                                             OutlinedTextField(
-                                                value = cellValue,
+                                                value = displayVal,
                                                 onValueChange = { newVal ->
+                                                    val encoded = CellAttachmentHelper.formatCellContent(
+                                                        displayText = newVal,
+                                                        attachments = cellAttachments,
+                                                        note = cellNote,
+                                                        additionalNote = cellExtraNote,
+                                                        checklists = cellChecklists
+                                                    )
                                                     while (valuesState.size <= cIdx) valuesState.add("")
-                                                    valuesState[cIdx] = newVal
+                                                    valuesState[cIdx] = encoded
                                                 },
                                                 label = { Text("Text Value for ${colDef.name}") },
                                                 modifier = Modifier.fillMaxWidth(),
                                                 textStyle = TextStyle(fontSize = 13.sp)
                                             )
+                                        }
+                                    }
+
+                                    // Live Inline Preview Chips inside Row Editor for Notes, Extra Notes, Checklists & Files
+                                    if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank()) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .horizontalScroll(rememberScrollState())
+                                                .padding(top = 2.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (cellNote.isNotBlank()) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(Color(0xFFFFF9C4), RoundedCornerShape(3.dp))
+                                                        .clickable { activeAttachmentColIdx = cIdx }
+                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text("📝 Note", fontSize = 10.sp, color = Color(0xFFF57F17), fontWeight = FontWeight.SemiBold)
+                                                }
+                                            }
+
+                                            if (cellExtraNote.isNotBlank()) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(Color(0xFFF3E5F5), RoundedCornerShape(3.dp))
+                                                        .clickable { activeAttachmentColIdx = cIdx }
+                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text("📋 +Note", fontSize = 10.sp, color = Color(0xFF7B1FA2), fontWeight = FontWeight.SemiBold)
+                                                }
+                                            }
+
+                                            if (cellChecklists.isNotEmpty()) {
+                                                val done = cellChecklists.count { it.isChecked }
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
+                                                        .clickable { activeAttachmentColIdx = cIdx }
+                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text("☑ $done/${cellChecklists.size}", fontSize = 10.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+
+                                            cellAttachments.forEach { att ->
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(
+                                                            if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1),
+                                                            RoundedCornerShape(3.dp)
+                                                        )
+                                                        .clickable { activeAttachmentColIdx = cIdx }
+                                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text(
+                                                        text = when (att.type) {
+                                                            AttachmentType.IMAGE -> "🖼 ${att.displayName.take(8)}"
+                                                            AttachmentType.PDF -> "📄 PDF"
+                                                            AttachmentType.CONTACT -> "👤 ${att.displayName.take(8)}"
+                                                            AttachmentType.FILE -> "📁 ${att.displayName.take(8)}"
+                                                        },
+                                                        fontSize = 10.sp,
+                                                        color = Color.DarkGray,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -776,14 +912,49 @@ fun AdvancedRowEditorDialog(
         }
     }
 
+    // CELL ATTACHMENT DIALOG TRIGGERED FROM WITHIN THE ROW EDITOR
+    if (activeAttachmentColIdx != null) {
+        val cIdx = activeAttachmentColIdx!!
+        val rawCell = valuesState.getOrElse(cIdx) { "" }
+        val payload = CellAttachmentHelper.parseCellContent(rawCell)
+        val colName = headersState.getOrNull(cIdx)?.name ?: "Col ${cIdx + 1}"
+
+        CellAttachmentDialog(
+            rowIndex = currentRowIndex,
+            columnIndex = cIdx,
+            columnName = colName,
+            initialText = payload.displayText,
+            initialNote = payload.note,
+            initialAdditionalNote = payload.additionalNote,
+            initialAttachments = payload.attachments,
+            initialChecklists = payload.checklists,
+            onDismiss = { activeAttachmentColIdx = null },
+            onSave = { updatedText, updatedNote, updatedAdditionalNote, updatedAttachments, updatedChecklists ->
+                val encoded = CellAttachmentHelper.formatCellContent(
+                    displayText = updatedText,
+                    attachments = updatedAttachments,
+                    note = updatedNote,
+                    additionalNote = updatedAdditionalNote,
+                    checklists = updatedChecklists
+                )
+                if (cIdx < valuesState.size) {
+                    valuesState[cIdx] = encoded
+                }
+                activeAttachmentColIdx = null
+            }
+        )
+    }
+
     // FORMULA BUILDER DIALOG INTEGRATED DIRECTLY IN ROW EDITOR
     if (showFormulaEditorInDialog && editingFormulaColIdx in headersState.indices) {
         val targetDef = headersState[editingFormulaColIdx]
+        val cleanValues = valuesState.map { CellAttachmentHelper.parseCellContent(it).displayText }
+
         FormulaBuilderDialog(
             initialColName = targetDef.name,
             initialFormula = targetDef.formula,
             headers = headersState.toList(),
-            sampleRowValues = valuesState.toList(),
+            sampleRowValues = cleanValues,
             targetColIndex = editingFormulaColIdx,
             onDismiss = { showFormulaEditorInDialog = false },
             onConfirm = { updatedName, updatedFormula ->

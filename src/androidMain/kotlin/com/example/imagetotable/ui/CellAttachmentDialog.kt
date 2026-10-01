@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.ContactsContract
+import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,7 +34,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,6 +43,7 @@ import com.example.imagetotable.model.AttachmentType
 import com.example.imagetotable.model.CellAttachment
 import com.example.imagetotable.model.CellAttachmentHelper
 import com.example.imagetotable.model.CellChecklistItem
+import java.util.Locale
 
 @Composable
 fun CellAttachmentDialog(
@@ -51,12 +52,14 @@ fun CellAttachmentDialog(
     columnName: String,
     initialText: String,
     initialNote: String = "",
+    initialAdditionalNote: String = "",
     initialAttachments: List<CellAttachment> = emptyList(),
     initialChecklists: List<CellChecklistItem> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (
         updatedText: String,
         updatedNote: String,
+        updatedAdditionalNote: String,
         updatedAttachments: List<CellAttachment>,
         updatedChecklists: List<CellChecklistItem>
     ) -> Unit
@@ -64,6 +67,7 @@ fun CellAttachmentDialog(
     val context = LocalContext.current
     var cellTextState by remember { mutableStateOf(initialText) }
     var cellNoteState by remember { mutableStateOf(initialNote) }
+    var additionalNoteState by remember { mutableStateOf(initialAdditionalNote) }
 
     val attachmentsState = remember { mutableStateListOf<CellAttachment>().apply { addAll(initialAttachments) } }
     val checklistsState = remember { mutableStateListOf<CellChecklistItem>().apply { addAll(initialChecklists) } }
@@ -73,6 +77,46 @@ fun CellAttachmentDialog(
     var manualContactPhone by remember { mutableStateOf("") }
 
     var selectedImagePreviewUri by remember { mutableStateOf<Uri?>(null) }
+
+    // 1. Speech-to-Text launcher for Primary Cell Note
+    val noteSpeechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (!spoken.isNullOrBlank()) {
+            cellNoteState = if (cellNoteState.isBlank()) spoken else "$cellNoteState $spoken"
+        }
+    }
+
+    // 2. Speech-to-Text launcher for Additional Text Note
+    val additionalNoteSpeechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (!spoken.isNullOrBlank()) {
+            additionalNoteState = if (additionalNoteState.isBlank()) spoken else "$additionalNoteState $spoken"
+        }
+    }
+
+    fun startSpeechToText(isForAdditionalNote: Boolean) {
+        try {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                putExtra(
+                    RecognizerIntent.EXTRA_PROMPT,
+                    if (isForAdditionalNote) "Speak for Additional Note..." else "Speak for Primary Cell Note..."
+                )
+            }
+            if (isForAdditionalNote) {
+                additionalNoteSpeechLauncher.launch(intent)
+            } else {
+                noteSpeechLauncher.launch(intent)
+            }
+        } catch (e: Exception) {
+            Toast.makeText(context, "Voice input not supported on this device: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Multi-File Picker (Images, PDFs, Documents)
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -108,7 +152,7 @@ fun CellAttachmentDialog(
         }
     }
 
-    // Direct Phone Picker: Queries phone row directly so permissions are not required and phone numbers are retrieved
+    // Direct Phone Picker for address book
     val contactPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -199,7 +243,7 @@ fun CellAttachmentDialog(
                 ) {
                     Column {
                         Text(
-                            text = "📎 Cell Details, Checklists & Files",
+                            text = "📎 Cell Details, Notes & Files",
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
@@ -223,7 +267,7 @@ fun CellAttachmentDialog(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // SECTION 1: CELL TEXT VALUE & DETAILED NOTES TEXTBOX
+                    // SECTION 1: CELL TEXT, PRIMARY NOTE (WITH STT), AND ADDITIONAL NOTE (WITH STT)
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -232,15 +276,16 @@ fun CellAttachmentDialog(
                     ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Text(
-                                text = "Cell Content & Detailed Notes",
+                                text = "Cell Content & Notes",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = Color(0xFF1565C0)
                             )
 
+                            // Primary in-cell display value
                             OutlinedTextField(
                                 value = cellTextState,
                                 onValueChange = { cellTextState = it },
@@ -249,16 +294,77 @@ fun CellAttachmentDialog(
                                 singleLine = true
                             )
 
-                            OutlinedTextField(
-                                value = cellNoteState,
-                                onValueChange = { cellNoteState = it },
-                                label = { Text("Detailed Notes / Description / Memo") },
-                                placeholder = { Text("Type multi-line notes, instructions, or remarks...", fontSize = 12.sp) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 80.dp, max = 140.dp),
-                                maxLines = 5
-                            )
+                            // 1. PRIMARY CELL NOTE WITH DEDICATED STT (SPEECH-TO-TEXT)
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Primary Cell Note",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF37474F)
+                                    )
+
+                                    Button(
+                                        onClick = { startSpeechToText(isForAdditionalNote = false) },
+                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(28.dp)
+                                    ) {
+                                        Text("🎤 Voice to Note", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = cellNoteState,
+                                    onValueChange = { cellNoteState = it },
+                                    placeholder = { Text("Detailed cell memo or tap '🎤 Voice to Note'...", fontSize = 12.sp) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 70.dp, max = 120.dp),
+                                    maxLines = 4
+                                )
+                            }
+
+                            Divider(color = Color(0xFFEEEEEE))
+
+                            // 2. ADDITIONAL TEXT NOTE WITH SEPARATE DEDICATED STT (SPEECH-TO-TEXT)
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Additional Text Note",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF6A1B9A)
+                                    )
+
+                                    Button(
+                                        onClick = { startSpeechToText(isForAdditionalNote = true) },
+                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF8E24AA)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(28.dp)
+                                    ) {
+                                        Text("🎤 Voice to Extra Note", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = additionalNoteState,
+                                    onValueChange = { additionalNoteState = it },
+                                    placeholder = { Text("Additional notes, customer remarks, or tap '🎤 Voice to Extra Note'...", fontSize = 12.sp) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 70.dp, max = 120.dp),
+                                    maxLines = 4
+                                )
+                            }
                         }
                     }
 
@@ -368,7 +474,7 @@ fun CellAttachmentDialog(
                         }
                     }
 
-                    // SECTION 3: MANUAL CONTACT ENTRY (CALL, TEXT, WHATSAPP) & PHONEBOOK
+                    // SECTION 3: CONTACT ENTRY (MANUAL & ADDRESS BOOK) + CALL / SMS / WHATSAPP
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -556,9 +662,7 @@ fun CellAttachmentDialog(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp)
+                        modifier = Modifier.weight(1f).height(42.dp)
                     ) {
                         Text("Cancel")
                     }
@@ -568,15 +672,14 @@ fun CellAttachmentDialog(
                             onSave(
                                 cellTextState,
                                 cellNoteState,
+                                additionalNoteState,
                                 attachmentsState.toList(),
                                 checklistsState.toList()
                             )
                             onDismiss()
                         },
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp)
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF15803D)),
+                        modifier = Modifier.weight(1f).height(42.dp)
                     ) {
                         Text("Save & Apply", color = Color.White, fontWeight = FontWeight.Bold)
                     }
@@ -710,7 +813,7 @@ private fun AttachmentPreviewCard(
                     )
                 }
 
-                // Interactive Quick Actions for Contacts (Manual & Address Book alike)
+                // Interactive Quick Actions for Contacts
                 if (attachment.type == AttachmentType.CONTACT) {
                     val phoneNum = attachment.detail.trim()
                     if (phoneNum.isNotBlank()) {

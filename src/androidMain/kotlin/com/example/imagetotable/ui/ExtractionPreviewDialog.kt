@@ -1,6 +1,7 @@
 package com.example.imagetotable.ui
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -66,21 +67,21 @@ fun ExtractionPreviewDialog(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(0.98f).fillMaxHeight(0.96f),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(14.dp),
             elevation = 8.dp
         ) {
             Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
-                // Title
+                // Header Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text("Extraction Verification & Preview", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Extraction Verification & Preview", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
                         Text("Inspect cropped snippet & adjust extracted grid before committing", fontSize = 11.sp, color = Color.Gray)
                     }
-                    IconButton(onClick = onDismiss) { Text("✕", fontSize = 16.sp, color = Color.Gray) }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) { Text("✕", fontSize = 16.sp, color = Color.Gray, fontWeight = FontWeight.Bold) }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -150,31 +151,45 @@ fun ExtractionPreviewDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // EXCLUSION TOGGLES
+                // EXCLUSION TOGGLES (STACKED ROWS - NEVER SQUISHED)
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     backgroundColor = Color(0xFFF1F5F9),
-                    shape = RoundedCornerShape(6.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(0.5.dp, Color(0xFFCFD8DC))
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { excludeHeaderRow = !excludeHeaderRow },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Checkbox(
                                 checked = excludeHeaderRow,
-                                onCheckedChange = { excludeHeaderRow = it }
+                                onCheckedChange = { excludeHeaderRow = it },
+                                modifier = Modifier.size(24.dp)
                             )
-                            Text("Exclude Column Headers (Pure Data Rows)", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Exclude Column Headers (Treat as Pure Data Rows)", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                         }
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { excludeRowNames = !excludeRowNames },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Checkbox(
                                 checked = excludeRowNames,
-                                onCheckedChange = { excludeRowNames = it }
+                                onCheckedChange = { excludeRowNames = it },
+                                modifier = Modifier.size(24.dp)
                             )
-                            Text("Exclude Row Names", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Exclude Row Names (Do not auto-generate row IDs)", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -290,7 +305,7 @@ fun ExtractionPreviewDialog(
                             }
                         }
 
-                        // UNIFORM BODY ROWS (Multi-line content supported)
+                        // UNIFORM BODY ROWS
                         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                             itemsIndexed(previewRows) { rowIdx, rowCells ->
                                 Row(
@@ -355,7 +370,10 @@ fun ExtractionPreviewDialog(
                                         ) {
                                             BasicTextField(
                                                 value = rowCells.getOrElse(colIdx) { "" },
-                                                onValueChange = { rowCells[colIdx] = it },
+                                                onValueChange = { newVal ->
+                                                    while (rowCells.size <= colIdx) rowCells.add("")
+                                                    rowCells[colIdx] = newVal
+                                                },
                                                 textStyle = TextStyle(fontSize = 12.sp),
                                                 modifier = Modifier.fillMaxWidth()
                                             )
@@ -369,32 +387,44 @@ fun ExtractionPreviewDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Bottom Action Buttons
-                Row(
+                // BOTTOM ACTION BUTTONS (50/50 WEIGHTED - NEVER SQUISHED)
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    TextButton(onClick = onDismiss) { Text("Discard / Cancel") }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Button(
                             onClick = {
                                 onConfirmAppend(previewHeaders.toList(), previewRows.map { it.toList() }, excludeHeaderRow, excludeRowNames)
                             },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B))
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                            modifier = Modifier.weight(1f).height(42.dp),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Append to Current Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("➕ Append to Table", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
 
                         Button(
                             onClick = {
                                 onConfirmReplace(previewHeaders.toList(), previewRows.map { it.toList() }, excludeHeaderRow, excludeRowNames)
                             },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315))
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD84315)),
+                            modifier = Modifier.weight(1f).height(42.dp),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Replace Current Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("🔄 Replace Table", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
+                    }
+
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Discard / Cancel", color = Color(0xFF5E35B1), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

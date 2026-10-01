@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
@@ -314,9 +315,9 @@ fun DedicatedTableEditorDialog(
                             Text("Table:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
                             BasicTextField(
                                 value = tableNameState,
-                                onValueChange = {
-                                    tableNameState = it
-                                    tableData.tableName = it
+                                onValueChange = { newTableName: String ->
+                                    tableNameState = newTableName
+                                    tableData.tableName = newTableName
                                 },
                                 textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0D47A1)),
                                 modifier = Modifier
@@ -356,7 +357,7 @@ fun DedicatedTableEditorDialog(
                                 val currentRowName = tableData.rowNames.getOrElse(safeRowIndex) { "Row ${safeRowIndex + 1}" }
                                 BasicTextField(
                                     value = currentRowName,
-                                    onValueChange = { newRName ->
+                                    onValueChange = { newRName: String ->
                                         if (safeRowIndex in tableData.rowNames.indices) {
                                             tableData.rowNames[safeRowIndex] = newRName
                                         }

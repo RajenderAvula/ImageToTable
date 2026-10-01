@@ -165,6 +165,10 @@ fun MobileTableEditorScreen() {
     var anchorCell by remember { mutableStateOf(Pair(0, 0)) }
     var cellClipboard by remember { mutableStateOf<CellClipboard?>(null) }
 
+    // Multi-edit batch value dialog state
+    var showBatchEditDialog by remember { mutableStateOf(false) }
+    var batchEditText by remember { mutableStateOf("") }
+
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val detectedWords = remember { mutableStateListOf<String>() }
     val selectedTokens = remember { mutableStateListOf<String>() }
@@ -900,6 +904,69 @@ fun MobileTableEditorScreen() {
                 TableRepository.saveOrUpdate(currentTable)
                 tableSnapshot = currentTable.createSnapshot()
                 statusMessage = "Updated cell ($r, $c)"
+            }
+        )
+    }
+
+    // BATCH MULTI-EDIT DIALOG
+    if (showBatchEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatchEditDialog = false },
+            title = {
+                Text(
+                    text = "Multi-Edit (${selectedCells.size} Selected Cells)",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF6A1B9A)
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Enter a value to set across all ${selectedCells.size} selected cells. Attachments, notes, and checklists will remain intact.",
+                        fontSize = 12.sp,
+                        color = Color.DarkGray
+                    )
+                    OutlinedTextField(
+                        value = batchEditText,
+                        onValueChange = { batchEditText = it },
+                        placeholder = { Text("Enter cell value...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        selectedCells.forEach { (r, c) ->
+                            val oldRaw = currentTable.rows.getOrNull(r)?.getOrNull(c) ?: ""
+                            val payload = CellAttachmentHelper.parseCellContent(oldRaw)
+                            val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                                displayText = batchEditText,
+                                attachments = payload.attachments,
+                                note = payload.note,
+                                additionalNote = payload.additionalNote,
+                                checklists = payload.checklists
+                            )
+                            currentTable.setCellValue(r, c, updatedEncoded)
+                        }
+                        currentTable.recomputeFormulas()
+                        currentTable.markUpdated()
+                        TableRepository.saveOrUpdate(currentTable)
+                        tableSnapshot = currentTable.createSnapshot()
+                        showBatchEditDialog = false
+                        statusMessage = "Updated ${selectedCells.size} cells with '$batchEditText'"
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
+                ) {
+                    Text("Apply to All", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchEditDialog = false }) {
+                    Text("Cancel")
+                }
             }
         )
     }
@@ -1793,14 +1860,14 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // Dynamic typography scaling: values magnify and grow directly with tableZoomScale
+    // Dynamic typography scaling
     val cellFontSize = (12 * tableZoomScale).sp
     val headerFontSize = (13 * tableZoomScale).sp
     val subTextFontSize = (10 * tableZoomScale).sp
     val badgeFontSize = (9 * tableZoomScale).sp
     val dateBtnFontSize = (11 * tableZoomScale).sp
 
-    // Proportional column dimensions: expand cleanly with magnified typography to eliminate truncation
+    // Proportional column dimensions
     val actionColWidth = (190 * tableZoomScale).dp.coerceAtLeast(140.dp)
     val dataColWidth = (195 * tableZoomScale).dp.coerceAtLeast(140.dp)
     val totalTableWidth = actionColWidth + (dataColWidth * visibleColIndices.size) + (90 * tableZoomScale).dp
@@ -2000,12 +2067,13 @@ fun MobileTableEditorScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                // Clicking outside the table releases the keyboard and resets active cell cursor
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = {
                         focusManager.clearFocus()
-                        selectedCells.clear()
-                        anchorCell = Pair(-1, -1)
+                        if (!isMultiSelectMode) {
+                            selectedCells.clear()
+                            anchorCell = Pair(-1, -1)
+                        }
                     })
                 }
         ) {
@@ -2707,11 +2775,30 @@ fun MobileTableEditorScreen() {
                                 }
 
                                 Button(
-                                    onClick = { isMultiSelectMode = !isMultiSelectMode },
+                                    onClick = {
+                                        isMultiSelectMode = !isMultiSelectMode
+                                        if (isMultiSelectMode && selectedCells.isEmpty() && anchorCell.first >= 0 && anchorCell.second >= 0) {
+                                            selectedCells.add(anchorCell)
+                                        }
+                                    },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = if (isMultiSelectMode) Color(0xFF7B1FA2) else Color(0xFF546E7A)),
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                 ) {
-                                    Text(if (isMultiSelectMode) "✓ Multi (${selectedCells.size})" else "☐ Multi-Select", color = Color.White, fontSize = 11.sp)
+                                    Text(if (isMultiSelectMode) "✓ Multi (${selectedCells.size})" else "☐ Multi-Select", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                // Direct Batch Multi-Edit button
+                                if (isMultiSelectMode && selectedCells.isNotEmpty()) {
+                                    Button(
+                                        onClick = {
+                                            batchEditText = ""
+                                            showBatchEditDialog = true
+                                        },
+                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("✏️ Set All (${selectedCells.size})", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
 
                                 Button(
@@ -3074,9 +3161,12 @@ fun MobileTableEditorScreen() {
                                                             .width(dataColWidth)
                                                             .border(width = if (isSelected || isAnchor) 2.dp else 0.5.dp, color = cellBorder)
                                                             .background(cellBg)
-                                                            .padding(horizontal = (6 * tableZoomScale).dp, vertical = (4 * tableZoomScale).dp)
                                                     ) {
-                                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                                        Column(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(horizontal = (6 * tableZoomScale).dp, vertical = (4 * tableZoomScale).dp)
+                                                        ) {
                                                             // Top Row: Value / Editor + Clip Icon Button
                                                             Row(
                                                                 modifier = Modifier.fillMaxWidth(),
@@ -3096,19 +3186,41 @@ fun MobileTableEditorScreen() {
                                                                             fontWeight = if (isPresent || isAbsent || isFormulaCol) FontWeight.Bold else FontWeight.Normal,
                                                                             modifier = Modifier
                                                                                 .fillMaxWidth()
-                                                                                .clickable {
-                                                                                    anchorCell = cellCoord
-                                                                                    selectedCells.clear()
-                                                                                    selectedCells.add(cellCoord)
+                                                                                .pointerInput(cellCoord, isMultiSelectMode) {
+                                                                                    detectTapGestures(
+                                                                                        onTap = {
+                                                                                            if (isMultiSelectMode) {
+                                                                                                anchorCell = cellCoord
+                                                                                                if (selectedCells.contains(cellCoord)) {
+                                                                                                    selectedCells.remove(cellCoord)
+                                                                                                } else {
+                                                                                                    selectedCells.add(cellCoord)
+                                                                                                }
+                                                                                            } else {
+                                                                                                anchorCell = cellCoord
+                                                                                                selectedCells.clear()
+                                                                                                selectedCells.add(cellCoord)
+                                                                                            }
+                                                                                        },
+                                                                                        onLongPress = {
+                                                                                            isMultiSelectMode = true
+                                                                                            anchorCell = cellCoord
+                                                                                            if (!selectedCells.contains(cellCoord)) {
+                                                                                                selectedCells.add(cellCoord)
+                                                                                            }
+                                                                                            statusMessage = "Multi-select: ${selectedCells.size} selected"
+                                                                                        }
+                                                                                    )
                                                                                 }
                                                                         )
                                                                     } else {
+                                                                        // EDIT MODE: Direct in-cell editing
                                                                         when (colDef.type) {
                                                                             ColumnType.FORMULA -> {
                                                                                 Row(
                                                                                     modifier = Modifier
                                                                                         .fillMaxWidth()
-                                                                                        .clickable {
+                                                                                        .clickable(enabled = !isMultiSelectMode) {
                                                                                             formulaEditingColIndex = colIdx
                                                                                             formulaInitialColName = colDef.name
                                                                                             formulaInitialExpression = colDef.formula
@@ -3178,7 +3290,7 @@ fun MobileTableEditorScreen() {
                                                                                         Box(
                                                                                             modifier = Modifier
                                                                                                 .background(Color(0xFFE3F2FD), RoundedCornerShape(3.dp))
-                                                                                                .clickable { openDatePickerForCell(origRIdx, colIdx) }
+                                                                                                .clickable(enabled = !isMultiSelectMode) { openDatePickerForCell(origRIdx, colIdx) }
                                                                                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                                                                         ) {
                                                                                             Text("📅", fontSize = dateBtnFontSize)
@@ -3190,7 +3302,7 @@ fun MobileTableEditorScreen() {
                                                                                                     if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
                                                                                                     RoundedCornerShape(3.dp)
                                                                                                 )
-                                                                                                .clickable {
+                                                                                                .clickable(enabled = !isMultiSelectMode) {
                                                                                                     val newVal = if (isPresent) "" else "Present"
                                                                                                     val encoded = CellAttachmentHelper.formatCellContent(
                                                                                                         displayText = newVal,
@@ -3213,7 +3325,7 @@ fun MobileTableEditorScreen() {
                                                                                                     if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
                                                                                                     RoundedCornerShape(3.dp)
                                                                                                 )
-                                                                                                .clickable {
+                                                                                                .clickable(enabled = !isMultiSelectMode) {
                                                                                                     val newVal = if (isAbsent) "" else "Absent"
                                                                                                     val encoded = CellAttachmentHelper.formatCellContent(
                                                                                                         displayText = newVal,
@@ -3271,7 +3383,7 @@ fun MobileTableEditorScreen() {
                                                                                         Box(
                                                                                             modifier = Modifier
                                                                                                 .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                                .clickable {
+                                                                                                .clickable(enabled = !isMultiSelectMode) {
                                                                                                     val num = displayVal.toIntOrNull() ?: 0
                                                                                                     val encoded = CellAttachmentHelper.formatCellContent(
                                                                                                         displayText = (num - 1).toString(),
@@ -3291,7 +3403,7 @@ fun MobileTableEditorScreen() {
                                                                                         Box(
                                                                                             modifier = Modifier
                                                                                                 .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                                .clickable {
+                                                                                                .clickable(enabled = !isMultiSelectMode) {
                                                                                                     val num = displayVal.toIntOrNull() ?: 0
                                                                                                     val encoded = CellAttachmentHelper.formatCellContent(
                                                                                                         displayText = (num + 1).toString(),
@@ -3372,14 +3484,14 @@ fun MobileTableEditorScreen() {
                                                                     }
                                                                 }
 
-                                                                // 📎 Attachment Manager Trigger Button
+                                                                // Attachment Manager Button
                                                                 Text(
                                                                     text = if (cellAttachments.isNotEmpty()) "📎 ${cellAttachments.size}" else "📎",
                                                                     fontSize = subTextFontSize,
                                                                     fontWeight = if (cellAttachments.isNotEmpty()) FontWeight.Bold else FontWeight.Normal,
                                                                     color = if (cellAttachments.isNotEmpty()) Color(0xFF0D47A1) else Color(0xFF90A4AE),
                                                                     modifier = Modifier
-                                                                        .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                        .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
                                                                         .padding(start = 4.dp, end = 2.dp)
                                                                 )
                                                             }
@@ -3398,7 +3510,7 @@ fun MobileTableEditorScreen() {
                                                                         Box(
                                                                             modifier = Modifier
                                                                                 .background(Color(0xFFFFF9C4), RoundedCornerShape(3.dp))
-                                                                                .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                                .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
                                                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                                                         ) { Text("📝 Note", fontSize = badgeFontSize, color = Color(0xFFF57F17)) }
                                                                     }
@@ -3407,7 +3519,7 @@ fun MobileTableEditorScreen() {
                                                                         Box(
                                                                             modifier = Modifier
                                                                                 .background(Color(0xFFF3E5F5), RoundedCornerShape(3.dp))
-                                                                                .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                                .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
                                                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                                                         ) { Text("📋 +Note", fontSize = badgeFontSize, color = Color(0xFF7B1FA2)) }
                                                                     }
@@ -3417,7 +3529,7 @@ fun MobileTableEditorScreen() {
                                                                         Box(
                                                                             modifier = Modifier
                                                                                 .background(Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
-                                                                                .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                                .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
                                                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                                                         ) {
                                                                             Text("☑ $done/${cellChecklists.size}", fontSize = badgeFontSize, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
@@ -3428,7 +3540,7 @@ fun MobileTableEditorScreen() {
                                                                         Box(
                                                                             modifier = Modifier
                                                                                 .background(if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                                .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
                                                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                                                         ) {
                                                                             Text(
@@ -3450,17 +3562,21 @@ fun MobileTableEditorScreen() {
                                                                             text = "+${cellAttachments.size - 2}",
                                                                             fontSize = badgeFontSize,
                                                                             color = Color.Gray,
-                                                                            modifier = Modifier.clickable { activeAttachmentCellCoord = cellCoord }
+                                                                            modifier = Modifier.clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
                                                                         )
                                                                     }
                                                                 }
                                                             }
                                                         }
 
+                                                        // Reliable multi-select overlay using matchParentSize()
                                                         if (isMultiSelectMode) {
                                                             Box(
                                                                 modifier = Modifier
-                                                                    .fillMaxSize()
+                                                                    .matchParentSize()
+                                                                    .background(
+                                                                        if (isSelected) Color(0x337B1FA2) else Color.Transparent
+                                                                    )
                                                                     .clickable {
                                                                         anchorCell = cellCoord
                                                                         if (selectedCells.contains(cellCoord)) {

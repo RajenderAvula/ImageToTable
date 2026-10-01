@@ -2,6 +2,7 @@ package com.example.imagetotable
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -10,9 +11,11 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.print.PrintAttributes
 import android.print.PrintManager
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -43,6 +46,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -177,6 +181,17 @@ fun MobileTableEditorScreen() {
 
     val hiddenChartDateIndices = remember { mutableStateListOf<Int>() }
     var showChartDateSelectorDialog by remember { mutableStateOf(false) }
+
+    // Global Attendance Date Columns: declared at top scope to eliminate unresolved reference errors
+    val allDateColIndices = remember(currentTable.headers) {
+        currentTable.headers.indices.filter { idx ->
+            val def = currentTable.headers[idx]
+            def.type == ColumnType.DATE || parseDateFromHeader(def.name) != null
+        }
+    }
+    val dateColIndices = remember(allDateColIndices, hiddenChartDateIndices.toList()) {
+        allDateColIndices.filter { !hiddenChartDateIndices.contains(it) }
+    }
 
     var showCropperDialog by remember { mutableStateOf(false) }
     var cropperTargetPageIndex by remember { mutableStateOf<Int?>(null) }
@@ -1201,7 +1216,7 @@ fun MobileTableEditorScreen() {
             onDismissRequest = { showChartDateSelectorDialog = false },
             title = { Text("Show / Hide Dates in Attendance Chart", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFF1565C0)) },
             text = {
-                if (dateColIndices.isEmpty()) {
+                if (allDateColIndices.isEmpty()) {
                     Text("No date columns found in this table. Add date columns first.", fontSize = 12.sp, color = Color.Gray)
                 } else {
                     Column(
@@ -1210,7 +1225,7 @@ fun MobileTableEditorScreen() {
                     ) {
                         Text("Uncheck any date to hide it from the daily attendance chart:", fontSize = 11.sp, color = Color.DarkGray)
                         Spacer(modifier = Modifier.height(4.dp))
-                        for (colIdx in dateColIndices) {
+                        for (colIdx in allDateColIndices) {
                             val colName = currentTable.headers.getOrNull(colIdx)?.name ?: "Date $colIdx"
                             val isVisible = !hiddenChartDateIndices.contains(colIdx)
 
@@ -2372,7 +2387,6 @@ fun MobileTableEditorScreen() {
                                                     .weight(if (scannerViewMode == 1) 1f else 1.35f)
                                                     .fillMaxHeight()
                                             ) {
-                                                // UN-CONGESTED TOKENS BAR (NO VERTICAL M-O-D-A-L)
                                                 Row(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
@@ -2712,7 +2726,7 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE (WITH RELIABLE FULL-HEIGHT INTRINSIC RENDERING)
+                        // HORIZONTAL SCROLL CONTAINER FOR THE FULL TABLE
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2939,7 +2953,6 @@ fun MobileTableEditorScreen() {
                                                     val isSelected = selectedCells.contains(cellCoord)
                                                     val isAnchor = anchorCell == cellCoord
 
-                                                    // Parse visible text and embedded attachments
                                                     val payload = remember(cellValue) {
                                                         CellAttachmentHelper.parseCellContent(cellValue)
                                                     }
@@ -3028,7 +3041,6 @@ fun MobileTableEditorScreen() {
                                                                                 }
                                                                         )
                                                                     } else {
-                                                                        // EDIT MODE: Direct in-cell editing
                                                                         when (colDef.type) {
                                                                             ColumnType.FORMULA -> {
                                                                                 Row(
@@ -3298,25 +3310,19 @@ fun MobileTableEditorScreen() {
                                                                     }
                                                                 }
 
-                                                                // Attachment Manager Button
                                                                 Text(
                                                                     text = if (cellAttachments.isNotEmpty()) "📎 ${cellAttachments.size}" else "📎",
                                                                     fontSize = subTextFontSize,
                                                                     fontWeight = if (cellAttachments.isNotEmpty()) FontWeight.Bold else FontWeight.Normal,
                                                                     color = if (cellAttachments.isNotEmpty()) Color(0xFF0D47A1) else Color(0xFF90A4AE),
-                                                                    modifier = Modifier
-                                                                        .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
-                                                                        .padding(start = 4.dp, end = 2.dp)
+                                                                    modifier = Modifier.clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }.padding(start = 4.dp, end = 2.dp)
                                                                 )
                                                             }
 
-                                                            // INLINE BADGES: LINKED TABLE, NOTES, EXTRA NOTES, CHECKLISTS & ATTACHMENTS
+                                                            // INLINE BADGES: LINKED TABLE, NOTES, CHECKLISTS & FILES
                                                             if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank()) {
                                                                 Row(
-                                                                    modifier = Modifier
-                                                                        .fillMaxWidth()
-                                                                        .horizontalScroll(rememberScrollState())
-                                                                        .padding(top = 2.dp),
+                                                                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 2.dp),
                                                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                                                     verticalAlignment = Alignment.CenterVertically
                                                                 ) {
@@ -3339,41 +3345,27 @@ fun MobileTableEditorScreen() {
                                                                     }
 
                                                                     if (cellNote.isNotBlank()) {
-                                                                        Box(
-                                                                            modifier = Modifier
-                                                                                .background(Color(0xFFFFF9C4), RoundedCornerShape(3.dp))
-                                                                                .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
-                                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                                        ) { Text("📝 Note", fontSize = badgeFontSize, color = Color(0xFFF57F17)) }
+                                                                        Box(modifier = Modifier.background(Color(0xFFFFF9C4), RoundedCornerShape(3.dp)).clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }.padding(horizontal = 4.dp, vertical = 1.dp)) {
+                                                                            Text("📝 Note", fontSize = badgeFontSize, color = Color(0xFFF57F17))
+                                                                        }
                                                                     }
 
                                                                     if (cellExtraNote.isNotBlank()) {
-                                                                        Box(
-                                                                            modifier = Modifier
-                                                                                .background(Color(0xFFF3E5F5), RoundedCornerShape(3.dp))
-                                                                                .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
-                                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                                        ) { Text("📋 +Note", fontSize = badgeFontSize, color = Color(0xFF7B1FA2)) }
+                                                                        Box(modifier = Modifier.background(Color(0xFFF3E5F5), RoundedCornerShape(3.dp)).clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }.padding(horizontal = 4.dp, vertical = 1.dp)) {
+                                                                            Text("📋 +Note", fontSize = badgeFontSize, color = Color(0xFF7B1FA2))
+                                                                        }
                                                                     }
 
                                                                     if (cellChecklists.isNotEmpty()) {
                                                                         val done = cellChecklists.count { it.isChecked }
-                                                                        Box(
-                                                                            modifier = Modifier
-                                                                                .background(Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
-                                                                                .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
-                                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                                        ) {
+                                                                        Box(modifier = Modifier.background(Color(0xFFE8F5E9), RoundedCornerShape(3.dp)).clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }.padding(horizontal = 4.dp, vertical = 1.dp)) {
                                                                             Text("☑ $done/${cellChecklists.size}", fontSize = badgeFontSize, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
                                                                         }
                                                                     }
 
                                                                     cellAttachments.filter { it.type != AttachmentType.LINKED_TABLE }.take(2).forEach { att ->
                                                                         Box(
-                                                                            modifier = Modifier
-                                                                                .background(if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                .clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
-                                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                            modifier = Modifier.background(if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1), RoundedCornerShape(3.dp)).clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }.padding(horizontal = 4.dp, vertical = 1.dp)
                                                                         ) {
                                                                             Text(
                                                                                 text = when (att.type) {
@@ -3383,41 +3375,20 @@ fun MobileTableEditorScreen() {
                                                                                     AttachmentType.FILE -> "📁 ${att.displayName.take(6)}"
                                                                                     else -> ""
                                                                                 },
-                                                                                fontSize = badgeFontSize,
-                                                                                color = Color.DarkGray,
-                                                                                maxLines = 1
+                                                                                fontSize = badgeFontSize, color = Color.DarkGray, maxLines = 1
                                                                             )
                                                                         }
-                                                                    }
-
-                                                                    if (cellAttachments.size > 2) {
-                                                                        Text(
-                                                                            text = "+${cellAttachments.size - 2}",
-                                                                            fontSize = badgeFontSize,
-                                                                            color = Color.Gray,
-                                                                            modifier = Modifier.clickable(enabled = !isMultiSelectMode) { activeAttachmentCellCoord = cellCoord }
-                                                                        )
                                                                     }
                                                                 }
                                                             }
                                                         }
 
-                                                        // Reliable multi-select overlay using matchParentSize()
                                                         if (isMultiSelectMode) {
                                                             Box(
-                                                                modifier = Modifier
-                                                                    .matchParentSize()
-                                                                    .background(
-                                                                        if (isSelected) Color(0x337B1FA2) else Color.Transparent
-                                                                    )
-                                                                    .clickable {
-                                                                        anchorCell = cellCoord
-                                                                        if (selectedCells.contains(cellCoord)) {
-                                                                            selectedCells.remove(cellCoord)
-                                                                        } else {
-                                                                            selectedCells.add(cellCoord)
-                                                                        }
-                                                                    }
+                                                                modifier = Modifier.matchParentSize().background(if (isSelected) Color(0x337B1FA2) else Color.Transparent).clickable {
+                                                                    anchorCell = cellCoord
+                                                                    if (selectedCells.contains(cellCoord)) selectedCells.remove(cellCoord) else selectedCells.add(cellCoord)
+                                                                }
                                                             )
                                                         }
                                                     }

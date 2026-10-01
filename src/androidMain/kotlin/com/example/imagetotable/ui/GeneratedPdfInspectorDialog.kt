@@ -1,17 +1,18 @@
 package com.example.imagetotable.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,12 +27,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.imagetotable.model.PdfPageItem
 import com.example.imagetotable.util.PdfCompressorExporter
-import com.example.imagetotable.util.PdfPageItem
 import kotlinx.coroutines.launch
 
 @Composable
@@ -63,62 +65,73 @@ fun GeneratedPdfInspectorDialog(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(0.98f).fillMaxHeight(0.96f),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(14.dp),
             elevation = 8.dp
         ) {
-            Column(modifier = Modifier.padding(10.dp)) {
-                // Top Header: Title & Close
+            Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
+                // Header Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("PDF Studio: Generated Document Inspector", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
                         Text("Current Size: ${PdfCompressorExporter.formatBytes(currentFileSize)} • ${pages.size} Pages", fontSize = 11.sp, color = Color.DarkGray)
                     }
-                    IconButton(onClick = onDismiss) { Text("✕", fontSize = 16.sp, color = Color.Gray) }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) { Text("✕", fontSize = 16.sp, color = Color.Gray, fontWeight = FontWeight.Bold) }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // Post-Generation File Size Reducer Strip
+                // Post-Generation File Size Reducer Strip (FIXED PRESET CHIPS & INPUT BOX)
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     backgroundColor = Color(0xFFF1F5F9),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(0.5.dp, Color(0xFFCFD8DC))
                 ) {
-                    Column(modifier = Modifier.padding(6.dp)) {
+                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Reduce File Size After Generation (Target KB):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF37474F))
+
+                        // Presets Row: 100K, 250K, 500K, 1000K (Equal Weights, No Wrapping)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text("Reduce File Size After Generation:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                listOf("100", "250", "500", "1000").forEach { preset ->
-                                    Button(
-                                        onClick = { targetSizeInputKb = preset },
-                                        colors = ButtonDefaults.buttonColors(
-                                            backgroundColor = if (targetSizeInputKb == preset) Color(0xFF1976D2) else Color(0xFFCFD8DC)
-                                        ),
-                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 1.dp)
-                                    ) { Text("${preset}K", fontSize = 9.sp, color = if (targetSizeInputKb == preset) Color.White else Color.Black) }
+                            listOf("100", "250", "500", "1000").forEach { preset ->
+                                val isSelected = targetSizeInputKb == preset
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (isSelected) Color(0xFF1976D2) else Color(0xFFECEFF1),
+                                    border = BorderStroke(1.dp, if (isSelected) Color(0xFF0D47A1) else Color(0xFFCFD8DC)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { targetSizeInputKb = preset }
+                                ) {
+                                    Text(
+                                        text = "${preset}K",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSelected) Color.White else Color(0xFF263238),
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(vertical = 6.dp)
+                                    )
                                 }
                             }
                         }
 
+                        // Custom Target KB Input & Compress Button
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             OutlinedTextField(
                                 value = targetSizeInputKb,
-                                onValueChange = { targetSizeInputKb = it },
-                                label = { Text("Target KB") },
-                                modifier = Modifier.width(90.dp).height(46.dp),
+                                onValueChange = { targetSizeInputKb = it.filter { ch -> ch.isDigit() } },
+                                label = { Text("Target KB", fontSize = 10.sp) },
+                                modifier = Modifier.width(105.dp).height(50.dp),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 singleLine = true,
                                 textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -146,15 +159,16 @@ fun GeneratedPdfInspectorDialog(
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100)),
-                                modifier = Modifier.height(42.dp),
+                                modifier = Modifier.weight(1f).height(46.dp),
+                                shape = RoundedCornerShape(6.dp),
                                 contentPadding = PaddingValues(horizontal = 8.dp)
                             ) {
                                 Text(if (isCompressing) "Compressing..." else "⚡ Compress File Size", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
+                        }
 
-                            if (compressionFeedback.isNotBlank()) {
-                                Text(compressionFeedback, fontSize = 10.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            }
+                        if (compressionFeedback.isNotBlank()) {
+                            Text(compressionFeedback, fontSize = 10.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -234,7 +248,7 @@ fun GeneratedPdfInspectorDialog(
                             Text(
                                 "Page ${safeIndex + 1} of ${pages.size}",
                                 color = Color.White,
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -261,7 +275,7 @@ fun GeneratedPdfInspectorDialog(
                                 }
                             },
                             enabled = safeIndex > 0,
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                         ) { Text("◀ Move Page", fontSize = 10.sp) }
 
                         Button(
@@ -273,7 +287,7 @@ fun GeneratedPdfInspectorDialog(
                                 }
                             },
                             enabled = safeIndex < pages.size - 1,
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                         ) { Text("Move Page ▶", fontSize = 10.sp) }
                     }
                 }
@@ -318,27 +332,32 @@ fun GeneratedPdfInspectorDialog(
                 // Bottom Final Actions: Save, Print, Share
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val targetKb = targetSizeInputKb.toIntOrNull()
 
                     Button(
                         onClick = { onSavePdf(targetKb) },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
-                    ) { Text("💾 Save PDF", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp) }
+                        modifier = Modifier.weight(1.2f).height(42.dp),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                        shape = RoundedCornerShape(6.dp)
+                    ) { Text("💾 Save PDF", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
 
                     Button(
                         onClick = { onPrintPdf(targetKb) },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0277BD)),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                    ) { Text("🖨 Print", color = Color.White, fontSize = 11.sp) }
+                        modifier = Modifier.weight(1f).height(42.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) { Text("🖨 Print", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
 
                     Button(
                         onClick = { onSharePdf(targetKb) },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00838F)),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                    ) { Text("↗ Share", color = Color.White, fontSize = 11.sp) }
+                        modifier = Modifier.weight(1f).height(42.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) { Text("↗ Share", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
                 }
             }
         }

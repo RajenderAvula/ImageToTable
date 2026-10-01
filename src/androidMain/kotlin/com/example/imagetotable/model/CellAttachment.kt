@@ -13,7 +13,8 @@ enum class AttachmentType {
     IMAGE,
     PDF,
     FILE,
-    CONTACT
+    CONTACT,
+    LINKED_TABLE
 }
 
 data class CellAttachment(
@@ -22,7 +23,7 @@ data class CellAttachment(
     val uriString: String = "",
     val displayName: String = "",
     val mimeType: String = "",
-    val detail: String = "" // For Contact: phone number; For File: file size
+    val detail: String = "" // For Contact: phone number; For File: file size; For Linked Table: target table ID
 )
 
 data class CellChecklistItem(
@@ -70,7 +71,11 @@ object CellAttachmentHelper {
                     attachments.add(
                         CellAttachment(
                             id = obj.optString("id", UUID.randomUUID().toString()),
-                            type = AttachmentType.valueOf(obj.optString("type", AttachmentType.FILE.name)),
+                            type = try {
+                                AttachmentType.valueOf(obj.optString("type", AttachmentType.FILE.name))
+                            } catch (_: Exception) {
+                                AttachmentType.FILE
+                            },
                             uriString = obj.optString("uri", ""),
                             displayName = obj.optString("name", "Attachment"),
                             mimeType = obj.optString("mime", ""),
@@ -98,7 +103,11 @@ object CellAttachmentHelper {
                     attachments.add(
                         CellAttachment(
                             id = obj.optString("id", UUID.randomUUID().toString()),
-                            type = AttachmentType.valueOf(obj.optString("type", AttachmentType.FILE.name)),
+                            type = try {
+                                AttachmentType.valueOf(obj.optString("type", AttachmentType.FILE.name))
+                            } catch (_: Exception) {
+                                AttachmentType.FILE
+                            },
                             uriString = obj.optString("uri", ""),
                             displayName = obj.optString("name", "Attachment"),
                             mimeType = obj.optString("mime", ""),

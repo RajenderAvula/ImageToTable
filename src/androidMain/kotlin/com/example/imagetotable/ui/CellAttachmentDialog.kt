@@ -5,9 +5,11 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.ContactsContract
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +33,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -105,18 +108,19 @@ fun CellAttachmentDialog(
         }
     }
 
-    // System Phonebook Picker
+    // Direct Phone Picker: Queries phone row directly so permissions are not required and phone numbers are retrieved
     val contactPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickContact()
-    ) { contactUri: Uri? ->
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val contactUri = result.data?.data
         if (contactUri != null) {
             val (name, phone) = CellAttachmentHelper.queryContactInfo(context, contactUri)
             attachmentsState.add(
                 CellAttachment(
                     type = AttachmentType.CONTACT,
-                    uriString = contactUri.toString(),
+                    uriString = if (phone.isNotBlank()) "tel:${phone.trim()}" else contactUri.toString(),
                     displayName = name,
-                    detail = phone
+                    detail = phone.trim()
                 )
             )
         }
@@ -467,7 +471,10 @@ fun CellAttachmentDialog(
                                 }
 
                                 OutlinedButton(
-                                    onClick = { contactPickerLauncher.launch(null) },
+                                    onClick = {
+                                        val pickIntent = Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
+                                        contactPickerLauncher.launch(pickIntent)
+                                    },
                                     modifier = Modifier.weight(1f),
                                     contentPadding = PaddingValues(vertical = 4.dp)
                                 ) {
@@ -549,7 +556,9 @@ fun CellAttachmentDialog(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f).height(42.dp)
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
                     ) {
                         Text("Cancel")
                     }
@@ -565,7 +574,9 @@ fun CellAttachmentDialog(
                             onDismiss()
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
-                        modifier = Modifier.weight(1f).height(42.dp)
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
                     ) {
                         Text("Save & Apply", color = Color.White, fontWeight = FontWeight.Bold)
                     }
@@ -625,7 +636,7 @@ private fun AttachmentPreviewCard(
         elevation = 1.dp,
         shape = RoundedCornerShape(8.dp),
         backgroundColor = Color.White,
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFFE2E8F0))
+        border = BorderStroke(0.5.dp, Color(0xFFE2E8F0))
     ) {
         Row(
             modifier = Modifier.padding(8.dp),
@@ -699,54 +710,64 @@ private fun AttachmentPreviewCard(
                     )
                 }
 
-                // Interactive Quick Actions for Contacts
-                if (attachment.type == AttachmentType.CONTACT && attachment.detail.isNotBlank()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(top = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(3.dp),
-                            color = Color(0xFFE3F2FD),
-                            modifier = Modifier.clickable { onCallClick() }
+                // Interactive Quick Actions for Contacts (Manual & Address Book alike)
+                if (attachment.type == AttachmentType.CONTACT) {
+                    val phoneNum = attachment.detail.trim()
+                    if (phoneNum.isNotBlank()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "📞 Call",
-                                color = Color(0xFF1565C0),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                            )
-                        }
+                            Surface(
+                                shape = RoundedCornerShape(3.dp),
+                                color = Color(0xFFE3F2FD),
+                                modifier = Modifier.clickable { onCallClick() }
+                            ) {
+                                Text(
+                                    text = "📞 Call",
+                                    color = Color(0xFF1565C0),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
 
-                        Surface(
-                            shape = RoundedCornerShape(3.dp),
-                            color = Color(0xFFE0F2F1),
-                            modifier = Modifier.clickable { onSmsClick() }
-                        ) {
-                            Text(
-                                text = "💬 SMS",
-                                color = Color(0xFF00796B),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                            )
-                        }
+                            Surface(
+                                shape = RoundedCornerShape(3.dp),
+                                color = Color(0xFFE0F2F1),
+                                modifier = Modifier.clickable { onSmsClick() }
+                            ) {
+                                Text(
+                                    text = "💬 SMS",
+                                    color = Color(0xFF00796B),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
 
-                        Surface(
-                            shape = RoundedCornerShape(3.dp),
-                            color = Color(0xFFE8F5E9),
-                            modifier = Modifier.clickable { onWhatsAppClick() }
-                        ) {
-                            Text(
-                                text = "🟢 WA",
-                                color = Color(0xFF2E7D32),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                            )
+                            Surface(
+                                shape = RoundedCornerShape(3.dp),
+                                color = Color(0xFFE8F5E9),
+                                modifier = Modifier.clickable { onWhatsAppClick() }
+                            ) {
+                                Text(
+                                    text = "🟢 WA",
+                                    color = Color(0xFF2E7D32),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
                         }
+                    } else {
+                        Text(
+                            text = "No phone number available",
+                            fontSize = 10.sp,
+                            color = Color.LightGray,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
                     }
                 }
             }

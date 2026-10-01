@@ -1,5 +1,11 @@
 package com.example.imagetotable.ui
 
+import android.content.ContentValues
+import android.content.Context
+import android.graphics.Bitmap
+import android.os.Build
+import android.provider.MediaStore
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -34,6 +40,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.imagetotable.util.PdfCompressorExporter
 import com.example.imagetotable.util.PdfPageItem
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 
 @Composable
 fun GeneratedPdfInspectorDialog(
@@ -68,15 +76,24 @@ fun GeneratedPdfInspectorDialog(
             elevation = 8.dp
         ) {
             Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
-                // Top Header: Title & Close
+                // 1. Header Bar: Title & Close
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("PDF Studio: Generated Document Inspector", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
-                        Text("Current Size: ${PdfCompressorExporter.formatBytes(currentFileSize)} • ${pages.size} Pages", fontSize = 11.sp, color = Color.DarkGray)
+                        Text(
+                            text = "PDF Studio: Generated Document Inspector",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1565C0)
+                        )
+                        Text(
+                            text = "Current Size: ${PdfCompressorExporter.formatBytes(currentFileSize)} • ${pages.size} Pages",
+                            fontSize = 11.sp,
+                            color = Color.DarkGray
+                        )
                     }
                     IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                         Text("✕", fontSize = 16.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
@@ -85,7 +102,81 @@ fun GeneratedPdfInspectorDialog(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // Post-Generation File Size Reducer Strip (FIXED PRESET CHIPS & INPUT BOX)
+                // 2. Pre-Compression Image Export Strip (Save Single Page or All Pages to Gallery)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    backgroundColor = Color(0xFFF1F8FE),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(0.5.dp, Color(0xFF90CAF9))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Save Images Before Compression:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0D47A1)
+                            )
+                            Text(
+                                text = "Export full-res PNGs to Pictures/PDF_Studio",
+                                fontSize = 10.sp,
+                                color = Color.Gray
+                            )
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Button(
+                                onClick = {
+                                    if (pages.isNotEmpty() && safeIndex in pages.indices) {
+                                        val ok = saveBitmapToPictures(
+                                            context = context,
+                                            bitmap = pages[safeIndex].bitmap,
+                                            displayName = "Page_${safeIndex + 1}"
+                                        )
+                                        if (ok) {
+                                            Toast.makeText(context, "Saved Page ${safeIndex + 1} to Gallery/Pictures!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Failed to save image", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.height(30.dp),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text("🖼 Save Page ${safeIndex + 1}", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = {
+                                    val count = saveAllPagesToPictures(
+                                        context = context,
+                                        pages = pages.toList(),
+                                        baseName = "Page"
+                                    )
+                                    Toast.makeText(context, "Saved $count of ${pages.size} images to Pictures/PDF_Studio!", Toast.LENGTH_LONG).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00796B)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.height(30.dp),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text("📦 Save All (${pages.size})", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // 3. Post-Generation File Size Reducer Strip (Clean Presets & Input Box)
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     backgroundColor = Color(0xFFF1F5F9),
@@ -122,7 +213,7 @@ fun GeneratedPdfInspectorDialog(
                             }
                         }
 
-                        // Custom Target KB Input & Compress Button (Properly sized, never squished)
+                        // Custom Target KB Input & Compress Button
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -176,7 +267,7 @@ fun GeneratedPdfInspectorDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // High-Resolution Zoomable Page Viewer
+                // 4. High-Resolution Zoomable Page Viewer
                 Card(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     shape = RoundedCornerShape(8.dp),
@@ -258,7 +349,7 @@ fun GeneratedPdfInspectorDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Adjust Page Numbers / Page Sequence Strip
+                // 5. Adjust Page Numbers / Page Sequence Strip
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -330,7 +421,7 @@ fun GeneratedPdfInspectorDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Bottom Final Actions: Save, Print, Share
+                // 6. Bottom Final Actions: Save, Print, Share
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -363,4 +454,45 @@ fun GeneratedPdfInspectorDialog(
             }
         }
     }
+}
+
+// MediaStore Bitmap Helper Functions (Direct PNG Export to Gallery/Pictures)
+fun saveBitmapToPictures(context: Context, bitmap: Bitmap, displayName: String): Boolean {
+    val filename = "${displayName}_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.png"
+    val contentValues = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PDF_Studio")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+    }
+
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues) ?: return false
+
+    return try {
+        resolver.openOutputStream(uri)?.use { stream ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentValues.clear()
+            contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+        }
+        true
+    } catch (_: Exception) {
+        try { resolver.delete(uri, null, null) } catch (_: Exception) {}
+        false
+    }
+}
+
+fun saveAllPagesToPictures(context: Context, pages: List<PdfPageItem>, baseName: String = "Page"): Int {
+    var successCount = 0
+    pages.forEachIndexed { index, page ->
+        if (saveBitmapToPictures(context, page.bitmap, "${baseName}_${index + 1}")) {
+            successCount++
+        }
+    }
+    return successCount
 }

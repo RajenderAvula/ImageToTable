@@ -404,7 +404,7 @@ fun ExtractionPreviewDialog(
                             modifier = Modifier.weight(1f).height(42.dp),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("➕ Append to Table", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("➕ Append to Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                         }
 
                         Button(
@@ -415,7 +415,7 @@ fun ExtractionPreviewDialog(
                             modifier = Modifier.weight(1f).height(42.dp),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("🔄 Replace Table", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("🔄 Replace Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                         }
                     }
 

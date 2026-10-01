@@ -584,6 +584,60 @@ fun MobileTableEditorScreen() {
             } catch (e: Exception) { statusMessage = "Import error: ${e.message}" }
         }
     }
+        // 1. Device Backup Document Creator Launcher (.ittzip)
+    var pendingBackupArchiveFile by remember { mutableStateOf<File?>(null) }
+    val deviceBackupSaveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { destUri: Uri? ->
+        if (destUri != null && pendingBackupArchiveFile != null) {
+            coroutineScope.launch {
+                try {
+                    context.contentResolver.openOutputStream(destUri)?.use { outStream ->
+                        pendingBackupArchiveFile!!.inputStream().use { inStream ->
+                            inStream.copyTo(outStream)
+                        }
+                    }
+                    statusMessage = "Backup saved to storage: ${pendingBackupArchiveFile!!.name}"
+                    Toast.makeText(context, "Backup successfully saved to device!", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Save backup error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    // 2. Device / Mail Restore Picker Launcher (.ittzip or .zip)
+    val restoreFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { restoreUri: Uri? ->
+        if (restoreUri != null) {
+            coroutineScope.launch {
+                isProcessing = true
+                statusMessage = "Restoring tables and attachments..."
+                try {
+                    val restoredCount = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(restoreUri)?.use { inStream ->
+                            BackupRestoreManager.restoreFromArchiveStream(context, inStream)
+                        } ?: 0
+                    }
+                    // Refresh current active table from repository
+                    val latest = TableRepository.tables.firstOrNull()
+                    if (latest != null) {
+                        currentTable = latest
+                        tableSnapshot = latest.createSnapshot()
+                    }
+                    statusMessage = "Successfully restored $restoredCount table(s) and all attachments!"
+                    Toast.makeText(context, "Restored $restoredCount table(s) & media!", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    statusMessage = "Restore failed: ${e.message}"
+                    Toast.makeText(context, "Restore failed: ${e.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    isProcessing = false
+                }
+            }
+        }
+    }
+
 
     val fileSaveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(activeExportFormat.mime)) { uri: Uri? ->
         if (uri != null) {
@@ -3630,8 +3684,85 @@ fun MobileTableEditorScreen() {
                     }
                 }
             }
+                    // DEDICATED BACKUP & RESTORE HUB
+                    Card(modifier = Modifier.fillMaxWidth(), elevation = 2.dp, shape = RoundedCornerShape(10.dp)) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("📦 Full Backup & Restore (All Attachments & Media)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1565C0))
+                            Text(
+                                text = "Create complete self-contained archives including all tables, notes, checklists, attached videos, audios, and images.",
+                                fontSize = 11.sp,
+                                color = Color.DarkGray
+                            )
+
+                            // 1. BACKUP CONTROLS
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            try {
+                                                isProcessing = true
+                                                statusMessage = "Packaging full database and attachments..."
+                                                val archive = BackupRestoreManager.createFullBackupArchive(context)
+                                                pendingBackupArchiveFile = archive
+                                                deviceBackupSaveLauncher.launch(archive.name)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Backup failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            } finally {
+                                                isProcessing = false
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                                    modifier = Modifier.weight(1f).height(42.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("💾 Backup to Device", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            isProcessing = true
+                                            statusMessage = "Bundling archive for email..."
+                                            BackupRestoreManager.backupToMail(context)
+                                            isProcessing = false
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
+                                    modifier = Modifier.weight(1f).height(42.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("✉ Backup to Mail", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            // 2. RESTORE CONTROLS
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { restoreFilePickerLauncher.launch("*/*") },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                                    modifier = Modifier.weight(1f).height(42.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("📂 Restore from Device", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = { restoreFilePickerLauncher.launch("*/*") },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF7B1FA2)),
+                                    modifier = Modifier.weight(1f).height(42.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("📥 Restore from Mail", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
 
             // TAB 3: SETTINGS & CACHE MANAGER
+
+
+            
             if (selectedTabIndex == 3 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text("Settings & App Maintenance", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))

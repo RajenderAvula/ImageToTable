@@ -35,6 +35,7 @@ data class CellDataPayload(
     val displayText: String,
     val attachments: List<CellAttachment> = emptyList(),
     val note: String = "",
+    val additionalNote: String = "",
     val checklists: List<CellChecklistItem> = emptyList()
 )
 
@@ -55,11 +56,13 @@ object CellAttachmentHelper {
         val attachments = mutableListOf<CellAttachment>()
         val checklists = mutableListOf<CellChecklistItem>()
         var note = ""
+        var additionalNote = ""
 
         try {
             if (jsonStr.startsWith("{")) {
                 val root = JSONObject(jsonStr)
                 note = root.optString("note", "")
+                additionalNote = root.optString("additionalNote", "")
 
                 val attArray = root.optJSONArray("attachments") ?: JSONArray()
                 for (i in 0 until attArray.length()) {
@@ -110,6 +113,7 @@ object CellAttachmentHelper {
             displayText = displayText,
             attachments = attachments,
             note = note,
+            additionalNote = additionalNote,
             checklists = checklists
         )
     }
@@ -118,14 +122,16 @@ object CellAttachmentHelper {
         displayText: String,
         attachments: List<CellAttachment>,
         note: String = "",
+        additionalNote: String = "",
         checklists: List<CellChecklistItem> = emptyList()
     ): String {
-        if (attachments.isEmpty() && note.isBlank() && checklists.isEmpty()) {
+        if (attachments.isEmpty() && note.isBlank() && additionalNote.isBlank() && checklists.isEmpty()) {
             return displayText.trim()
         }
 
         val root = JSONObject()
         root.put("note", note.trim())
+        root.put("additionalNote", additionalNote.trim())
 
         val attArray = JSONArray()
         for (att in attachments) {
@@ -184,7 +190,6 @@ object CellAttachmentHelper {
         var name = "Contact"
         var phone = ""
         try {
-            // Direct query on Phone data entry (granted via ACTION_PICK on Phone.CONTENT_URI)
             context.contentResolver.query(
                 contactUri,
                 arrayOf(
@@ -207,7 +212,6 @@ object CellAttachmentHelper {
                 }
             }
         } catch (_: Exception) {
-            // Fallback for general contact entries
             try {
                 context.contentResolver.query(contactUri, null, null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) {

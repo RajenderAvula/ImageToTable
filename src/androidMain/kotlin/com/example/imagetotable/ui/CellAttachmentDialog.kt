@@ -45,6 +45,13 @@ import com.example.imagetotable.model.CellAttachmentHelper
 import com.example.imagetotable.model.CellChecklistItem
 import java.util.Locale
 
+enum class SpeechTarget {
+    PRIMARY_NOTE_ONLINE,
+    PRIMARY_NOTE_OFFLINE,
+    ADDITIONAL_NOTE_ONLINE,
+    ADDITIONAL_NOTE_OFFLINE
+}
+
 @Composable
 fun CellAttachmentDialog(
     rowIndex: Int,
@@ -77,44 +84,59 @@ fun CellAttachmentDialog(
     var manualContactPhone by remember { mutableStateOf("") }
 
     var selectedImagePreviewUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingSpeechTarget by remember { mutableStateOf<SpeechTarget?>(null) }
 
-    // 1. Speech-to-Text launcher for Primary Cell Note
-    val noteSpeechLauncher = rememberLauncherForActivityResult(
+    // Unified Speech-to-Text Activity Launcher (handles both Online & Offline results)
+    val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (!spoken.isNullOrBlank()) {
-            cellNoteState = if (cellNoteState.isBlank()) spoken else "$cellNoteState $spoken"
+            when (pendingSpeechTarget) {
+                SpeechTarget.PRIMARY_NOTE_ONLINE, SpeechTarget.PRIMARY_NOTE_OFFLINE -> {
+                    cellNoteState = if (cellNoteState.isBlank()) spoken else "$cellNoteState $spoken"
+                }
+                SpeechTarget.ADDITIONAL_NOTE_ONLINE, SpeechTarget.ADDITIONAL_NOTE_OFFLINE -> {
+                    additionalNoteState = if (additionalNoteState.isBlank()) spoken else "$additionalNoteState $spoken"
+                }
+                null -> {}
+            }
+        } else if (pendingSpeechTarget == SpeechTarget.PRIMARY_NOTE_OFFLINE || pendingSpeechTarget == SpeechTarget.ADDITIONAL_NOTE_OFFLINE) {
+            Toast.makeText(
+                context,
+                "No offline voice recognized. Ensure offline language pack is downloaded in device Voice settings.",
+                Toast.LENGTH_LONG
+            ).show()
         }
+        pendingSpeechTarget = null
     }
 
-    // 2. Speech-to-Text launcher for Additional Text Note
-    val additionalNoteSpeechLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-        if (!spoken.isNullOrBlank()) {
-            additionalNoteState = if (additionalNoteState.isBlank()) spoken else "$additionalNoteState $spoken"
-        }
-    }
+    fun startSpeechRecognition(target: SpeechTarget) {
+        pendingSpeechTarget = target
+        val isOffline = (target == SpeechTarget.PRIMARY_NOTE_OFFLINE || target == SpeechTarget.ADDITIONAL_NOTE_OFFLINE)
+        val isAdditional = (target == SpeechTarget.ADDITIONAL_NOTE_ONLINE || target == SpeechTarget.ADDITIONAL_NOTE_OFFLINE)
 
-    fun startSpeechToText(isForAdditionalNote: Boolean) {
         try {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                if (isOffline) {
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                    putExtra("android.speech.extra.PREFER_OFFLINE", true)
+                }
                 putExtra(
                     RecognizerIntent.EXTRA_PROMPT,
-                    if (isForAdditionalNote) "Speak for Additional Note..." else "Speak for Primary Cell Note..."
+                    if (isOffline) {
+                        if (isAdditional) "Speak offline (on-device) for Additional Note..." else "Speak offline (on-device) for Primary Note..."
+                    } else {
+                        if (isAdditional) "Speak online for Additional Note..." else "Speak online for Primary Note..."
+                    }
                 )
             }
-            if (isForAdditionalNote) {
-                additionalNoteSpeechLauncher.launch(intent)
-            } else {
-                noteSpeechLauncher.launch(intent)
-            }
+            speechLauncher.launch(intent)
         } catch (e: Exception) {
-            Toast.makeText(context, "Voice input not supported on this device: ${e.message}", Toast.LENGTH_SHORT).show()
+            pendingSpeechTarget = null
+            Toast.makeText(context, "Voice input error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -152,7 +174,7 @@ fun CellAttachmentDialog(
         }
     }
 
-    // Direct Phone Picker for address book
+    // Direct Phone Picker: Queries phone row directly without requiring READ_CONTACTS permission
     val contactPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -267,7 +289,7 @@ fun CellAttachmentDialog(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // SECTION 1: CELL TEXT, PRIMARY NOTE (WITH STT), AND ADDITIONAL NOTE (WITH STT)
+                    // SECTION 1: CELL TEXT, PRIMARY NOTE (ONLINE + OFFLINE STT), AND ADDITIONAL NOTE (ONLINE + OFFLINE STT)
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -294,7 +316,7 @@ fun CellAttachmentDialog(
                                 singleLine = true
                             )
 
-                            // 1. PRIMARY CELL NOTE WITH DEDICATED STT (SPEECH-TO-TEXT)
+                            // 1. PRIMARY CELL NOTE (ONLINE + OFFLINE CONVERTER)
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -308,20 +330,31 @@ fun CellAttachmentDialog(
                                         color = Color(0xFF37474F)
                                     )
 
-                                    Button(
-                                        onClick = { startSpeechToText(isForAdditionalNote = false) },
-                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp)
-                                    ) {
-                                        Text("🎤 Voice to Note", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Button(
+                                            onClick = { startSpeechRecognition(SpeechTarget.PRIMARY_NOTE_ONLINE) },
+                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
+                                            contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(26.dp)
+                                        ) {
+                                            Text("🌐 Online", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+
+                                        Button(
+                                            onClick = { startSpeechRecognition(SpeechTarget.PRIMARY_NOTE_OFFLINE) },
+                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0288D1)),
+                                            contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(26.dp)
+                                        ) {
+                                            Text("⚡ Offline", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
 
                                 OutlinedTextField(
                                     value = cellNoteState,
                                     onValueChange = { cellNoteState = it },
-                                    placeholder = { Text("Detailed cell memo or tap '🎤 Voice to Note'...", fontSize = 12.sp) },
+                                    placeholder = { Text("Detailed cell memo or tap 'Online' / 'Offline'...", fontSize = 12.sp) },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 70.dp, max = 120.dp),
@@ -331,7 +364,7 @@ fun CellAttachmentDialog(
 
                             Divider(color = Color(0xFFEEEEEE))
 
-                            // 2. ADDITIONAL TEXT NOTE WITH SEPARATE DEDICATED STT (SPEECH-TO-TEXT)
+                            // 2. ADDITIONAL TEXT NOTE (ONLINE + OFFLINE CONVERTER)
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -345,20 +378,31 @@ fun CellAttachmentDialog(
                                         color = Color(0xFF6A1B9A)
                                     )
 
-                                    Button(
-                                        onClick = { startSpeechToText(isForAdditionalNote = true) },
-                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF8E24AA)),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp)
-                                    ) {
-                                        Text("🎤 Voice to Extra Note", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Button(
+                                            onClick = { startSpeechRecognition(SpeechTarget.ADDITIONAL_NOTE_ONLINE) },
+                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF8E24AA)),
+                                            contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(26.dp)
+                                        ) {
+                                            Text("🌐 Online", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+
+                                        Button(
+                                            onClick = { startSpeechRecognition(SpeechTarget.ADDITIONAL_NOTE_OFFLINE) },
+                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
+                                            contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(26.dp)
+                                        ) {
+                                            Text("⚡ Offline", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
 
                                 OutlinedTextField(
                                     value = additionalNoteState,
                                     onValueChange = { additionalNoteState = it },
-                                    placeholder = { Text("Additional notes, customer remarks, or tap '🎤 Voice to Extra Note'...", fontSize = 12.sp) },
+                                    placeholder = { Text("Extra notes, customer remarks or tap 'Online' / 'Offline'...", fontSize = 12.sp) },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 70.dp, max = 120.dp),
@@ -662,7 +706,9 @@ fun CellAttachmentDialog(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f).height(42.dp)
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
                     ) {
                         Text("Cancel")
                     }
@@ -679,7 +725,9 @@ fun CellAttachmentDialog(
                             onDismiss()
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF15803D)),
-                        modifier = Modifier.weight(1f).height(42.dp)
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
                     ) {
                         Text("Save & Apply", color = Color.White, fontWeight = FontWeight.Bold)
                     }

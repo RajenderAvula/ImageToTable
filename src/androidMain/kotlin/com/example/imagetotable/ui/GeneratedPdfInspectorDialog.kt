@@ -9,14 +9,13 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -32,8 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.example.imagetotable.model.PdfPageItem
 import com.example.imagetotable.util.PdfCompressorExporter
+import com.example.imagetotable.util.PdfPageItem
 import kotlinx.coroutines.launch
 
 @Composable
@@ -69,7 +68,7 @@ fun GeneratedPdfInspectorDialog(
             elevation = 8.dp
         ) {
             Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
-                // Header Bar
+                // Top Header: Title & Close
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -79,7 +78,9 @@ fun GeneratedPdfInspectorDialog(
                         Text("PDF Studio: Generated Document Inspector", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1565C0))
                         Text("Current Size: ${PdfCompressorExporter.formatBytes(currentFileSize)} • ${pages.size} Pages", fontSize = 11.sp, color = Color.DarkGray)
                     }
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) { Text("✕", fontSize = 16.sp, color = Color.Gray, fontWeight = FontWeight.Bold) }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Text("✕", fontSize = 16.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -94,7 +95,7 @@ fun GeneratedPdfInspectorDialog(
                     Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Reduce File Size After Generation (Target KB):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF37474F))
 
-                        // Presets Row: 100K, 250K, 500K, 1000K (Equal Weights, No Wrapping)
+                        // Presets Row: 100K, 250K, 500K, 1000K (Equal Weights, No Wrapping into 50 0K)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -121,7 +122,7 @@ fun GeneratedPdfInspectorDialog(
                             }
                         }
 
-                        // Custom Target KB Input & Compress Button
+                        // Custom Target KB Input & Compress Button (Properly sized, never squished)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -248,7 +249,7 @@ fun GeneratedPdfInspectorDialog(
                             Text(
                                 "Page ${safeIndex + 1} of ${pages.size}",
                                 color = Color.White,
-                                fontSize = 11.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -275,7 +276,7 @@ fun GeneratedPdfInspectorDialog(
                                 }
                             },
                             enabled = safeIndex > 0,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                         ) { Text("◀ Move Page", fontSize = 10.sp) }
 
                         Button(
@@ -287,7 +288,7 @@ fun GeneratedPdfInspectorDialog(
                                 }
                             },
                             enabled = safeIndex < pages.size - 1,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                         ) { Text("Move Page ▶", fontSize = 10.sp) }
                     }
                 }

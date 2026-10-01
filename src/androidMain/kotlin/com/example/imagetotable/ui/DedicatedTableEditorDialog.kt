@@ -36,6 +36,7 @@ import java.util.*
 fun DedicatedTableEditorDialog(
     tableData: TableData,
     onDismiss: () -> Unit,
+    onOpenLinkedTable: (targetTableId: String) -> Unit = {},
     onSave: () -> Unit
 ) {
     val context = LocalContext.current
@@ -43,29 +44,28 @@ fun DedicatedTableEditorDialog(
     var selectedRowIndex by remember { mutableIntStateOf(0) }
     val totalRows = tableData.rows.size
 
-    // Keep safe row index within bounds
     val safeRowIndex = if (totalRows > 0) selectedRowIndex.coerceIn(0, totalRows - 1) else 0
 
-    // Local state for table-level properties
     var tableNameState by remember(tableData.id) { mutableStateOf(tableData.tableName) }
     var tableDateTimeState by remember(tableData.id) { mutableStateOf(tableData.tableDateTime) }
 
-    // Column Management Modal States
     var showAddColumnDialog by remember { mutableStateOf(false) }
     var newColNameInput by remember { mutableStateOf("") }
     var newColTypeSelection by remember { mutableStateOf(ColumnType.TEXT) }
     var newColFormulaInput by remember { mutableStateOf("") }
 
-    // Formula Editor Sub-dialog
     var showFormulaEditorDialog by remember { mutableStateOf(false) }
     var editingFormulaColIdx by remember { mutableIntStateOf(-1) }
 
-    // Cell Attachment Dialog state within this editor
     var activeAttachmentColIdx by remember { mutableStateOf<Int?>(null) }
 
-    // Confirmation dialog states
     var columnPendingDeleteIdx by remember { mutableStateOf<Int?>(null) }
     var showRowDeleteConfirm by remember { mutableStateOf(false) }
+
+    fun commitHeaderChanges() {
+        tableData.tableName = tableNameState
+        tableData.tableDateTime = tableDateTimeState
+    }
 
     fun openCalendarPickerForTable() {
         val cal = Calendar.getInstance()
@@ -202,7 +202,7 @@ fun DedicatedTableEditorDialog(
                             }
                         }
                         Text(
-                            text = "Swipe horizontally to edit row columns and view attachments",
+                            text = "Swipe horizontally to edit row columns, view attachments & linked tables",
                             fontSize = 11.sp,
                             color = Color.White.copy(alpha = 0.8f)
                         )
@@ -211,8 +211,7 @@ fun DedicatedTableEditorDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(
                             onClick = {
-                                tableData.tableName = tableNameState
-                                tableData.tableDateTime = tableDateTimeState
+                                commitHeaderChanges()
                                 onSave()
                             },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF15803D)),
@@ -310,7 +309,6 @@ fun DedicatedTableEditorDialog(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Editable Table Name
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("Table:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
                             BasicTextField(
@@ -328,7 +326,6 @@ fun DedicatedTableEditorDialog(
                             )
                         }
 
-                        // Timestamp picker button
                         Surface(
                             shape = RoundedCornerShape(4.dp),
                             color = Color.White,
@@ -350,7 +347,6 @@ fun DedicatedTableEditorDialog(
                             }
                         }
 
-                        // Active Row Label
                         if (totalRows > 0) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text("Row Label:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
@@ -430,7 +426,6 @@ fun DedicatedTableEditorDialog(
                             val cellNote = payload.note
                             val cellExtraNote = payload.additionalNote
 
-                            // Individual Column Card in Horizontal Deck
                             Card(
                                 modifier = Modifier
                                     .width(280.dp)
@@ -447,7 +442,7 @@ fun DedicatedTableEditorDialog(
                                         .padding(12.dp),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    // Card Header: Column index, name, type pill, move/delete icons
+                                    // Card Header
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -565,7 +560,7 @@ fun DedicatedTableEditorDialog(
 
                                     Divider(color = Color(0xFFECEFF1))
 
-                                    // Primary Value Input (Type-Specific)
+                                    // Primary Value Input
                                     when (colDef.type) {
                                         ColumnType.FORMULA -> {
                                             val computedVal = remember(colDef.formula, cleanValuesForFormula, tableData.headers.toList()) {
@@ -760,7 +755,7 @@ fun DedicatedTableEditorDialog(
                                         )
                                     }
 
-                                    // Live Inline Preview Chips for this Column Card
+                                    // Live Inline Preview Chips (including Linked Tables)
                                     if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank()) {
                                         Column(
                                             modifier = Modifier
@@ -779,6 +774,24 @@ fun DedicatedTableEditorDialog(
                                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
+                                                // Linked table badges (clickable -> opens linked table)
+                                                cellAttachments.filter { it.type == AttachmentType.LINKED_TABLE }.forEach { tableAtt ->
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .background(Color(0xFFEDE7F6), RoundedCornerShape(3.dp))
+                                                            .border(0.5.dp, Color(0xFFB39DDB), RoundedCornerShape(3.dp))
+                                                            .clickable {
+                                                                commitHeaderChanges()
+                                                                onSave()
+                                                                onDismiss()
+                                                                onOpenLinkedTable(tableAtt.detail)
+                                                            }
+                                                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                    ) {
+                                                        Text("📊 ${tableAtt.displayName.take(8)}", fontSize = 10.sp, color = Color(0xFF4A148C), fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
+
                                                 if (cellNote.isNotBlank()) {
                                                     Box(
                                                         modifier = Modifier
@@ -813,7 +826,7 @@ fun DedicatedTableEditorDialog(
                                                     }
                                                 }
 
-                                                cellAttachments.forEach { att ->
+                                                cellAttachments.filter { it.type != AttachmentType.LINKED_TABLE }.forEach { att ->
                                                     Box(
                                                         modifier = Modifier
                                                             .background(
@@ -829,6 +842,7 @@ fun DedicatedTableEditorDialog(
                                                                 AttachmentType.PDF -> "📄 PDF"
                                                                 AttachmentType.CONTACT -> "👤 ${att.displayName.take(7)}"
                                                                 AttachmentType.FILE -> "📁 ${att.displayName.take(7)}"
+                                                                else -> ""
                                                             },
                                                             fontSize = 10.sp,
                                                             color = Color.DarkGray,
@@ -855,7 +869,6 @@ fun DedicatedTableEditorDialog(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        // Row Operations
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -922,7 +935,6 @@ fun DedicatedTableEditorDialog(
                             ) { Text("🗑 Delete Row", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
                         }
 
-                        // Close & Save Actions
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -935,8 +947,7 @@ fun DedicatedTableEditorDialog(
 
                             Button(
                                 onClick = {
-                                    tableData.tableName = tableNameState
-                                    tableData.tableDateTime = tableDateTimeState
+                                    commitHeaderChanges()
                                     onSave()
                                 },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF15803D)),
@@ -951,7 +962,7 @@ fun DedicatedTableEditorDialog(
         }
     }
 
-    // CELL ATTACHMENT DIALOG TRIGGERED FROM HORIZONTAL COLUMN CARDS
+    // CELL ATTACHMENT DIALOG WITH OPEN LINKED TABLE ACTION
     if (activeAttachmentColIdx != null && safeRowIndex < tableData.rows.size) {
         val cIdx = activeAttachmentColIdx!!
         val rawCell = tableData.rows[safeRowIndex].getOrElse(cIdx) { "" }
@@ -968,6 +979,13 @@ fun DedicatedTableEditorDialog(
             initialAttachments = payload.attachments,
             initialChecklists = payload.checklists,
             onDismiss = { activeAttachmentColIdx = null },
+            onOpenLinkedTable = { targetTableId ->
+                commitHeaderChanges()
+                onSave()
+                activeAttachmentColIdx = null
+                onDismiss()
+                onOpenLinkedTable(targetTableId)
+            },
             onSave = { updatedText, updatedNote, updatedAdditionalNote, updatedAttachments, updatedChecklists ->
                 val encoded = CellAttachmentHelper.formatCellContent(
                     displayText = updatedText,

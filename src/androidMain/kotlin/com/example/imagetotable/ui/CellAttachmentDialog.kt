@@ -1,7 +1,9 @@
 package com.example.imagetotable.ui
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -16,8 +18,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,17 +39,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import com.example.imagetotable.model.AttachmentType
 import com.example.imagetotable.model.CellAttachment
 import com.example.imagetotable.model.CellAttachmentHelper
 import com.example.imagetotable.model.CellChecklistItem
+import com.example.imagetotable.util.StreamingSpeechHelper
 import java.util.Locale
 
-enum class SpeechTarget {
-    PRIMARY_NOTE_ONLINE,
-    PRIMARY_NOTE_OFFLINE,
-    ADDITIONAL_NOTE_ONLINE,
-    ADDITIONAL_NOTE_OFFLINE
+enum class ActiveListeningTarget {
+    PRIMARY_NOTE,
+    ADDITIONAL_NOTE
 }
 
 @Composable
@@ -84,60 +84,147 @@ fun CellAttachmentDialog(
     var manualContactPhone by remember { mutableStateOf("") }
 
     var selectedImagePreviewUri by remember { mutableStateOf<Uri?>(null) }
-    var pendingSpeechTarget by remember { mutableStateOf<SpeechTarget?>(null) }
 
-    // Unified Speech-to-Text Activity Launcher (handles both Online & Offline results)
-    val speechLauncher = rememberLauncherForActivityResult(
+    // Offline Streaming Speech Helper instance
+    val speechHelper = remember { StreamingSpeechHelper(context) }
+    var activeListeningTarget by remember { mutableStateOf<ActiveListeningTarget?>(null) }
+    var baseTextBeforeSpeech by remember { mutableStateOf("") }
+
+    // Clean up microphone/recognizer when dialog dismisses
+    DisposableEffect(Unit) {
+        onDispose {
+            speechHelper.stop()
+        }
+    }
+
+    // Permission launcher for RECORD_AUDIO
+    var pendingOfflineTarget by remember { mutableStateOf<ActiveListeningTarget?>(null) }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            pendingOfflineTarget?.let { target ->
+                startOfflineSpeechRecognition(target, speechHelper, context,
+                    onStart = { baseText, tgt ->
+                        baseTextBeforeSpeech = baseText
+                        activeListeningTarget = tgt
+                    },
+                    onPartial = { partial, tgt ->
+                        if (tgt == ActiveListeningTarget.PRIMARY_NOTE) {
+                            cellNoteState = if (baseTextBeforeSpeech.isBlank()) partial else "$baseTextBeforeSpeech $partial"
+                        } else {
+                            additionalNoteState = if (baseTextBeforeSpeech.isBlank()) partial else "$baseTextBeforeSpeech $partial"
+                        }
+                    },
+                    onFinal = { final, tgt ->
+                        if (tgt == ActiveListeningTarget.PRIMARY_NOTE) {
+                            cellNoteState = if (baseTextBeforeSpeech.isBlank()) final else "$baseTextBeforeSpeech $final"
+                        } else {
+                            additionalNoteState = if (baseTextBeforeSpeech.isBlank()) final else "$baseTextBeforeSpeech $final"
+                        }
+                        activeListeningTarget = null
+                    },
+                    onError = { err ->
+                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                        activeListeningTarget = null
+                    }
+                )
+            }
+        } else {
+            Toast.makeText(context, "Microphone permission is required for voice typing", Toast.LENGTH_SHORT).show()
+        }
+        pendingOfflineTarget = null
+    }
+
+    // Online STT Launcher (Cloud-assisted)
+    var pendingOnlineTarget by remember { mutableStateOf<ActiveListeningTarget?>(null) }
+    val onlineSpeechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (!spoken.isNullOrBlank()) {
-            when (pendingSpeechTarget) {
-                SpeechTarget.PRIMARY_NOTE_ONLINE, SpeechTarget.PRIMARY_NOTE_OFFLINE -> {
-                    cellNoteState = if (cellNoteState.isBlank()) spoken else "$cellNoteState $spoken"
-                }
-                SpeechTarget.ADDITIONAL_NOTE_ONLINE, SpeechTarget.ADDITIONAL_NOTE_OFFLINE -> {
-                    additionalNoteState = if (additionalNoteState.isBlank()) spoken else "$additionalNoteState $spoken"
-                }
-                null -> {}
+            if (pendingOnlineTarget == ActiveListeningTarget.PRIMARY_NOTE) {
+                cellNoteState = if (cellNoteState.isBlank()) spoken else "$cellNoteState $spoken"
+            } else if (pendingOnlineTarget == ActiveListeningTarget.ADDITIONAL_NOTE) {
+                additionalNoteState = if (additionalNoteState.isBlank()) spoken else "$additionalNoteState $spoken"
             }
-        } else if (pendingSpeechTarget == SpeechTarget.PRIMARY_NOTE_OFFLINE || pendingSpeechTarget == SpeechTarget.ADDITIONAL_NOTE_OFFLINE) {
-            Toast.makeText(
-                context,
-                "No offline voice recognized. Ensure offline language pack is downloaded in device Voice settings.",
-                Toast.LENGTH_LONG
-            ).show()
         }
-        pendingSpeechTarget = null
+        pendingOnlineTarget = null
     }
 
-    fun startSpeechRecognition(target: SpeechTarget) {
-        pendingSpeechTarget = target
-        val isOffline = (target == SpeechTarget.PRIMARY_NOTE_OFFLINE || target == SpeechTarget.ADDITIONAL_NOTE_OFFLINE)
-        val isAdditional = (target == SpeechTarget.ADDITIONAL_NOTE_ONLINE || target == SpeechTarget.ADDITIONAL_NOTE_OFFLINE)
-
+    fun startOnlineSpeech(target: ActiveListeningTarget) {
+        pendingOnlineTarget = target
         try {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                if (isOffline) {
-                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-                    putExtra("android.speech.extra.PREFER_OFFLINE", true)
-                }
                 putExtra(
                     RecognizerIntent.EXTRA_PROMPT,
-                    if (isOffline) {
-                        if (isAdditional) "Speak offline (on-device) for Additional Note..." else "Speak offline (on-device) for Primary Note..."
-                    } else {
-                        if (isAdditional) "Speak online for Additional Note..." else "Speak online for Primary Note..."
-                    }
+                    if (target == ActiveListeningTarget.ADDITIONAL_NOTE) "Speak online for Additional Note..." else "Speak online for Primary Note..."
                 )
             }
-            speechLauncher.launch(intent)
+            onlineSpeechLauncher.launch(intent)
         } catch (e: Exception) {
-            pendingSpeechTarget = null
-            Toast.makeText(context, "Voice input error: ${e.message}", Toast.LENGTH_SHORT).show()
+            pendingOnlineTarget = null
+            Toast.makeText(context, "Online speech error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    fun triggerOfflineSpeech(target: ActiveListeningTarget) {
+        if (activeListeningTarget == target) {
+            // Already listening on this target: Stop recognition
+            speechHelper.stop()
+            activeListeningTarget = null
+            return
+        }
+
+        if (activeListeningTarget != null) {
+            // Switching targets: stop previous
+            speechHelper.stop()
+            activeListeningTarget = null
+        }
+
+        val hasAudioPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!hasAudioPermission) {
+            pendingOfflineTarget = target
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        val baseText = if (target == ActiveListeningTarget.PRIMARY_NOTE) cellNoteState else additionalNoteState
+        baseTextBeforeSpeech = baseText
+        activeListeningTarget = target
+
+        speechHelper.start(
+            onPartialResult = { partial ->
+                if (target == ActiveListeningTarget.PRIMARY_NOTE) {
+                    cellNoteState = if (baseTextBeforeSpeech.isBlank()) partial else "$baseTextBeforeSpeech $partial"
+                } else {
+                    additionalNoteState = if (baseTextBeforeSpeech.isBlank()) partial else "$baseTextBeforeSpeech $partial"
+                }
+            },
+            onFinalResult = { final ->
+                if (target == ActiveListeningTarget.PRIMARY_NOTE) {
+                    cellNoteState = if (baseTextBeforeSpeech.isBlank()) final else "$baseTextBeforeSpeech $final"
+                } else {
+                    additionalNoteState = if (baseTextBeforeSpeech.isBlank()) final else "$baseTextBeforeSpeech $final"
+                }
+                activeListeningTarget = null
+            },
+            onError = { error ->
+                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                activeListeningTarget = null
+            },
+            onListeningStateChanged = { listening ->
+                if (!listening && activeListeningTarget == target) {
+                    activeListeningTarget = null
+                }
+            }
+        )
     }
 
     // Multi-File Picker (Images, PDFs, Documents)
@@ -243,7 +330,10 @@ fun CellAttachmentDialog(
     }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            speechHelper.stop()
+            onDismiss()
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
@@ -276,7 +366,13 @@ fun CellAttachmentDialog(
                             fontSize = 11.sp
                         )
                     }
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    IconButton(
+                        onClick = {
+                            speechHelper.stop()
+                            onDismiss()
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
                         Text("✕", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     }
                 }
@@ -289,7 +385,7 @@ fun CellAttachmentDialog(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // SECTION 1: CELL TEXT, PRIMARY NOTE (ONLINE + OFFLINE STT), AND ADDITIONAL NOTE (ONLINE + OFFLINE STT)
+                    // SECTION 1: CELL TEXT, PRIMARY NOTE (ONLINE + OFFLINE STREAMING), ADDITIONAL NOTE (ONLINE + OFFLINE STREAMING)
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -316,23 +412,34 @@ fun CellAttachmentDialog(
                                 singleLine = true
                             )
 
-                            // 1. PRIMARY CELL NOTE (ONLINE + OFFLINE CONVERTER)
+                            // 1. PRIMARY CELL NOTE (ONLINE + OFFLINE STREAMING)
+                            val isPrimaryListening = activeListeningTarget == ActiveListeningTarget.PRIMARY_NOTE
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = "Primary Cell Note",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color(0xFF37474F)
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(
+                                            text = "Primary Cell Note",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFF37474F)
+                                        )
+                                        if (isPrimaryListening) {
+                                            Text(
+                                                text = "● Listening...",
+                                                color = Color.Red,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
 
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         Button(
-                                            onClick = { startSpeechRecognition(SpeechTarget.PRIMARY_NOTE_ONLINE) },
+                                            onClick = { startOnlineSpeech(ActiveListeningTarget.PRIMARY_NOTE) },
                                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
                                             contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp),
                                             modifier = Modifier.height(26.dp)
@@ -341,12 +448,19 @@ fun CellAttachmentDialog(
                                         }
 
                                         Button(
-                                            onClick = { startSpeechRecognition(SpeechTarget.PRIMARY_NOTE_OFFLINE) },
-                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0288D1)),
+                                            onClick = { triggerOfflineSpeech(ActiveListeningTarget.PRIMARY_NOTE) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                backgroundColor = if (isPrimaryListening) Color.Red else Color(0xFF0288D1)
+                                            ),
                                             contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp),
                                             modifier = Modifier.height(26.dp)
                                         ) {
-                                            Text("⚡ Offline", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                text = if (isPrimaryListening) "⏹ Stop" else "⚡ Offline",
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
                                         }
                                     }
                                 }
@@ -364,23 +478,34 @@ fun CellAttachmentDialog(
 
                             Divider(color = Color(0xFFEEEEEE))
 
-                            // 2. ADDITIONAL TEXT NOTE (ONLINE + OFFLINE CONVERTER)
+                            // 2. ADDITIONAL TEXT NOTE (ONLINE + OFFLINE STREAMING)
+                            val isAdditionalListening = activeListeningTarget == ActiveListeningTarget.ADDITIONAL_NOTE
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = "Additional Text Note",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color(0xFF6A1B9A)
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(
+                                            text = "Additional Text Note",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFF6A1B9A)
+                                        )
+                                        if (isAdditionalListening) {
+                                            Text(
+                                                text = "● Listening...",
+                                                color = Color.Red,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
 
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         Button(
-                                            onClick = { startSpeechRecognition(SpeechTarget.ADDITIONAL_NOTE_ONLINE) },
+                                            onClick = { startOnlineSpeech(ActiveListeningTarget.ADDITIONAL_NOTE) },
                                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF8E24AA)),
                                             contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp),
                                             modifier = Modifier.height(26.dp)
@@ -389,12 +514,19 @@ fun CellAttachmentDialog(
                                         }
 
                                         Button(
-                                            onClick = { startSpeechRecognition(SpeechTarget.ADDITIONAL_NOTE_OFFLINE) },
-                                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
+                                            onClick = { triggerOfflineSpeech(ActiveListeningTarget.ADDITIONAL_NOTE) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                backgroundColor = if (isAdditionalListening) Color.Red else Color(0xFF6A1B9A)
+                                            ),
                                             contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp),
                                             modifier = Modifier.height(26.dp)
                                         ) {
-                                            Text("⚡ Offline", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                text = if (isAdditionalListening) "⏹ Stop" else "⚡ Offline",
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
                                         }
                                     }
                                 }
@@ -705,7 +837,10 @@ fun CellAttachmentDialog(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     OutlinedButton(
-                        onClick = onDismiss,
+                        onClick = {
+                            speechHelper.stop()
+                            onDismiss()
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .height(42.dp)
@@ -715,6 +850,7 @@ fun CellAttachmentDialog(
 
                     Button(
                         onClick = {
+                            speechHelper.stop()
                             onSave(
                                 cellTextState,
                                 cellNoteState,
@@ -768,6 +904,24 @@ fun CellAttachmentDialog(
             }
         }
     }
+}
+
+private fun startOfflineSpeechRecognition(
+    target: ActiveListeningTarget,
+    helper: StreamingSpeechHelper,
+    context: Context,
+    onStart: (baseText: String, target: ActiveListeningTarget) -> Unit,
+    onPartial: (partial: String, target: ActiveListeningTarget) -> Unit,
+    onFinal: (final: String, target: ActiveListeningTarget) -> Unit,
+    onError: (error: String) -> Unit
+) {
+    onStart("", target)
+    helper.start(
+        onPartialResult = { partial -> onPartial(partial, target) },
+        onFinalResult = { final -> onFinal(final, target) },
+        onError = { err -> onError(err) },
+        onListeningStateChanged = { /* handled in caller */ }
+    )
 }
 
 @Composable

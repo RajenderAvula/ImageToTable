@@ -11,6 +11,8 @@ import java.util.UUID
 
 enum class AttachmentType {
     IMAGE,
+    VIDEO,
+    VOICE,
     PDF,
     FILE,
     CONTACT,
@@ -23,7 +25,7 @@ data class CellAttachment(
     val uriString: String = "",
     val displayName: String = "",
     val mimeType: String = "",
-    val detail: String = "" // For Contact: phone number; For File: file size; For Linked Table: target table ID
+    val detail: String = "" // Phone for CONTACT; file size for FILE/VIDEO/VOICE; tableId for LINKED_TABLE
 )
 
 data class CellChecklistItem(
@@ -96,7 +98,6 @@ object CellAttachmentHelper {
                     )
                 }
             } else if (jsonStr.startsWith("[")) {
-                // Backward compatibility for legacy JSON arrays
                 val jsonArray = JSONArray(jsonStr)
                 for (i in 0 until jsonArray.length()) {
                     val obj = jsonArray.getJSONObject(i)

@@ -741,7 +741,7 @@ fun MobileTableEditorScreen() {
     }
 
     if (showCropperDialog && selectedBitmap != null) {
-        FullScreenCropperDialog(
+        /*FullScreenCropperDialog(
             sourceBitmap = selectedBitmap!!,
             onDismiss = {
                 showCropperDialog = false
@@ -800,7 +800,73 @@ fun MobileTableEditorScreen() {
                     }
                 }
             }
+        )*/
+
+                FullScreenCropperDialog(
+            sourceBitmap = selectedBitmap!!,
+            onDismiss = {
+                showCropperDialog = false
+                cropperTargetPageIndex = null
+            },
+            onCropConfirmed = { cropped, mode ->
+                showCropperDialog = false
+                val pageTarget = cropperTargetPageIndex
+                if (pageTarget != null && pageTarget in pdfPages.indices) {
+                    pdfPages[pageTarget] = pdfPages[pageTarget].copy(bitmap = cropped)
+                    cropperTargetPageIndex = null
+                    statusMessage = "Updated borders for Page ${pageTarget + 1}!"
+                } else {
+                    previewCroppedBitmap = cropped
+                    coroutineScope.launch {
+                        isProcessing = true
+                        try {
+                            val service = AndroidOcrService(context) { msg -> statusMessage = msg }
+
+                            if (mode == CropExtractionMode.SINGLE_CELL_STEP) {
+                                // Extract individual tokens and join with single space gap
+                                val tokens = service.extractTokens(cropped)
+                                val text = tokens.joinToString(" ")
+                                val (tr, tc) = anchorCell
+                                withContext(Dispatchers.Main) {
+                                    val currentRaw = currentTable.rows.getOrNull(tr)?.getOrNull(tc) ?: ""
+                                    val payload = CellAttachmentHelper.parseCellContent(currentRaw)
+                                    val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                                        displayText = text,
+                                        attachments = payload.attachments,
+                                        note = payload.note,
+                                        additionalNote = payload.additionalNote,
+                                        checklists = payload.checklists
+                                    )
+                                    currentTable.setCellValue(tr, tc, updatedEncoded)
+                                    currentTable.markUpdated()
+                                    TableRepository.saveOrUpdate(currentTable)
+                                    tableSnapshot = currentTable.createSnapshot()
+                                    statusMessage = "Inserted '$text' into active cell ($tr, $tc)"
+                                }
+                            } else {
+                                // Extract both structured table & all individual tokens (words + punctuation)
+                                val (h, r) = service.extractTable(cropped)
+                                val allTokens = service.extractTokens(cropped)
+                                withContext(Dispatchers.Main) {
+                                    detectedWords.clear()
+                                    // Populates every word, comma, full stop, and symbol as distinct selectable chips
+                                    detectedWords.addAll(allTokens)
+
+                                    pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
+                                    pendingExtractedRows = r
+                                    showExtractionPreviewDialog = true
+                                }
+                            }
+                        } catch (e: Exception) {
+                            statusMessage = "OCR error: ${e.message}"
+                        } finally {
+                            isProcessing = false
+                        }
+                    }
+                }
+            }
         )
+
     }
 
     if (showExtractionPreviewDialog && previewCroppedBitmap != null) {

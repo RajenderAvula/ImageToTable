@@ -235,7 +235,7 @@ fun MobileTableEditorScreen() {
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
 
-    // Accurate Index Remapping Helpers (Protects hidden rows/columns from becoming unhidden on deletion)
+    // Accurate Index Remapping Helpers
     fun deleteColumnAndRemapIndices(cIdx: Int) {
         if (cIdx !in currentTable.headers.indices || currentTable.headers.size <= 1) return
 
@@ -741,68 +741,7 @@ fun MobileTableEditorScreen() {
     }
 
     if (showCropperDialog && selectedBitmap != null) {
-        /*FullScreenCropperDialog(
-            sourceBitmap = selectedBitmap!!,
-            onDismiss = {
-                showCropperDialog = false
-                cropperTargetPageIndex = null
-            },
-            onCropConfirmed = { cropped, mode ->
-                showCropperDialog = false
-                val pageTarget = cropperTargetPageIndex
-                if (pageTarget != null && pageTarget in pdfPages.indices) {
-                    pdfPages[pageTarget] = pdfPages[pageTarget].copy(bitmap = cropped)
-                    cropperTargetPageIndex = null
-                    statusMessage = "Updated borders for Page ${pageTarget + 1}!"
-                } else {
-                    previewCroppedBitmap = cropped
-                    coroutineScope.launch {
-                        isProcessing = true
-                        try {
-                            val service = AndroidOcrService(context) { msg -> statusMessage = msg }
-                            if (mode == CropExtractionMode.SINGLE_CELL_STEP) {
-                                val (h, r) = service.extractTable(cropped)
-                                val text = (h + r.flatten()).filter { it.isNotBlank() }.joinToString(" ")
-                                val (tr, tc) = anchorCell
-                                withContext(Dispatchers.Main) {
-                                    val currentRaw = currentTable.rows.getOrNull(tr)?.getOrNull(tc) ?: ""
-                                    val payload = CellAttachmentHelper.parseCellContent(currentRaw)
-                                    val updatedEncoded = CellAttachmentHelper.formatCellContent(
-                                        displayText = text,
-                                        attachments = payload.attachments,
-                                        note = payload.note,
-                                        additionalNote = payload.additionalNote,
-                                        checklists = payload.checklists
-                                    )
-                                    currentTable.setCellValue(tr, tc, updatedEncoded)
-                                    currentTable.markUpdated()
-                                    TableRepository.saveOrUpdate(currentTable)
-                                    tableSnapshot = currentTable.createSnapshot()
-                                    statusMessage = "Inserted '$text' into active cell ($tr, $tc)"
-                                }
-                            } else {
-                                val (h, r) = service.extractTable(cropped)
-                                withContext(Dispatchers.Main) {
-                                    detectedWords.clear()
-                                    h.filter { it.isNotBlank() }.forEach { detectedWords.add(it) }
-                                    r.flatten().filter { it.isNotBlank() }.forEach { detectedWords.add(it) }
-
-                                    pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
-                                    pendingExtractedRows = r
-                                    showExtractionPreviewDialog = true
-                                }
-                            }
-                        } catch (e: Exception) {
-                            statusMessage = "OCR error: ${e.message}"
-                        } finally {
-                            isProcessing = false
-                        }
-                    }
-                }
-            }
-        )*/
-
-                FullScreenCropperDialog(
+        FullScreenCropperDialog(
             sourceBitmap = selectedBitmap!!,
             onDismiss = {
                 showCropperDialog = false
@@ -849,7 +788,6 @@ fun MobileTableEditorScreen() {
                                 val allTokens = service.extractTokens(cropped)
                                 withContext(Dispatchers.Main) {
                                     detectedWords.clear()
-                                    // Populates every word, comma, full stop, and symbol as distinct selectable chips
                                     detectedWords.addAll(allTokens)
 
                                     pendingExtractedHeaders = h.map { ColumnDef(it, ColumnType.TEXT) }
@@ -866,7 +804,6 @@ fun MobileTableEditorScreen() {
                 }
             }
         )
-
     }
 
     if (showExtractionPreviewDialog && previewCroppedBitmap != null) {
@@ -875,14 +812,14 @@ fun MobileTableEditorScreen() {
             initialHeaders = pendingExtractedHeaders,
             initialRows = pendingExtractedRows,
             onDismiss = { showExtractionPreviewDialog = false },
-            onConfirmAppend = { verifiedHeaders, verifiedRows, excludeHeaders, _ ->
+            onConfirmAppend = { verifiedHeaders, verifiedRows, excludeHeaders, excludeRowNames ->
                 if (excludeHeaders) {
                     val paddedRows = verifiedRows.map { r ->
                         r + List((currentTable.headers.size - r.size).coerceAtLeast(0)) { "" }
                     }
                     val startR = currentTable.rows.size
                     for ((idx, rData) in paddedRows.withIndex()) {
-                        currentTable.addRow("Row ${startR + idx + 1}")
+                        currentTable.addRow(if (excludeRowNames) "Row ${startR + idx + 1}" else "Row ${startR + idx + 1}")
                         val targetRowIdx = currentTable.rows.size - 1
                         rData.take(currentTable.headers.size).forEachIndexed { cIdx, v ->
                             currentTable.setCellValue(targetRowIdx, cIdx, v)
@@ -898,7 +835,7 @@ fun MobileTableEditorScreen() {
                 showExtractionPreviewDialog = false
                 statusMessage = "Appended ${verifiedRows.size} verified rows to table!"
             },
-            onConfirmReplace = { verifiedHeaders, verifiedRows, excludeHeaders, _ ->
+            onConfirmReplace = { verifiedHeaders, verifiedRows, excludeHeaders, excludeRowNames ->
                 if (excludeHeaders) {
                     currentTable.rows.clear()
                     currentTable.rowNames.clear()
@@ -1169,110 +1106,7 @@ fun MobileTableEditorScreen() {
         )
     }
 
-    // ADVANCED ROW EDITOR DIALOG (Passes only clean displayText and preserves attachments upon saving)
-   /* if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
-        val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
-        key(currentTable.id, safeIndex) {
-            val rawRowValues = currentTable.rows.getOrElse(safeIndex) { emptyList() }
-            val cleanRowValues = remember(rawRowValues) {
-                rawRowValues.map { CellAttachmentHelper.parseCellContent(it).displayText }
-            }
-
-            AdvancedRowEditorDialog(
-                initialTableName = currentTable.tableName,
-                initialTableDateTime = currentTable.tableDateTime,
-                currentRowIndex = safeIndex,
-                totalRows = currentTable.rows.size,
-                rowName = currentTable.rowNames.getOrElse(safeIndex) { "Row ${safeIndex + 1}" },
-                headers = currentTable.headers,
-                rowValues = cleanRowValues,
-                onDismiss = { showRowEditorDialog = false },
-                onSaveRowAndTable = { newName, newDateTime, updatedRowName, updatedHeaders, updatedValues ->
-                    currentTable.tableName = newName
-                    currentTable.tableDateTime = newDateTime
-                    if (safeIndex in currentTable.rowNames.indices) {
-                        currentTable.rowNames[safeIndex] = updatedRowName
-                    }
-                    for (i in updatedHeaders.indices) {
-                        if (i in currentTable.headers.indices) {
-                            currentTable.headers[i] = updatedHeaders[i]
-                        }
-                    }
-                    if (safeIndex in currentTable.rows.indices) {
-                        val mergedValues = updatedValues.mapIndexed { i, newText ->
-                            val oldRaw = currentTable.rows[safeIndex].getOrElse(i) { "" }
-                            val payload = CellAttachmentHelper.parseCellContent(oldRaw)
-                            CellAttachmentHelper.formatCellContent(
-                                displayText = newText,
-                                attachments = payload.attachments,
-                                note = payload.note,
-                                additionalNote = payload.additionalNote,
-                                checklists = payload.checklists
-                            )
-                        }.toMutableList()
-                        while (mergedValues.size < currentTable.headers.size) {
-                            mergedValues.add("")
-                        }
-                        currentTable.rows[safeIndex].clear()
-                        currentTable.rows[safeIndex].addAll(mergedValues)
-                    }
-                    currentTable.recomputeFormulas()
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
-                    statusMessage = "Row ${safeIndex + 1} updated and saved to storage!"
-                },
-                onNavigateRow = { target -> editingRowIndex = target },
-                onAddNewColumn = { name, type ->
-                    currentTable.addColumn(name, type)
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
-                },
-                onDeleteColumn = { colIdx ->
-                    deleteColumnAndRemapIndices(colIdx)
-                },
-                onMoveColumn = { from, to ->
-                    currentTable.moveColumn(from, to)
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
-                },
-                onAddNewRowBelow = {
-                    currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex + 1)
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
-                },
-                onAddNewRowAbove = {
-                    currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex)
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
-                },
-                onMoveRowUp = {
-                    currentTable.moveRow(safeIndex, safeIndex - 1)
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
-                    editingRowIndex = safeIndex - 1
-                },
-                onMoveRowDown = {
-                    currentTable.moveRow(safeIndex, safeIndex + 1)
-                    currentTable.markUpdated()
-                    TableRepository.saveOrUpdate(currentTable)
-                    tableSnapshot = currentTable.createSnapshot()
-                    editingRowIndex = safeIndex + 1
-                },
-                onDeleteRow = {
-                    deleteRowAndRemapIndices(safeIndex)
-                    showRowEditorDialog = false
-                    statusMessage = "Row ${safeIndex + 1} deleted."
-                }
-            )
-        }
-    }*/
-        // ADVANCED ROW EDITOR DIALOG
+    // ADVANCED ROW EDITOR DIALOG
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
         key(currentTable.id, safeIndex) {
@@ -1285,7 +1119,7 @@ fun MobileTableEditorScreen() {
                 totalRows = currentTable.rows.size,
                 rowName = currentTable.rowNames.getOrElse(safeIndex) { "Row ${safeIndex + 1}" },
                 headers = currentTable.headers,
-                rowValues = rawRowValues, // Pass raw values directly
+                rowValues = rawRowValues,
                 onDismiss = { showRowEditorDialog = false },
                 onSaveRowAndTable = { newName, newDateTime, updatedRowName, updatedHeaders, updatedValues ->
                     currentTable.tableName = newName
@@ -1361,7 +1195,6 @@ fun MobileTableEditorScreen() {
             )
         }
     }
-
 
     if (showGeneratedPdfInspector) {
         GeneratedPdfInspectorDialog(
@@ -1480,12 +1313,13 @@ fun MobileTableEditorScreen() {
     }
 
     // SHOW / HIDE ATTENDANCE DATES IN CHART
-    val dateColIndices = remember(currentTable.headers) {
+    val allDateColIndices = remember(currentTable.headers) {
         currentTable.headers.indices.filter { idx ->
             val def = currentTable.headers[idx]
             def.type == ColumnType.DATE || parseDateFromHeader(def.name) != null
         }
     }
+    val dateColIndices = allDateColIndices.filter { !hiddenChartDateIndices.contains(it) }
 
     if (showChartDateSelectorDialog) {
         AlertDialog(
@@ -1854,7 +1688,7 @@ fun MobileTableEditorScreen() {
         matchesGlobal && matchesColFilters
     }
 
-    // Filter values dialog: Groups purely by clean display text (e.g. "John Doe")
+    // Filter values dialog: Groups purely by clean display text
     if (activeFilterColIdx != null) {
         val targetCol = activeFilterColIdx!!
         val colName = currentTable.headers.getOrNull(targetCol)?.name ?: "Column ${targetCol + 1}"
@@ -2059,7 +1893,7 @@ fun MobileTableEditorScreen() {
                         }
                     )
 
-                    // Line 2: PERMANENT CANCEL & SAVE BAR (FIXED AT TOP, UNCONGESTED, NEVER DISAPPEARS)
+                    // Line 2: PERMANENT CANCEL & SAVE BAR (PROTECTED FROM SQUISHING)
                     Surface(
                         color = Color(0xFFFFFFFF),
                         elevation = 3.dp,
@@ -2068,42 +1902,47 @@ fun MobileTableEditorScreen() {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // Left summary: weight(1f, fill = false) guarantees right buttons won't squish
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f, fill = false)
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .background(Color(0xFFE0F2FE), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                        .padding(horizontal = 6.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = "${filteredRowIndices.size}/${currentTable.rows.size} Rows • ${visibleColIndices.size}/${currentTable.headers.size} Cols",
+                                        text = "${filteredRowIndices.size}/${currentTable.rows.size} R • ${visibleColIndices.size}/${currentTable.headers.size} C",
                                         color = Color(0xFF0369A1),
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp
+                                        fontSize = 11.sp,
+                                        maxLines = 1
                                     )
                                 }
                                 Text(
-                                    text = statusMessage.take(20),
+                                    text = statusMessage,
                                     fontSize = 11.sp,
                                     color = Color.Gray,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                 )
                             }
 
+                            // Right Action Buttons: Guaranteed size, never crushed
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 OutlinedButton(
                                     onClick = { performSynchronizedCancel() },
                                     colors = ButtonDefaults.outlinedButtonColors(backgroundColor = Color.White),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                                     border = BorderStroke(1.dp, Color(0xFFDC2626)),
                                     shape = RoundedCornerShape(6.dp),
                                     modifier = Modifier.height(32.dp)
@@ -2114,7 +1953,7 @@ fun MobileTableEditorScreen() {
                                 Button(
                                     onClick = { performSynchronizedSave() },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF15803D)),
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                     shape = RoundedCornerShape(6.dp),
                                     modifier = Modifier.height(32.dp)
                                 ) {
@@ -2158,7 +1997,7 @@ fun MobileTableEditorScreen() {
                                 shape = RoundedCornerShape(6.dp),
                                 modifier = Modifier.height(30.dp)
                             ) {
-                                Text("↩ Cancel", color = Color(0xFFDC2626), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("↩ Cancel", color = Color.侵0xFFDC2626), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
                             Button(
@@ -2408,16 +2247,8 @@ fun MobileTableEditorScreen() {
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                         }
 
-                        // ATTENDANCE CHART
+                        // ATTENDANCE CHART (FIXED SELECT DATES CLIPPING)
                         if (showAttendanceChart) {
-                            val allDateColIndices = remember(currentTable.headers) {
-                                currentTable.headers.indices.filter { idx ->
-                                    val def = currentTable.headers[idx]
-                                    def.type == ColumnType.DATE || parseDateFromHeader(def.name) != null
-                                }
-                            }
-                            val dateColIndices = allDateColIndices.filter { !hiddenChartDateIndices.contains(it) }
-
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -2432,12 +2263,14 @@ fun MobileTableEditorScreen() {
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Column {
+                                        Column(modifier = Modifier.weight(1f, fill = false)) {
                                             Text(
                                                 text = "📊 Daily Attendance Chart (${filteredRowIndices.size} filtered rows)",
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = Color(0xFF1565C0)
+                                                color = Color(0xFF1565C0),
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
                                             if (dateColIndices.isNotEmpty()) {
                                                 Text(
@@ -2453,10 +2286,19 @@ fun MobileTableEditorScreen() {
                                             Button(
                                                 onClick = { showChartDateSelectorDialog = true },
                                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
-                                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                                modifier = Modifier.height(26.dp)
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier
+                                                    .padding(start = 6.dp)
+                                                    .heightIn(min = 28.dp)
                                             ) {
-                                                Text("⚙ Select Dates (${dateColIndices.size}/${allDateColIndices.size})", color = Color.White, fontSize = 10.sp)
+                                                Text(
+                                                    text = "⚙ Select Dates (${dateColIndices.size}/${allDateColIndices.size})",
+                                                    color = Color.White,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1
+                                                )
                                             }
                                         }
                                     }
@@ -2564,7 +2406,7 @@ fun MobileTableEditorScreen() {
                             }
                         }
 
-                        // SCANNER WORKSPACE
+                        // SCANNER WORKSPACE (FIXED VERTICAL "M-O-D-A-L" CHIP)
                         if (showScanWorkspaceInTable) {
                             val activeDisplayBitmap = previewCroppedBitmap ?: selectedBitmap
                             var scannerViewMode by remember { mutableIntStateOf(0) }
@@ -2729,35 +2571,51 @@ fun MobileTableEditorScreen() {
                                                     .weight(if (scannerViewMode == 1) 1f else 1.35f)
                                                     .fillMaxHeight()
                                             ) {
+                                                // UN-CONGESTED TOKENS BAR (NO VERTICAL M-O-D-A-L)
                                                 Row(
-                                                    modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(bottom = 4.dp),
                                                     horizontalArrangement = Arrangement.SpaceBetween,
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Text(
-                                                        "Tokens (${detectedWords.size})",
+                                                        text = "Tokens (${detectedWords.size})",
                                                         fontWeight = FontWeight.Bold,
                                                         fontSize = 12.sp,
                                                         color = Color(0xFF1565C0)
                                                     )
-                                                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                        TextButton(
-                                                            onClick = {
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Surface(
+                                                            shape = RoundedCornerShape(4.dp),
+                                                            color = Color(0xFFECEFF1),
+                                                            modifier = Modifier.clickable {
                                                                 selectedTokens.clear()
                                                                 selectedTokens.addAll(detectedWords)
-                                                            },
-                                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
-                                                        ) { Text("All", fontSize = 10.sp) }
+                                                            }
+                                                        ) {
+                                                            Text("All", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                                        }
 
-                                                        TextButton(
-                                                            onClick = { selectedTokens.clear() },
-                                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
-                                                        ) { Text("Clear", fontSize = 10.sp) }
+                                                        Surface(
+                                                            shape = RoundedCornerShape(4.dp),
+                                                            color = Color(0xFFECEFF1),
+                                                            modifier = Modifier.clickable { selectedTokens.clear() }
+                                                        ) {
+                                                            Text("Clear", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                                        }
 
-                                                        TextButton(
-                                                            onClick = { showAllWordsDialog = true },
-                                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp)
-                                                        ) { Text("⛶ Modal", fontSize = 10.sp, color = Color(0xFF0D47A1), fontWeight = FontWeight.Bold) }
+                                                        Surface(
+                                                            shape = RoundedCornerShape(4.dp),
+                                                            color = Color(0xFFE3F2FD),
+                                                            border = BorderStroke(0.5.dp, Color(0xFF1976D2)),
+                                                            modifier = Modifier.clickable { showAllWordsDialog = true }
+                                                        ) {
+                                                            Text("⛶ Modal", fontSize = 10.sp, color = Color(0xFF0D47A1), fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                                        }
                                                     }
                                                 }
 
@@ -2943,7 +2801,6 @@ fun MobileTableEditorScreen() {
                                     Text(if (isMultiSelectMode) "✓ Multi (${selectedCells.size})" else "☐ Multi-Select", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
 
-                                // Direct Batch Multi-Edit button
                                 if (isMultiSelectMode && selectedCells.isNotEmpty()) {
                                     Button(
                                         onClick = {

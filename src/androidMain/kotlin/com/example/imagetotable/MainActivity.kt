@@ -817,7 +817,7 @@ fun MobileTableEditorScreen() {
                     }
                     val startR = currentTable.rows.size
                     for ((idx, rData) in paddedRows.withIndex()) {
-                        currentTable.addRow(if (excludeRowNames) "Row ${startR + idx + 1}" else "Row ${startR + idx + 1}")
+                        currentTable.addRow("Row ${startR + idx + 1}")
                         val targetRowIdx = currentTable.rows.size - 1
                         rData.take(currentTable.headers.size).forEachIndexed { cIdx, v ->
                             currentTable.setCellValue(targetRowIdx, cIdx, v)
@@ -3612,6 +3612,7 @@ fun MobileTableEditorScreen() {
                 }
             }
 
+            // TAB 1: PDF STUDIO (WITH QUICK SAVE IMAGE BUTTON ON EACH CARD)
             if (selectedTabIndex == 1 && !isFullScreen) {
                 Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
                     Card(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), shape = RoundedCornerShape(8.dp), backgroundColor = Color(0xFFF1F5F9)) {
@@ -3693,6 +3694,20 @@ fun MobileTableEditorScreen() {
                                             Spacer(modifier = Modifier.height(4.dp))
 
                                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                // Quick Save Image to Gallery Button
+                                                Button(
+                                                    onClick = {
+                                                        val ok = saveBitmapToPictures(context, pageItem.bitmap, "Page_${pageIdx + 1}")
+                                                        if (ok) {
+                                                            Toast.makeText(context, "Saved Page ${pageIdx + 1} to Pictures/PDF_Studio", Toast.LENGTH_SHORT).show()
+                                                        } else {
+                                                            Toast.makeText(context, "Failed to save image", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    },
+                                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0D47A1)),
+                                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                                ) { Text("💾 Img", color = Color.White, fontSize = 10.sp) }
+
                                                 Button(
                                                     onClick = {
                                                         selectedBitmap = pageItem.bitmap

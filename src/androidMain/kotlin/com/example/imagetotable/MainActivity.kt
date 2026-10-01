@@ -762,7 +762,6 @@ fun MobileTableEditorScreen() {
                             val service = AndroidOcrService(context) { msg -> statusMessage = msg }
 
                             if (mode == CropExtractionMode.SINGLE_CELL_STEP) {
-                                // Extract individual tokens and join with single space gap
                                 val tokens = service.extractTokens(cropped)
                                 val text = tokens.joinToString(" ")
                                 val (tr, tc) = anchorCell
@@ -783,7 +782,6 @@ fun MobileTableEditorScreen() {
                                     statusMessage = "Inserted '$text' into active cell ($tr, $tc)"
                                 }
                             } else {
-                                // Extract both structured table & all individual tokens (words + punctuation)
                                 val (h, r) = service.extractTable(cropped)
                                 val allTokens = service.extractTokens(cropped)
                                 withContext(Dispatchers.Main) {
@@ -1893,7 +1891,7 @@ fun MobileTableEditorScreen() {
                         }
                     )
 
-                    // Line 2: PERMANENT CANCEL & SAVE BAR (PROTECTED FROM SQUISHING)
+                    // Line 2: PERMANENT CANCEL & SAVE BAR (FIXED AT TOP, UNCONGESTED, NEVER DISAPPEARS)
                     Surface(
                         color = Color(0xFFFFFFFF),
                         elevation = 3.dp,
@@ -1997,7 +1995,7 @@ fun MobileTableEditorScreen() {
                                 shape = RoundedCornerShape(6.dp),
                                 modifier = Modifier.height(30.dp)
                             ) {
-                                Text("↩ Cancel", color = Color.侵0xFFDC2626), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("↩ Cancel", color = Color(0xFFDC2626), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
                             Button(

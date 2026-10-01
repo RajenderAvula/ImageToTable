@@ -44,6 +44,7 @@ import com.example.imagetotable.model.AttachmentType
 import com.example.imagetotable.model.CellAttachment
 import com.example.imagetotable.model.CellAttachmentHelper
 import com.example.imagetotable.model.CellChecklistItem
+import com.example.imagetotable.model.TableRepository
 import com.example.imagetotable.util.StreamingSpeechHelper
 import java.util.Locale
 
@@ -63,6 +64,7 @@ fun CellAttachmentDialog(
     initialAttachments: List<CellAttachment> = emptyList(),
     initialChecklists: List<CellChecklistItem> = emptyList(),
     onDismiss: () -> Unit,
+    onOpenLinkedTable: (targetTableId: String) -> Unit = {},
     onSave: (
         updatedText: String,
         updatedNote: String,
@@ -83,6 +85,7 @@ fun CellAttachmentDialog(
     var manualContactName by remember { mutableStateOf("") }
     var manualContactPhone by remember { mutableStateOf("") }
 
+    var showLinkTableDialog by remember { mutableStateOf(false) }
     var selectedImagePreviewUri by remember { mutableStateOf<Uri?>(null) }
 
     // Offline Streaming Speech Helper instance
@@ -104,20 +107,19 @@ fun CellAttachmentDialog(
     ) { isGranted ->
         if (isGranted) {
             pendingOfflineTarget?.let { target ->
-                startOfflineSpeechRecognition(target, speechHelper, context,
-                    onStart = { baseText, tgt ->
-                        baseTextBeforeSpeech = baseText
-                        activeListeningTarget = tgt
-                    },
-                    onPartial = { partial, tgt ->
-                        if (tgt == ActiveListeningTarget.PRIMARY_NOTE) {
+                val baseText = if (target == ActiveListeningTarget.PRIMARY_NOTE) cellNoteState else additionalNoteState
+                baseTextBeforeSpeech = baseText
+                activeListeningTarget = target
+                speechHelper.start(
+                    onPartialResult = { partial ->
+                        if (target == ActiveListeningTarget.PRIMARY_NOTE) {
                             cellNoteState = if (baseTextBeforeSpeech.isBlank()) partial else "$baseTextBeforeSpeech $partial"
                         } else {
                             additionalNoteState = if (baseTextBeforeSpeech.isBlank()) partial else "$baseTextBeforeSpeech $partial"
                         }
                     },
-                    onFinal = { final, tgt ->
-                        if (tgt == ActiveListeningTarget.PRIMARY_NOTE) {
+                    onFinalResult = { final ->
+                        if (target == ActiveListeningTarget.PRIMARY_NOTE) {
                             cellNoteState = if (baseTextBeforeSpeech.isBlank()) final else "$baseTextBeforeSpeech $final"
                         } else {
                             additionalNoteState = if (baseTextBeforeSpeech.isBlank()) final else "$baseTextBeforeSpeech $final"
@@ -127,6 +129,11 @@ fun CellAttachmentDialog(
                     onError = { err ->
                         Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                         activeListeningTarget = null
+                    },
+                    onListeningStateChanged = { listening ->
+                        if (!listening && activeListeningTarget == target) {
+                            activeListeningTarget = null
+                        }
                     }
                 )
             }
@@ -172,14 +179,12 @@ fun CellAttachmentDialog(
 
     fun triggerOfflineSpeech(target: ActiveListeningTarget) {
         if (activeListeningTarget == target) {
-            // Already listening on this target: Stop recognition
             speechHelper.stop()
             activeListeningTarget = null
             return
         }
 
         if (activeListeningTarget != null) {
-            // Switching targets: stop previous
             speechHelper.stop()
             activeListeningTarget = null
         }
@@ -766,7 +771,7 @@ fun CellAttachmentDialog(
                         }
                     }
 
-                    // SECTION 4: FILE & MEDIA ATTACHMENTS
+                    // SECTION 4: FILE, MEDIA & LINKED TABLE ATTACHMENTS
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -783,18 +788,28 @@ fun CellAttachmentDialog(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "📄 Attached Files (${attachmentsState.size})",
+                                    text = "📄 Attached Files & Tables (${attachmentsState.size})",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 13.sp,
                                     color = Color(0xFF37474F)
                                 )
 
-                                Button(
-                                    onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1565C0)),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Text("+ Add Files/Images", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Button(
+                                        onClick = { showLinkTableDialog = true },
+                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text("📊 + Link Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    Button(
+                                        onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1565C0)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text("+ Add Files/Images", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
 
@@ -806,7 +821,7 @@ fun CellAttachmentDialog(
                                         .background(Color(0xFFF1F5F9), RoundedCornerShape(6.dp)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text("No files or contacts attached to this cell.", color = Color.Gray, fontSize = 11.sp)
+                                    Text("No files, contacts or tables linked to this cell.", color = Color.Gray, fontSize = 11.sp)
                                 }
                             } else {
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -818,6 +833,18 @@ fun CellAttachmentDialog(
                                             onCallClick = { makeCall(item.detail) },
                                             onSmsClick = { sendSms(item.detail) },
                                             onWhatsAppClick = { openWhatsApp(item.detail) },
+                                            onOpenLinkedTableClick = {
+                                                speechHelper.stop()
+                                                onSave(
+                                                    cellTextState,
+                                                    cellNoteState,
+                                                    additionalNoteState,
+                                                    attachmentsState.toList(),
+                                                    checklistsState.toList()
+                                                )
+                                                onDismiss()
+                                                onOpenLinkedTable(item.detail)
+                                            },
                                             onDeleteClick = { attachmentsState.removeAt(index) }
                                         )
                                     }
@@ -872,6 +899,77 @@ fun CellAttachmentDialog(
         }
     }
 
+    // Modal to pick a table from TableRepository to link to this cell
+    if (showLinkTableDialog) {
+        val availableTables = TableRepository.tables
+        AlertDialog(
+            onDismissRequest = { showLinkTableDialog = false },
+            title = {
+                Text(
+                    text = "Link a Saved Table to Cell",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = Color(0xFF6A1B9A)
+                )
+            },
+            text = {
+                if (availableTables.isEmpty()) {
+                    Text("No saved tables exist. Create tables in the app first.", fontSize = 12.sp, color = Color.Gray)
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 300.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        availableTables.forEach { tableItem ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFF3E5F5),
+                                border = BorderStroke(1.dp, Color(0xFFCE93D8)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        attachmentsState.add(
+                                            CellAttachment(
+                                                type = AttachmentType.LINKED_TABLE,
+                                                uriString = "table:${tableItem.id}",
+                                                displayName = tableItem.tableName,
+                                                detail = tableItem.id
+                                            )
+                                        )
+                                        showLinkTableDialog = false
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("📊", fontSize = 18.sp)
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(tableItem.tableName, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF4A148C))
+                                        Text(
+                                            "${tableItem.rows.size} rows • ${tableItem.headers.size} cols • ${tableItem.tableDateTime}",
+                                            fontSize = 10.sp,
+                                            color = Color.DarkGray
+                                        )
+                                    }
+                                    Text("➕ Link", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF7B1FA2))
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showLinkTableDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     // Full-screen Image Preview Popup
     if (selectedImagePreviewUri != null) {
         Dialog(onDismissRequest = { selectedImagePreviewUri = null }) {
@@ -906,24 +1004,6 @@ fun CellAttachmentDialog(
     }
 }
 
-private fun startOfflineSpeechRecognition(
-    target: ActiveListeningTarget,
-    helper: StreamingSpeechHelper,
-    context: Context,
-    onStart: (baseText: String, target: ActiveListeningTarget) -> Unit,
-    onPartial: (partial: String, target: ActiveListeningTarget) -> Unit,
-    onFinal: (final: String, target: ActiveListeningTarget) -> Unit,
-    onError: (error: String) -> Unit
-) {
-    onStart("", target)
-    helper.start(
-        onPartialResult = { partial -> onPartial(partial, target) },
-        onFinalResult = { final -> onFinal(final, target) },
-        onError = { err -> onError(err) },
-        onListeningStateChanged = { /* handled in caller */ }
-    )
-}
-
 @Composable
 private fun AttachmentPreviewCard(
     attachment: CellAttachment,
@@ -932,6 +1012,7 @@ private fun AttachmentPreviewCard(
     onCallClick: () -> Unit,
     onSmsClick: () -> Unit,
     onWhatsAppClick: () -> Unit,
+    onOpenLinkedTableClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -940,8 +1021,8 @@ private fun AttachmentPreviewCard(
         modifier = Modifier.fillMaxWidth(),
         elevation = 1.dp,
         shape = RoundedCornerShape(8.dp),
-        backgroundColor = Color.White,
-        border = BorderStroke(0.5.dp, Color(0xFFE2E8F0))
+        backgroundColor = if (attachment.type == AttachmentType.LINKED_TABLE) Color(0xFFF3E5F5) else Color.White,
+        border = BorderStroke(0.5.dp, if (attachment.type == AttachmentType.LINKED_TABLE) Color(0xFFBA68C8) else Color(0xFFE2E8F0))
     ) {
         Row(
             modifier = Modifier.padding(8.dp),
@@ -949,6 +1030,14 @@ private fun AttachmentPreviewCard(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             when (attachment.type) {
+                AttachmentType.LINKED_TABLE -> {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .background(Color(0xFFEDE7F6), RoundedCornerShape(6.dp)),
+                        contentAlignment = Alignment.Center
+                    ) { Text("📊", fontSize = 22.sp) }
+                }
                 AttachmentType.IMAGE -> {
                     val bmp = remember(attachment.uriString) {
                         loadBitmapThumbnail(context, Uri.parse(attachment.uriString), sampleSize = 4)
@@ -1008,7 +1097,7 @@ private fun AttachmentPreviewCard(
                 )
                 if (attachment.detail.isNotBlank()) {
                     Text(
-                        text = attachment.detail,
+                        text = if (attachment.type == AttachmentType.LINKED_TABLE) "Linked Table ID: ${attachment.detail.take(8)}..." else attachment.detail,
                         fontSize = 11.sp,
                         color = Color.Gray,
                         maxLines = 1
@@ -1077,7 +1166,20 @@ private fun AttachmentPreviewCard(
                 }
             }
 
-            if (attachment.type != AttachmentType.CONTACT) {
+            // Linked Table Open Action
+            if (attachment.type == AttachmentType.LINKED_TABLE) {
+                Button(
+                    onClick = onOpenLinkedTableClick,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF7B1FA2)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text("👁 Open Table", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            if (attachment.type != AttachmentType.CONTACT && attachment.type != AttachmentType.LINKED_TABLE) {
                 IconButton(onClick = onOpenClick, modifier = Modifier.size(26.dp)) {
                     Text("👁", fontSize = 15.sp)
                 }

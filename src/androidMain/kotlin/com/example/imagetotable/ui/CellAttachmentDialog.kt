@@ -110,16 +110,19 @@ fun CellAttachmentDialog(
                 val baseText = if (target == ActiveListeningTarget.PRIMARY_NOTE) cellNoteState else additionalNoteState
                 baseTextBeforeSpeech = baseText
                 activeListeningTarget = target
-                speechHelper.start(
-                    onPartialResult = { partial ->
-                        if (target == ActiveListeningTarget.PRIMARY_NOTE) {
+                startOfflineSpeechRecognition(target, speechHelper, context,
+                    onStart = { _, tgt ->
+                        activeListeningTarget = tgt
+                    },
+                    onPartial = { partial, tgt ->
+                        if (tgt == ActiveListeningTarget.PRIMARY_NOTE) {
                             cellNoteState = if (baseTextBeforeSpeech.isBlank()) partial else "$baseTextBeforeSpeech $partial"
                         } else {
                             additionalNoteState = if (baseTextBeforeSpeech.isBlank()) partial else "$baseTextBeforeSpeech $partial"
                         }
                     },
-                    onFinalResult = { final ->
-                        if (target == ActiveListeningTarget.PRIMARY_NOTE) {
+                    onFinal = { final, tgt ->
+                        if (tgt == ActiveListeningTarget.PRIMARY_NOTE) {
                             cellNoteState = if (baseTextBeforeSpeech.isBlank()) final else "$baseTextBeforeSpeech $final"
                         } else {
                             additionalNoteState = if (baseTextBeforeSpeech.isBlank()) final else "$baseTextBeforeSpeech $final"
@@ -129,11 +132,6 @@ fun CellAttachmentDialog(
                     onError = { err ->
                         Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                         activeListeningTarget = null
-                    },
-                    onListeningStateChanged = { listening ->
-                        if (!listening && activeListeningTarget == target) {
-                            activeListeningTarget = null
-                        }
                     }
                 )
             }
@@ -179,12 +177,14 @@ fun CellAttachmentDialog(
 
     fun triggerOfflineSpeech(target: ActiveListeningTarget) {
         if (activeListeningTarget == target) {
+            // Already listening on this target: Stop recognition
             speechHelper.stop()
             activeListeningTarget = null
             return
         }
 
         if (activeListeningTarget != null) {
+            // Switching targets: stop previous
             speechHelper.stop()
             activeListeningTarget = null
         }
@@ -1004,6 +1004,24 @@ fun CellAttachmentDialog(
     }
 }
 
+private fun startOfflineSpeechRecognition(
+    target: ActiveListeningTarget,
+    helper: StreamingSpeechHelper,
+    context: Context,
+    onStart: (baseText: String, target: ActiveListeningTarget) -> Unit,
+    onPartial: (partial: String, target: ActiveListeningTarget) -> Unit,
+    onFinal: (final: String, target: ActiveListeningTarget) -> Unit,
+    onError: (error: String) -> Unit
+) {
+    onStart("", target)
+    helper.start(
+        onPartialResult = { partial -> onPartial(partial, target) },
+        onFinalResult = { final -> onFinal(final, target) },
+        onError = { err -> onError(err) },
+        onListeningStateChanged = { /* handled in caller */ }
+    )
+}
+
 @Composable
 private fun AttachmentPreviewCard(
     attachment: CellAttachment,
@@ -1012,7 +1030,7 @@ private fun AttachmentPreviewCard(
     onCallClick: () -> Unit,
     onSmsClick: () -> Unit,
     onWhatsAppClick: () -> Unit,
-    onOpenLinkedTableClick: () -> Unit,
+    onOpenLinkedTableClick: () -> Unit = {},
     onDeleteClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1166,7 +1184,7 @@ private fun AttachmentPreviewCard(
                 }
             }
 
-            // Linked Table Open Action
+            // Linked Table Open Action Button
             if (attachment.type == AttachmentType.LINKED_TABLE) {
                 Button(
                     onClick = onOpenLinkedTableClick,

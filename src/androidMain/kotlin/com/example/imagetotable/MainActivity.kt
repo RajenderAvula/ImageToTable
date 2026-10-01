@@ -1104,7 +1104,7 @@ fun MobileTableEditorScreen() {
     }
 
     // ADVANCED ROW EDITOR DIALOG (Passes only clean displayText and preserves attachments upon saving)
-    if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
+   /* if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
         key(currentTable.id, safeIndex) {
             val rawRowValues = currentTable.rows.getOrElse(safeIndex) { emptyList() }
@@ -1205,7 +1205,97 @@ fun MobileTableEditorScreen() {
                 }
             )
         }
+    }*/
+        // ADVANCED ROW EDITOR DIALOG
+    if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
+        val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
+        key(currentTable.id, safeIndex) {
+            val rawRowValues = currentTable.rows.getOrElse(safeIndex) { emptyList() }
+
+            AdvancedRowEditorDialog(
+                initialTableName = currentTable.tableName,
+                initialTableDateTime = currentTable.tableDateTime,
+                currentRowIndex = safeIndex,
+                totalRows = currentTable.rows.size,
+                rowName = currentTable.rowNames.getOrElse(safeIndex) { "Row ${safeIndex + 1}" },
+                headers = currentTable.headers,
+                rowValues = rawRowValues, // Pass raw values directly
+                onDismiss = { showRowEditorDialog = false },
+                onSaveRowAndTable = { newName, newDateTime, updatedRowName, updatedHeaders, updatedValues ->
+                    currentTable.tableName = newName
+                    currentTable.tableDateTime = newDateTime
+                    if (safeIndex in currentTable.rowNames.indices) {
+                        currentTable.rowNames[safeIndex] = updatedRowName
+                    }
+                    for (i in updatedHeaders.indices) {
+                        if (i in currentTable.headers.indices) {
+                            currentTable.headers[i] = updatedHeaders[i]
+                        }
+                    }
+                    if (safeIndex in currentTable.rows.indices) {
+                        currentTable.rows[safeIndex].clear()
+                        currentTable.rows[safeIndex].addAll(updatedValues)
+                        while (currentTable.rows[safeIndex].size < currentTable.headers.size) {
+                            currentTable.rows[safeIndex].add("")
+                        }
+                    }
+                    currentTable.recomputeFormulas()
+                    currentTable.markUpdated()
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
+                    statusMessage = "Row ${safeIndex + 1} updated and saved to storage!"
+                },
+                onNavigateRow = { target -> editingRowIndex = target },
+                onAddNewColumn = { name, type ->
+                    currentTable.addColumn(name, type)
+                    currentTable.markUpdated()
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
+                },
+                onDeleteColumn = { colIdx ->
+                    deleteColumnAndRemapIndices(colIdx)
+                },
+                onMoveColumn = { from, to ->
+                    currentTable.moveColumn(from, to)
+                    currentTable.markUpdated()
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
+                },
+                onAddNewRowBelow = {
+                    currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex + 1)
+                    currentTable.markUpdated()
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
+                },
+                onAddNewRowAbove = {
+                    currentTable.addRow("Row ${currentTable.rows.size + 1}", index = safeIndex)
+                    currentTable.markUpdated()
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
+                },
+                onMoveRowUp = {
+                    currentTable.moveRow(safeIndex, safeIndex - 1)
+                    currentTable.markUpdated()
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
+                    editingRowIndex = safeIndex - 1
+                },
+                onMoveRowDown = {
+                    currentTable.moveRow(safeIndex, safeIndex + 1)
+                    currentTable.markUpdated()
+                    TableRepository.saveOrUpdate(currentTable)
+                    tableSnapshot = currentTable.createSnapshot()
+                    editingRowIndex = safeIndex + 1
+                },
+                onDeleteRow = {
+                    deleteRowAndRemapIndices(safeIndex)
+                    showRowEditorDialog = false
+                    statusMessage = "Row ${safeIndex + 1} deleted."
+                }
+            )
+        }
     }
+
 
     if (showGeneratedPdfInspector) {
         GeneratedPdfInspectorDialog(

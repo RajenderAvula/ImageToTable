@@ -88,7 +88,7 @@ object CellAttachmentHelper {
                     )
                 }
             } else if (jsonStr.startsWith("[")) {
-                // Legacy compatibility
+                // Backward compatibility for legacy JSON arrays
                 val jsonArray = JSONArray(jsonStr)
                 for (i in 0 until jsonArray.length()) {
                     val obj = jsonArray.getJSONObject(i)
@@ -184,36 +184,39 @@ object CellAttachmentHelper {
         var name = "Contact"
         var phone = ""
         try {
-            context.contentResolver.query(contactUri, null, null, null, null)?.use { cursor ->
+            // Direct query on Phone data entry (granted via ACTION_PICK on Phone.CONTENT_URI)
+            context.contentResolver.query(
+                contactUri,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER
+                ),
+                null,
+                null,
+                null
+            )?.use { cursor ->
                 if (cursor.moveToFirst()) {
-                    val nameIdx = cursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
+                    val nameIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                    val phoneIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
                     if (nameIdx != -1) {
                         name = cursor.getString(nameIdx) ?: "Contact"
                     }
-                    val idIdx = cursor.getColumnIndex(ContactsContract.Contacts._ID)
-                    val hasPhoneIdx = cursor.getColumnIndex(ContactsContract.Contacts.HAS_PHONE_NUMBER)
-                    val hasPhone = if (hasPhoneIdx != -1) cursor.getInt(hasPhoneIdx) else 0
-
-                    if (hasPhone > 0 && idIdx != -1) {
-                        val contactId = cursor.getString(idIdx)
-                        context.contentResolver.query(
-                            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                            null,
-                            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
-                            arrayOf(contactId),
-                            null
-                        )?.use { phoneCursor ->
-                            if (phoneCursor.moveToFirst()) {
-                                val phoneIdx = phoneCursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                                if (phoneIdx != -1) {
-                                    phone = phoneCursor.getString(phoneIdx) ?: ""
-                                }
-                            }
-                        }
+                    if (phoneIdx != -1) {
+                        phone = cursor.getString(phoneIdx) ?: ""
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+            // Fallback for general contact entries
+            try {
+                context.contentResolver.query(contactUri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIdx = cursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
+                        if (nameIdx != -1) name = cursor.getString(nameIdx) ?: "Contact"
+                    }
+                }
+            } catch (_: Exception) {}
+        }
         return Pair(name, phone)
     }
 }

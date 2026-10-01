@@ -18,359 +18,167 @@ class AndroidOcrService(
     private val context: Context,
     private val onStatusUpdate: (String) -> Unit = {}
 ) {
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    companion object {
+        // Matches letters + combining marks + numbers, OR any single punctuation symbol
+        private val TOKEN_REGEX = Regex("""[\p{L}\p{M}\p{N}]+|[^\s\p{L}\p{M}\p{N}]""")
 
-    data class TextElementBox(
-        val text: String,
-        val rect: Rect
-    ) {
-        val centerX: Int get() = rect.centerX()
-        val centerY: Int get() = rect.centerY()
-        val height: Int get() = rect.height().coerceAtLeast(1)
-        val width: Int get() = rect.width().coerceAtLeast(1)
-    }
-
-    data class ColumnInterval(
-        val left: Int,
-        val right: Int,
-        val centerX: Int
-    )
-
-    private data class DetectedGrid(
-        val hLines: List<Float>,
-        val vLines: List<Float>
-    ) {
-        val rows: Int get() = (hLines.size - 1).coerceAtLeast(0)
-        val cols: Int get() = (vLines.size - 1).coerceAtLeast(0)
-
-        fun findRowIndex(y: Float): Int {
-            for (i in 0 until rows) {
-                if (y >= hLines[i] && y <= hLines[i + 1]) return i
-            }
-            return -1
+        /**
+         * Splits any string into words and punctuation marks (comma, full stop, colon, etc.)
+         * as discrete tokens.
+         */
+        fun tokenizeWithPunctuation(rawText: String): List<String> {
+            if (rawText.isBlank()) return emptyList()
+            return TOKEN_REGEX.findAll(rawText).map { it.value }.toList()
         }
 
-        fun findColIndex(x: Float): Int {
-            for (j in 0 until cols) {
-                if (x >= vLines[j] && x <= vLines[j + 1]) return j
-            }
-            return -1
-        }
-    }
-
-    suspend fun extractTable(
-        bitmap: Bitmap,
-        excludeHeaders: Boolean = false
-    ): Pair<List<String>, List<List<String>>> = withContext(Dispatchers.Default) {
-        withContext(Dispatchers.Main) {
-            onStatusUpdate("Analyzing table layout, columns & multiline cells...")
-        }
-
-        val inputImage = InputImage.fromBitmap(bitmap, 0)
-        val visionText = processImageAsync(inputImage)
-
-        if (visionText.textBlocks.isEmpty()) {
-            return@withContext Pair(listOf("Col 1", "Col 2"), emptyList())
-        }
-
-        // 1. Detect if physical grid border lines exist
-        val detectedGrid = detectTableBorders(bitmap)
-
-        if (detectedGrid != null && detectedGrid.rows > 1 && detectedGrid.cols > 0) {
-            withContext(Dispatchers.Main) {
-                onStatusUpdate("Extracting bordered cells as single tokens...")
-            }
-            // Within border lines: words separated by space in a cell form a single token
-            return@withContext extractBorderedTable(visionText, detectedGrid, excludeHeaders)
-        }
-
-        withContext(Dispatchers.Main) {
-            onStatusUpdate("Extracting borderless text elements...")
-        }
-
-        // 2. Borderless mode: Collect individual space-separated words as discrete elements
-        // "Jane Doe is a good person" on a single line produces 6 separate elements
-        val elements = mutableListOf<TextElementBox>()
-        for (block in visionText.textBlocks) {
-            for (line in block.lines) {
-                for (elem in line.elements) {
-                    val box = elem.boundingBox
-                    if (box != null && elem.text.isNotBlank()) {
-                        elements.add(TextElementBox(elem.text.trim(), box))
-                    }
-                }
-            }
-        }
-
-        if (elements.isEmpty()) {
-            return@withContext Pair(listOf("Col 1", "Col 2"), emptyList())
-        }
-
-        // 3. Global Column Interval Detection (Distinguishes individual words across the line)
-        val sortedByX = elements.sortedBy { it.rect.left }
-        val columnClusters = mutableListOf<MutableList<TextElementBox>>()
-
-        for (el in sortedByX) {
-            val matchingCol = columnClusters.firstOrNull { colList ->
-                val avgLeft = colList.map { it.rect.left }.average()
-                val avgRight = colList.map { it.rect.right }.average()
-                val avgW = colList.map { it.width }.average().coerceAtLeast(20.0)
-
-                val overlaps = el.rect.left < avgRight && el.rect.right > avgLeft
-                val nearCenter = abs(el.centerX - ((avgLeft + avgRight) / 2)) < (avgW * 0.75)
-                overlaps || nearCenter
-            }
-
-            if (matchingCol != null) {
-                matchingCol.add(el)
-            } else {
-                columnClusters.add(mutableListOf(el))
-            }
-        }
-
-        columnClusters.sortBy { col -> col.minOf { it.rect.left } }
-
-        val columns = columnClusters.map { colList ->
-            ColumnInterval(
-                left = colList.minOf { it.rect.left },
-                right = colList.maxOf { it.rect.right },
-                centerX = colList.map { it.centerX }.average().toInt()
-            )
-        }
-        val totalCols = columns.size.coerceAtLeast(1)
-
-        // 4. Row Clustering with Multi-Line Single-Cell Detection
-        val sortedByY = elements.sortedBy { it.rect.top }
-        val rowBands = mutableListOf<MutableList<TextElementBox>>()
-
-        for (el in sortedByY) {
-            val matchingRow = rowBands.firstOrNull { rowList ->
-                val avgY = rowList.map { it.centerY }.average()
-                val avgH = rowList.map { it.height }.average().coerceAtLeast(14.0)
-
-                val verticalOverlap = abs(el.centerY - avgY) <= (avgH * 0.70)
-
-                // Detect vertically stacked lines belonging to the same column cell
-                val isMultiLineInSameCol = rowList.any { rowElem ->
-                    val sameColSpan = abs(rowElem.centerX - el.centerX) <= (rowElem.width * 0.60)
-                    val closelyStacked = (el.rect.top - rowElem.rect.bottom) in -5..(avgH * 0.85).toInt()
-                    sameColSpan && closelyStacked
-                }
-
-                verticalOverlap || isMultiLineInSameCol
-            }
-
-            if (matchingRow != null) {
-                matchingRow.add(el)
-            } else {
-                rowBands.add(mutableListOf(el))
-            }
-        }
-
-        rowBands.sortBy { rowList -> rowList.minOf { it.rect.top } }
-
-        // 5. Map Elements into Column Buckets & Concatenate Multi-Line Cells
-        val gridRows = mutableListOf<List<String>>()
-
-        for (rowElements in rowBands) {
-            val cellBuckets = MutableList(totalCols) { mutableListOf<TextElementBox>() }
-
-            for (elem in rowElements) {
-                var bestColIdx = 0
-                var minDistance = Int.MAX_VALUE
-
-                for ((cIdx, colInterval) in columns.withIndex()) {
-                    val dist = abs(elem.centerX - colInterval.centerX)
-                    if (dist < minDistance) {
-                        minDistance = dist
-                        bestColIdx = cIdx
-                    }
-                }
-                cellBuckets[bestColIdx].add(elem)
-            }
-
-            // Concatenate vertically stacked lines into a single cell, keeping horizontal words distinct
-            val rowValues = cellBuckets.map { bucketElements ->
-                if (bucketElements.isEmpty()) {
-                    ""
-                } else {
-                    bucketElements.sortWith(compareBy<TextElementBox> { it.rect.top }.thenBy { it.rect.left })
-
-                    val cellBuilder = StringBuilder()
-                    for (b in bucketElements) {
-                        if (cellBuilder.isEmpty()) {
-                            cellBuilder.append(b.text)
-                        } else {
-                            cellBuilder.append(" ").append(b.text)
-                        }
-                    }
-                    cellBuilder.toString().trim()
-                }
-            }
-
-            if (rowValues.any { it.isNotBlank() }) {
-                gridRows.add(rowValues)
-            }
-        }
-
-        if (gridRows.isEmpty()) {
-            return@withContext Pair(List(totalCols) { "Col ${it + 1}" }, emptyList())
-        }
-
-        // 6. Exclude Headers vs Parse Headers
-        if (excludeHeaders) {
-            val defaultHeaders = List(totalCols) { "Col ${it + 1}" }
-            Pair(defaultHeaders, gridRows)
-        } else {
-            val headers = gridRows.first().mapIndexed { idx, hText ->
-                hText.ifBlank { "Col ${idx + 1}" }
-            }
-            val dataRows = if (gridRows.size > 1) gridRows.drop(1) else emptyList()
-            Pair(headers, dataRows)
+        /**
+         * Ensures a single space gap between all words and punctuation marks.
+         * Example: "John Doe, Manager." -> "John Doe , Manager ."
+         */
+        fun formatWithSingleSpaceGap(rawText: String): String {
+            return tokenizeWithPunctuation(rawText).joinToString(" ")
         }
     }
 
     /**
-     * Extracts tokens across the table.
-     * In bordered mode: words inside a border cell are grouped into 1 token.
-     * In borderless mode: words in "Jane Doe is a good person" are returned as 6 separate tokens.
+     * Extracts individual tokens (words, commas, full stops, punctuation marks)
+     * from a scanned image (with or without borders).
      */
     suspend fun extractTokens(bitmap: Bitmap): List<String> = withContext(Dispatchers.Default) {
-        val (headers, rows) = extractTable(bitmap, excludeHeaders = false)
+        onStatusUpdate("Scanning image tokens...")
+        val visionText = recognizeText(bitmap)
         val tokens = mutableListOf<String>()
-        headers.filter { it.isNotBlank() }.forEach { tokens.add(it) }
-        rows.flatten().filter { it.isNotBlank() }.forEach { tokens.add(it) }
-        tokens
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // BORDERED EXTRACTION: All space-separated words within a cell border form a single token
-    // -----------------------------------------------------------------------------------------
-    private fun extractBorderedTable(
-        visionText: Text,
-        grid: DetectedGrid,
-        excludeHeaders: Boolean
-    ): Pair<List<String>, List<List<String>>> {
-        val cellMatrix = Array(grid.rows) { Array(grid.cols) { mutableListOf<String>() } }
 
         for (block in visionText.textBlocks) {
             for (line in block.lines) {
-                for (elem in line.elements) {
-                    val box = elem.boundingBox ?: continue
-                    val centerX = box.centerX().toFloat()
-                    val centerY = box.centerY().toFloat()
+                tokens.addAll(tokenizeWithPunctuation(line.text))
+            }
+        }
+        tokens
+    }
 
-                    val rIdx = grid.findRowIndex(centerY)
-                    val cIdx = grid.findColIndex(centerX)
+    /**
+     * Extracts tabular data from an image (with or without borders) using spatial
+     * coordinate clustering. Every cell's contents are formatted with single space gaps
+     * around punctuation marks.
+     */
+    suspend fun extractTable(bitmap: Bitmap): Pair<List<String>, List<List<String>>> = withContext(Dispatchers.Default) {
+        onStatusUpdate("Analyzing table structure & boundaries...")
+        val visionText = recognizeText(bitmap)
 
-                    if (rIdx in 0 until grid.rows && cIdx in 0 until grid.cols) {
-                        val elemText = elem.text.trim()
-                        if (elemText.isNotBlank()) {
-                            cellMatrix[rIdx][cIdx].add(elemText)
-                        }
+        val allLines = visionText.textBlocks.flatMap { it.lines }
+        if (allLines.isEmpty()) {
+            return@withContext Pair(emptyList(), emptyList())
+        }
+
+        // 1. Calculate average line height for dynamic spatial thresholds
+        val avgHeight = allLines
+            .mapNotNull { it.boundingBox?.height() }
+            .ifEmpty { listOf(24) }
+            .average()
+            .toFloat()
+            .coerceAtLeast(16f)
+
+        val rowThresholdY = avgHeight * 0.55f
+
+        // 2. Vertical Clustering: Group lines into rows (handles both bordered & borderless rows)
+        val sortedByY = allLines.sortedBy { it.boundingBox?.top ?: 0 }
+        val rowsOfLines = mutableListOf<MutableList<Text.Line>>()
+
+        for (line in sortedByY) {
+            val lineBox = line.boundingBox ?: Rect(0, 0, 0, 0)
+            val matchingRow = rowsOfLines.firstOrNull { rowLines ->
+                val rowAvgTop = rowLines.map { it.boundingBox?.top ?: 0 }.average().toFloat()
+                abs(lineBox.top - rowAvgTop) <= rowThresholdY
+            }
+
+            if (matchingRow != null) {
+                matchingRow.add(line)
+            } else {
+                rowsOfLines.add(mutableListOf(line))
+            }
+        }
+
+        // Sort items in each row horizontally from left to right
+        rowsOfLines.forEach { row ->
+            row.sortBy { it.boundingBox?.left ?: 0 }
+        }
+
+        // 3. Horizontal Clustering: Identify global column anchors across all rows
+        val allLeftCoords = rowsOfLines.flatMap { row -> row.mapNotNull { it.boundingBox?.left } }.sorted()
+        val columnAnchors = mutableListOf<Int>()
+        val colToleranceX = (avgHeight * 2.2f).toInt().coerceAtLeast(40)
+
+        for (x in allLeftCoords) {
+            if (columnAnchors.none { abs(it - x) < colToleranceX }) {
+                columnAnchors.add(x)
+            }
+        }
+        columnAnchors.sort()
+        val totalCols = columnAnchors.size.coerceAtLeast(1)
+
+        // 4. Construct 2D Grid Cells with single space gaps between words and punctuation
+        val extractedRows = mutableListOf<List<String>>()
+
+        for (row in rowsOfLines) {
+            val cellArray = MutableList(totalCols) { "" }
+
+            for (line in row) {
+                val lineX = line.boundingBox?.left ?: 0
+
+                // Match with nearest column anchor
+                var bestCol = 0
+                var minDiff = Int.MAX_VALUE
+                for ((idx, anchorX) in columnAnchors.withIndex()) {
+                    val diff = abs(anchorX - lineX)
+                    if (diff < minDiff) {
+                        minDiff = diff
+                        bestCol = idx
                     }
                 }
+
+                // Format text with single space gap and punctuation tokens separated
+                val formattedCellText = formatWithSingleSpaceGap(line.text)
+                if (cellArray[bestCol].isBlank()) {
+                    cellArray[bestCol] = formattedCellText
+                } else {
+                    cellArray[bestCol] = "${cellArray[bestCol]} $formattedCellText"
+                }
             }
+
+            extractedRows.add(cellArray)
         }
 
-        // Words separated by space within the same bordered cell are joined into a single token
-        val rawRows = cellMatrix.map { rowCells ->
-            rowCells.map { cellWords ->
-                cellWords.joinToString(" ").trim()
-            }
+        if (extractedRows.isEmpty()) {
+            return@withContext Pair(emptyList(), emptyList())
         }
 
-        val nonEmptyRows = rawRows.filter { row -> row.any { it.isNotBlank() } }
-
-        if (nonEmptyRows.isEmpty()) {
-            return Pair(List(grid.cols) { "Col ${it + 1}" }, emptyList())
-        }
-
-        return if (excludeHeaders) {
-            val headers = List(grid.cols) { "Col ${it + 1}" }
-            Pair(headers, nonEmptyRows)
+        // 5. Partition Headers and Data Rows
+        val headers = if (extractedRows.size > 1) {
+            extractedRows.first().mapIndexed { idx, h -> h.ifBlank { "Col ${idx + 1}" } }
         } else {
-            val headers = nonEmptyRows.first().mapIndexed { idx, cellText ->
-                cellText.ifBlank { "Col ${idx + 1}" }
-            }
-            val dataRows = if (nonEmptyRows.size > 1) nonEmptyRows.drop(1) else emptyList()
-            Pair(headers, dataRows)
-        }
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // BORDER DETECTION VIA PROJECTION PROFILES
-    // -----------------------------------------------------------------------------------------
-    private fun detectTableBorders(bitmap: Bitmap): DetectedGrid? {
-        val sampleW = 400
-        val sampleH = (bitmap.height * (400f / bitmap.width)).toInt().coerceAtLeast(100)
-        val scaled = Bitmap.createScaledBitmap(bitmap, sampleW, sampleH, false)
-
-        val hProfile = IntArray(sampleH)
-        val vProfile = IntArray(sampleW)
-
-        for (y in 0 until sampleH) {
-            for (x in 0 until sampleW) {
-                val pixel = scaled.getPixel(x, y)
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-                val luminance = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-
-                if (luminance < 140) {
-                    hProfile[y]++
-                    vProfile[x]++
-                }
-            }
+            List(totalCols) { idx -> "Col ${idx + 1}" }
         }
 
-        val hThreshold = (sampleW * 0.40).toInt()
-        val vThreshold = (sampleH * 0.35).toInt()
-
-        val scaleXBack = bitmap.width.toFloat() / sampleW
-        val scaleYBack = bitmap.height.toFloat() / sampleH
-
-        val hLines = extractLinePeaks(hProfile, hThreshold).map { it * scaleYBack }
-        val vLines = extractLinePeaks(vProfile, vThreshold).map { it * scaleXBack }
-
-        return if (hLines.size >= 2 && vLines.size >= 2) {
-            DetectedGrid(
-                hLines = hLines.sorted(),
-                vLines = vLines.sorted()
-            )
+        val dataRows = if (extractedRows.size > 1) {
+            extractedRows.drop(1)
         } else {
-            null
+            extractedRows
         }
+
+        Pair(headers, dataRows)
     }
 
-    private fun extractLinePeaks(profile: IntArray, threshold: Int): List<Float> {
-        val peaks = mutableListOf<Float>()
-        var inPeak = false
-        var peakStart = 0
+    private suspend fun recognizeText(bitmap: Bitmap): Text = suspendCancellableCoroutine { continuation ->
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val inputImage = InputImage.fromBitmap(bitmap, 0)
 
-        for (i in profile.indices) {
-            if (profile[i] >= threshold) {
-                if (!inPeak) {
-                    inPeak = true
-                    peakStart = i
-                }
-            } else {
-                if (inPeak) {
-                    peaks.add((peakStart + i - 1) / 2f)
-                    inPeak = false
-                }
+        recognizer.process(inputImage)
+            .addOnSuccessListener { visionText ->
+                if (continuation.isActive) continuation.resume(visionText)
             }
-        }
-        if (inPeak) {
-            peaks.add((peakStart + profile.size - 1) / 2f)
-        }
-        return peaks
+            .addOnFailureListener { exception ->
+                if (continuation.isActive) continuation.resumeWithException(exception)
+            }
     }
-
-    private suspend fun processImageAsync(image: InputImage): Text =
-        suspendCancellableCoroutine { cont ->
-            recognizer.process(image)
-                .addOnSuccessListener { visionText -> cont.resume(visionText) }
-                .addOnFailureListener { exception -> cont.resumeWithException(exception) }
-        }
 }

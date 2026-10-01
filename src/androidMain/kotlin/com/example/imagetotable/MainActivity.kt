@@ -63,8 +63,6 @@ import com.example.imagetotable.model.*
 import com.example.imagetotable.ocr.AndroidOcrService
 import com.example.imagetotable.ui.*
 import com.example.imagetotable.util.*
-import com.example.imagetotable.model.AttachmentType
-import com.example.imagetotable.model.CellAttachmentHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -184,6 +182,7 @@ fun MobileTableEditorScreen() {
     var showCropperDialog by remember { mutableStateOf(false) }
     var cropperTargetPageIndex by remember { mutableStateOf<Int?>(null) }
     var showDedicatedEditor by remember { mutableStateOf(false) }
+    var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var showNewTableDialog by remember { mutableStateOf(false) }
     var showAllWordsDialog by remember { mutableStateOf(false) }
     var showTableHistoryDrawer by remember { mutableStateOf(false) }
@@ -231,9 +230,6 @@ fun MobileTableEditorScreen() {
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
-    // Cell Attachment Dialog State
-var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-
 
     // Accurate Index Remapping Helpers (Protects hidden rows/columns from becoming unhidden on deletion)
     fun deleteColumnAndRemapIndices(cIdx: Int) {
@@ -354,7 +350,8 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
 
     fun openDatePickerForCell(rIdx: Int, cIdx: Int) {
         val cal = Calendar.getInstance()
-        val currentVal = currentTable.rows.getOrNull(rIdx)?.getOrNull(cIdx) ?: ""
+        val currentRaw = currentTable.rows.getOrNull(rIdx)?.getOrNull(cIdx) ?: ""
+        val currentVal = CellAttachmentHelper.parseCellContent(currentRaw).displayText
         try {
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
             val parsed = sdf.parse(currentVal)
@@ -380,7 +377,16 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                         cal.set(Calendar.HOUR_OF_DAY, hourOfDay)
                         cal.set(Calendar.MINUTE, minute)
                         val outFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                        currentTable.setCellValue(rIdx, cIdx, outFormat.format(cal.time))
+                        val formattedDate = outFormat.format(cal.time)
+                        val existingPayload = CellAttachmentHelper.parseCellContent(currentRaw)
+                        val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                            displayText = formattedDate,
+                            attachments = existingPayload.attachments,
+                            note = existingPayload.note,
+                            additionalNote = existingPayload.additionalNote,
+                            checklists = existingPayload.checklists
+                        )
+                        currentTable.setCellValue(rIdx, cIdx, updatedEncoded)
                         currentTable.markUpdated()
                         TableRepository.saveOrUpdate(currentTable)
                     },
@@ -755,7 +761,16 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                                 val text = (h + r.flatten()).filter { it.isNotBlank() }.joinToString(" ")
                                 val (tr, tc) = anchorCell
                                 withContext(Dispatchers.Main) {
-                                    currentTable.setCellValue(tr, tc, text)
+                                    val currentRaw = currentTable.rows.getOrNull(tr)?.getOrNull(tc) ?: ""
+                                    val payload = CellAttachmentHelper.parseCellContent(currentRaw)
+                                    val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                                        displayText = text,
+                                        attachments = payload.attachments,
+                                        note = payload.note,
+                                        additionalNote = payload.additionalNote,
+                                        checklists = payload.checklists
+                                    )
+                                    currentTable.setCellValue(tr, tc, updatedEncoded)
                                     currentTable.markUpdated()
                                     TableRepository.saveOrUpdate(currentTable)
                                     tableSnapshot = currentTable.createSnapshot()
@@ -854,7 +869,9 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
             )
         }
     }
-        if (activeAttachmentCellCoord != null) {
+
+    // CELL ATTACHMENT, NOTES & CHECKLISTS DIALOG
+    if (activeAttachmentCellCoord != null) {
         val (r, c) = activeAttachmentCellCoord!!
         val rawCell = currentTable.rows.getOrNull(r)?.getOrNull(c) ?: ""
         val payload = CellAttachmentHelper.parseCellContent(rawCell)
@@ -886,62 +903,6 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
             }
         )
     }
-
-  /*  if (activeAttachmentCellCoord != null) {
-        val (r, c) = activeAttachmentCellCoord!!
-        val rawCell = currentTable.rows.getOrNull(r)?.getOrNull(c) ?: ""
-        val payload = CellAttachmentHelper.parseCellContent(rawCell)
-        val colName = currentTable.headers.getOrNull(c)?.name ?: "Col ${c + 1}"
-
-        CellAttachmentDialog(
-            rowIndex = r,
-            columnIndex = c,
-            columnName = colName,
-            initialText = payload.displayText,
-            initialNote = payload.note,
-            initialAttachments = payload.attachments,
-            initialChecklists = payload.checklists,
-            onDismiss = { activeAttachmentCellCoord = null },
-            onSave = { updatedText, updatedNote, updatedAttachments, updatedChecklists ->
-                val encoded = CellAttachmentHelper.formatCellContent(
-                    displayText = updatedText,
-                    attachments = updatedAttachments,
-                    note = updatedNote,
-                    checklists = updatedChecklists
-                )
-                currentTable.setCellValue(r, c, encoded)
-                currentTable.markUpdated()
-                TableRepository.saveOrUpdate(currentTable)
-                tableSnapshot = currentTable.createSnapshot()
-                statusMessage = "Updated cell ($r, $c)"
-            }
-        )
-    }*/
-
-    // CELL ATTACHMENT AND PREVIEW DIALOG
-/*if (activeAttachmentCellCoord != null) {
-    val (r, c) = activeAttachmentCellCoord!!
-    val rawCell = currentTable.rows.getOrNull(r)?.getOrNull(c) ?: ""
-    val (parsedText, parsedAttachments) = CellAttachmentHelper.parseCellContent(rawCell)
-    val colName = currentTable.headers.getOrNull(c)?.name ?: "Col ${c + 1}"
-
-    CellAttachmentDialog(
-        rowIndex = r,
-        columnIndex = c,
-        columnName = colName,
-        initialText = parsedText,
-        initialAttachments = parsedAttachments,
-        onDismiss = { activeAttachmentCellCoord = null },
-        onSave = { updatedText, updatedAttachments ->
-            val encoded = CellAttachmentHelper.formatCellContent(updatedText, updatedAttachments)
-            currentTable.setCellValue(r, c, encoded)
-            currentTable.markUpdated()
-            TableRepository.saveOrUpdate(currentTable)
-            tableSnapshot = currentTable.createSnapshot()
-            statusMessage = "Updated cell ($r, $c) with ${updatedAttachments.size} attachment(s)"
-        }
-    )
-}*/
 
     if (showNewTableDialog) {
         NewTableDialog(
@@ -1011,7 +972,16 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                     TokenPlacementMode.SEQUENCE_FROM_ACTIVE -> {
                         var (tr, tc) = anchorCell
                         for (w in words) {
-                            currentTable.setCellValue(tr, tc, w)
+                            val currentRaw = currentTable.rows.getOrNull(tr)?.getOrNull(tc) ?: ""
+                            val payload = CellAttachmentHelper.parseCellContent(currentRaw)
+                            val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                                displayText = w,
+                                attachments = payload.attachments,
+                                note = payload.note,
+                                additionalNote = payload.additionalNote,
+                                checklists = payload.checklists
+                            )
+                            currentTable.setCellValue(tr, tc, updatedEncoded)
                             if (tc < currentTable.headers.size - 1) tc++ else {
                                 if (tr < currentTable.rows.size - 1) { tr++; tc = 0 } else {
                                     currentTable.addRow(); tr++; tc = 0
@@ -1022,7 +992,16 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                     TokenPlacementMode.FILL_MULTI_SELECTION -> {
                         selectedCells.forEachIndexed { idx, (r, c) ->
                             val text = words.getOrElse(idx % words.size) { "" }
-                            currentTable.setCellValue(r, c, text)
+                            val currentRaw = currentTable.rows.getOrNull(r)?.getOrNull(c) ?: ""
+                            val payload = CellAttachmentHelper.parseCellContent(currentRaw)
+                            val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                                displayText = text,
+                                attachments = payload.attachments,
+                                note = payload.note,
+                                additionalNote = payload.additionalNote,
+                                checklists = payload.checklists
+                            )
+                            currentTable.setCellValue(r, c, updatedEncoded)
                         }
                     }
                     TokenPlacementMode.APPEND_NEW_ROW -> {
@@ -1057,10 +1036,15 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
         )
     }
 
-    // ADVANCED ROW EDITOR DIALOG - Stays open smoothly across Prev/Next navigation without tearing down
+    // ADVANCED ROW EDITOR DIALOG (Passes only clean displayText and preserves attachments upon saving)
     if (showRowEditorDialog && currentTable.rows.isNotEmpty()) {
         val safeIndex = editingRowIndex.coerceIn(0, currentTable.rows.size - 1)
-        key(currentTable.id) {
+        key(currentTable.id, safeIndex) {
+            val rawRowValues = currentTable.rows.getOrElse(safeIndex) { emptyList() }
+            val cleanRowValues = remember(rawRowValues) {
+                rawRowValues.map { CellAttachmentHelper.parseCellContent(it).displayText }
+            }
+
             AdvancedRowEditorDialog(
                 initialTableName = currentTable.tableName,
                 initialTableDateTime = currentTable.tableDateTime,
@@ -1068,7 +1052,7 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                 totalRows = currentTable.rows.size,
                 rowName = currentTable.rowNames.getOrElse(safeIndex) { "Row ${safeIndex + 1}" },
                 headers = currentTable.headers,
-                rowValues = currentTable.rows.getOrElse(safeIndex) { emptyList() },
+                rowValues = cleanRowValues,
                 onDismiss = { showRowEditorDialog = false },
                 onSaveRowAndTable = { newName, newDateTime, updatedRowName, updatedHeaders, updatedValues ->
                     currentTable.tableName = newName
@@ -1082,11 +1066,22 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                         }
                     }
                     if (safeIndex in currentTable.rows.indices) {
-                        currentTable.rows[safeIndex].clear()
-                        currentTable.rows[safeIndex].addAll(updatedValues)
-                        while (currentTable.rows[safeIndex].size < currentTable.headers.size) {
-                            currentTable.rows[safeIndex].add("")
+                        val mergedValues = updatedValues.mapIndexed { i, newText ->
+                            val oldRaw = currentTable.rows[safeIndex].getOrElse(i) { "" }
+                            val payload = CellAttachmentHelper.parseCellContent(oldRaw)
+                            CellAttachmentHelper.formatCellContent(
+                                displayText = newText,
+                                attachments = payload.attachments,
+                                note = payload.note,
+                                additionalNote = payload.additionalNote,
+                                checklists = payload.checklists
+                            )
+                        }.toMutableList()
+                        while (mergedValues.size < currentTable.headers.size) {
+                            mergedValues.add("")
                         }
+                        currentTable.rows[safeIndex].clear()
+                        currentTable.rows[safeIndex].addAll(mergedValues)
                     }
                     currentTable.recomputeFormulas()
                     currentTable.markUpdated()
@@ -1429,7 +1424,9 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                 val rName = currentTable.rowNames.getOrElse(idx) { "Row ${idx + 1}" }
                 rowSearchQueryInDialog.isBlank() ||
                 rName.contains(rowSearchQueryInDialog, ignoreCase = true) ||
-                currentTable.rows[idx].any { it.contains(rowSearchQueryInDialog, ignoreCase = true) }
+                currentTable.rows[idx].any {
+                    CellAttachmentHelper.parseCellContent(it).displayText.contains(rowSearchQueryInDialog, ignoreCase = true)
+                }
             }
         }
 
@@ -1478,7 +1475,9 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                         itemsIndexed(filteredRowsForDialog) { _, rIdx ->
                             val rName = currentTable.rowNames.getOrElse(rIdx) { "Row ${rIdx + 1}" }
                             val isVisible = !hiddenRows.contains(rIdx)
-                            val firstCellVal = currentTable.rows.getOrNull(rIdx)?.firstOrNull().orEmpty()
+                            val firstCellVal = CellAttachmentHelper.parseCellContent(
+                                currentTable.rows.getOrNull(rIdx)?.firstOrNull().orEmpty()
+                            ).displayText
 
                             Row(
                                 modifier = Modifier
@@ -1615,27 +1614,31 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
 
     val visibleColIndices = currentTable.headers.indices.filter { !hiddenColumns.contains(it) }
 
+    // Strip metadata when searching and filtering rows
     val filteredRowIndices = currentTable.rows.indices.filter { rIdx ->
         if (hiddenRows.contains(rIdx)) return@filter false
 
         val nameMatch = currentTable.rowNames.getOrElse(rIdx) { "" }.contains(globalSearchQuery, ignoreCase = true)
-        val cellMatch = currentTable.rows[rIdx].any { it.contains(globalSearchQuery, ignoreCase = true) }
+        val cellMatch = currentTable.rows[rIdx].any { raw ->
+            CellAttachmentHelper.parseCellContent(raw).displayText.contains(globalSearchQuery, ignoreCase = true)
+        }
         val matchesGlobal = globalSearchQuery.isBlank() || nameMatch || cellMatch
 
         val matchesColFilters = columnValueFilters.all { (colIdx, selectedSet) ->
-            val cellVal = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
+            val cellVal = CellAttachmentHelper.parseCellContent(currentTable.rows[rIdx].getOrElse(colIdx) { "" }).displayText
             selectedSet.contains(cellVal)
         }
         matchesGlobal && matchesColFilters
     }
 
+    // Filter values dialog: Groups purely by clean display text (e.g. "John Doe")
     if (activeFilterColIdx != null) {
         val targetCol = activeFilterColIdx!!
         val colName = currentTable.headers.getOrNull(targetCol)?.name ?: "Column ${targetCol + 1}"
 
         val distinctValuesWithCount = remember(currentTable.rows, targetCol) {
             currentTable.rows
-                .map { it.getOrElse(targetCol) { "" } }
+                .map { raw -> CellAttachmentHelper.parseCellContent(raw.getOrElse(targetCol) { "" }).displayText }
                 .groupingBy { it }
                 .eachCount()
                 .toList()
@@ -1997,6 +2000,7 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                // Clicking outside the table releases the keyboard and resets active cell cursor
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = {
                         focusManager.clearFocus()
@@ -2264,11 +2268,13 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                                             itemsIndexed(dateColIndices) { _, colIdx ->
                                                 val colDef = currentTable.headers[colIdx]
                                                 val presentCount = filteredRowIndices.count { rIdx ->
-                                                    val cellVal = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
+                                                    val raw = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
+                                                    val cellVal = CellAttachmentHelper.parseCellContent(raw).displayText
                                                     isAttendancePresent(cellVal)
                                                 }
                                                 val absentCount = filteredRowIndices.count { rIdx ->
-                                                    val cellVal = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
+                                                    val raw = currentTable.rows[rIdx].getOrElse(colIdx) { "" }
+                                                    val cellVal = CellAttachmentHelper.parseCellContent(raw).displayText
                                                     isAttendanceAbsent(cellVal)
                                                 }
                                                 val ratio = (presentCount.toFloat() / totalRowsFiltered).coerceIn(0.05f, 1f)
@@ -2541,7 +2547,16 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                                                     Button(
                                                         onClick = {
                                                             if (selectedTokens.isNotEmpty()) {
-                                                                currentTable.setCellValue(tr, tc, selectedTokens.joinToString(" "))
+                                                                val currentRaw = currentTable.rows.getOrNull(tr)?.getOrNull(tc) ?: ""
+                                                                val payload = CellAttachmentHelper.parseCellContent(currentRaw)
+                                                                val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                                                                    displayText = selectedTokens.joinToString(" "),
+                                                                    attachments = payload.attachments,
+                                                                    note = payload.note,
+                                                                    additionalNote = payload.additionalNote,
+                                                                    checklists = payload.checklists
+                                                                )
+                                                                currentTable.setCellValue(tr, tc, updatedEncoded)
                                                                 currentTable.markUpdated()
                                                                 TableRepository.saveOrUpdate(currentTable)
                                                                 tableSnapshot = currentTable.createSnapshot()
@@ -2566,7 +2581,16 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                                                         onClick = {
                                                             var (cr, cc) = anchorCell
                                                             for (w in selectedTokens) {
-                                                                currentTable.setCellValue(cr, cc, w)
+                                                                val currentRaw = currentTable.rows.getOrNull(cr)?.getOrNull(cc) ?: ""
+                                                                val payload = CellAttachmentHelper.parseCellContent(currentRaw)
+                                                                val updatedEncoded = CellAttachmentHelper.formatCellContent(
+                                                                    displayText = w,
+                                                                    attachments = payload.attachments,
+                                                                    note = payload.note,
+                                                                    additionalNote = payload.additionalNote,
+                                                                    checklists = payload.checklists
+                                                                )
+                                                                currentTable.setCellValue(cr, cc, updatedEncoded)
                                                                 if (cc < currentTable.headers.size - 1) cc++ else {
                                                                     if (cr < currentTable.rows.size - 1) { cr++; cc = 0 } else { currentTable.addRow(); cr++; cc = 0 }
                                                                 }
@@ -3007,16 +3031,26 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                                                     }
                                                 }
 
-                                                /*visibleColIndices.forEach { colIdx ->
+                                                visibleColIndices.forEach { colIdx ->
                                                     val colDef = currentTable.headers[colIdx]
                                                     val cellCoord = Pair(origRIdx, colIdx)
                                                     val cellValue = rowData.getOrElse(colIdx) { "" }
                                                     val isSelected = selectedCells.contains(cellCoord)
                                                     val isAnchor = anchorCell == cellCoord
 
+                                                    // Parse visible text and embedded attachments
+                                                    val payload = remember(cellValue) {
+                                                        CellAttachmentHelper.parseCellContent(cellValue)
+                                                    }
+                                                    val displayVal = payload.displayText
+                                                    val cellAttachments = payload.attachments
+                                                    val cellChecklists = payload.checklists
+                                                    val cellNote = payload.note
+                                                    val cellExtraNote = payload.additionalNote
+
                                                     val isDateCol = colDef.type == ColumnType.DATE || parseDateFromHeader(colDef.name) != null
-                                                    val isPresent = isAttendancePresent(cellValue)
-                                                    val isAbsent = isAttendanceAbsent(cellValue)
+                                                    val isPresent = isAttendancePresent(displayVal)
+                                                    val isAbsent = isAttendanceAbsent(displayVal)
                                                     val isFormulaCol = colDef.type == ColumnType.FORMULA
 
                                                     val cellBg = when {
@@ -3042,233 +3076,383 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                                                             .background(cellBg)
                                                             .padding(horizontal = (6 * tableZoomScale).dp, vertical = (4 * tableZoomScale).dp)
                                                     ) {
-                                                        if (isViewMode) {
-                                                            // VIEW MODE: Magnified read-only text value without triggering soft keyboard
-                                                            Text(
-                                                                text = cellValue.ifBlank { " " },
-                                                                fontSize = cellFontSize,
-                                                                color = when {
-                                                                    isPresent -> Color(0xFF2E7D32)
-                                                                    isAbsent -> Color(0xFFC62828)
-                                                                    else -> Color.Black
-                                                                },
-                                                                fontWeight = if (isPresent || isAbsent || isFormulaCol) FontWeight.Bold else FontWeight.Normal,
-                                                                modifier = Modifier
-                                                                    .fillMaxWidth()
-                                                                    .clickable {
-                                                                        anchorCell = cellCoord
-                                                                        selectedCells.clear()
-                                                                        selectedCells.add(cellCoord)
-                                                                    }
-                                                            )
-                                                        } else {
-                                                            // EDIT MODE: Magnified direct in-cell editing
-                                                            when (colDef.type) {
-                                                                ColumnType.FORMULA -> {
-                                                                    Row(
-                                                                        modifier = Modifier
-                                                                            .fillMaxWidth()
-                                                                            .clickable {
-                                                                                formulaEditingColIndex = colIdx
-                                                                                formulaInitialColName = colDef.name
-                                                                                formulaInitialExpression = colDef.formula
-                                                                                showFormulaBuilderDialog = true
-                                                                            },
-                                                                        verticalAlignment = Alignment.CenterVertically,
-                                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                                    ) {
+                                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                                            // Top Row: Value / Editor + Clip Icon Button
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.SpaceBetween
+                                                            ) {
+                                                                Box(modifier = Modifier.weight(1f)) {
+                                                                    if (isViewMode) {
                                                                         Text(
-                                                                            text = cellValue.ifBlank { "0" },
+                                                                            text = displayVal.ifBlank { " " },
                                                                             fontSize = cellFontSize,
-                                                                            fontWeight = FontWeight.Bold,
-                                                                            color = if (cellValue.startsWith("#")) Color.Red else Color(0xFF1B5E20),
-                                                                            modifier = Modifier.weight(1f)
+                                                                            color = when {
+                                                                                isPresent -> Color(0xFF2E7D32)
+                                                                                isAbsent -> Color(0xFFC62828)
+                                                                                else -> Color.Black
+                                                                            },
+                                                                            fontWeight = if (isPresent || isAbsent || isFormulaCol) FontWeight.Bold else FontWeight.Normal,
+                                                                            modifier = Modifier
+                                                                                .fillMaxWidth()
+                                                                                .clickable {
+                                                                                    anchorCell = cellCoord
+                                                                                    selectedCells.clear()
+                                                                                    selectedCells.add(cellCoord)
+                                                                                }
                                                                         )
+                                                                    } else {
+                                                                        when (colDef.type) {
+                                                                            ColumnType.FORMULA -> {
+                                                                                Row(
+                                                                                    modifier = Modifier
+                                                                                        .fillMaxWidth()
+                                                                                        .clickable {
+                                                                                            formulaEditingColIndex = colIdx
+                                                                                            formulaInitialColName = colDef.name
+                                                                                            formulaInitialExpression = colDef.formula
+                                                                                            showFormulaBuilderDialog = true
+                                                                                        },
+                                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                                                ) {
+                                                                                    Text(
+                                                                                        text = displayVal.ifBlank { "0" },
+                                                                                        fontSize = cellFontSize,
+                                                                                        fontWeight = FontWeight.Bold,
+                                                                                        color = if (displayVal.startsWith("#")) Color.Red else Color(0xFF1B5E20),
+                                                                                        modifier = Modifier.weight(1f)
+                                                                                    )
+                                                                                    Box(
+                                                                                        modifier = Modifier
+                                                                                            .background(Color(0xFFDCEDC8), RoundedCornerShape(3.dp))
+                                                                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                                    ) {
+                                                                                        Text("fx", fontSize = badgeFontSize, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                                    }
+                                                                                }
+                                                                            }
+
+                                                                            ColumnType.DATE -> {
+                                                                                Row(
+                                                                                    modifier = Modifier.fillMaxWidth(),
+                                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                                                ) {
+                                                                                    BasicTextField(
+                                                                                        value = displayVal,
+                                                                                        onValueChange = { newVal ->
+                                                                                            val encoded = CellAttachmentHelper.formatCellContent(
+                                                                                                displayText = newVal,
+                                                                                                attachments = cellAttachments,
+                                                                                                note = cellNote,
+                                                                                                additionalNote = cellExtraNote,
+                                                                                                checklists = cellChecklists
+                                                                                            )
+                                                                                            currentTable.setCellValue(origRIdx, colIdx, encoded)
+                                                                                            currentTable.markUpdated()
+                                                                                        },
+                                                                                        enabled = !isMultiSelectMode,
+                                                                                        textStyle = TextStyle(
+                                                                                            fontSize = dateBtnFontSize,
+                                                                                            fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
+                                                                                            color = when {
+                                                                                                isPresent -> Color(0xFF2E7D32)
+                                                                                                isAbsent -> Color(0xFFC62828)
+                                                                                                else -> Color.Black
+                                                                                            }
+                                                                                        ),
+                                                                                        modifier = Modifier
+                                                                                            .weight(1f)
+                                                                                            .onFocusChanged {
+                                                                                                if (it.isFocused && !isMultiSelectMode) {
+                                                                                                    anchorCell = cellCoord
+                                                                                                    selectedCells.clear()
+                                                                                                    selectedCells.add(cellCoord)
+                                                                                                }
+                                                                                            }
+                                                                                    )
+
+                                                                                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                                                        Box(
+                                                                                            modifier = Modifier
+                                                                                                .background(Color(0xFFE3F2FD), RoundedCornerShape(3.dp))
+                                                                                                .clickable { openDatePickerForCell(origRIdx, colIdx) }
+                                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                        ) {
+                                                                                            Text("📅", fontSize = dateBtnFontSize)
+                                                                                        }
+
+                                                                                        Box(
+                                                                                            modifier = Modifier
+                                                                                                .background(
+                                                                                                    if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
+                                                                                                    RoundedCornerShape(3.dp)
+                                                                                                )
+                                                                                                .clickable {
+                                                                                                    val newVal = if (isPresent) "" else "Present"
+                                                                                                    val encoded = CellAttachmentHelper.formatCellContent(
+                                                                                                        displayText = newVal,
+                                                                                                        attachments = cellAttachments,
+                                                                                                        note = cellNote,
+                                                                                                        additionalNote = cellExtraNote,
+                                                                                                        checklists = cellChecklists
+                                                                                                    )
+                                                                                                    currentTable.setCellValue(origRIdx, colIdx, encoded)
+                                                                                                    currentTable.markUpdated()
+                                                                                                }
+                                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                        ) {
+                                                                                            Text("P", fontSize = subTextFontSize, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
+                                                                                        }
+
+                                                                                        Box(
+                                                                                            modifier = Modifier
+                                                                                                .background(
+                                                                                                    if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
+                                                                                                    RoundedCornerShape(3.dp)
+                                                                                                )
+                                                                                                .clickable {
+                                                                                                    val newVal = if (isAbsent) "" else "Absent"
+                                                                                                    val encoded = CellAttachmentHelper.formatCellContent(
+                                                                                                        displayText = newVal,
+                                                                                                        attachments = cellAttachments,
+                                                                                                        note = cellNote,
+                                                                                                        additionalNote = cellExtraNote,
+                                                                                                        checklists = cellChecklists
+                                                                                                    )
+                                                                                                    currentTable.setCellValue(origRIdx, colIdx, encoded)
+                                                                                                    currentTable.markUpdated()
+                                                                                                }
+                                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                        ) {
+                                                                                            Text("A", fontSize = subTextFontSize, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+
+                                                                            ColumnType.NUMBER -> {
+                                                                                Row(
+                                                                                    modifier = Modifier.fillMaxWidth(),
+                                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                                                ) {
+                                                                                    BasicTextField(
+                                                                                        value = displayVal,
+                                                                                        onValueChange = { newVal ->
+                                                                                            val filtered = newVal.filter { it.isDigit() || it == '-' }
+                                                                                            val encoded = CellAttachmentHelper.formatCellContent(
+                                                                                                displayText = filtered,
+                                                                                                attachments = cellAttachments,
+                                                                                                note = cellNote,
+                                                                                                additionalNote = cellExtraNote,
+                                                                                                checklists = cellChecklists
+                                                                                            )
+                                                                                            currentTable.setCellValue(origRIdx, colIdx, encoded)
+                                                                                            currentTable.markUpdated()
+                                                                                        },
+                                                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                                                        enabled = !isMultiSelectMode,
+                                                                                        textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
+                                                                                        modifier = Modifier
+                                                                                            .weight(1f)
+                                                                                            .onFocusChanged {
+                                                                                                if (it.isFocused && !isMultiSelectMode) {
+                                                                                                    anchorCell = cellCoord
+                                                                                                    selectedCells.clear()
+                                                                                                    selectedCells.add(cellCoord)
+                                                                                                }
+                                                                                            }
+                                                                                    )
+
+                                                                                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                                                        Box(
+                                                                                            modifier = Modifier
+                                                                                                .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                                                .clickable {
+                                                                                                    val num = displayVal.toIntOrNull() ?: 0
+                                                                                                    val encoded = CellAttachmentHelper.formatCellContent(
+                                                                                                        displayText = (num - 1).toString(),
+                                                                                                        attachments = cellAttachments,
+                                                                                                        note = cellNote,
+                                                                                                        additionalNote = cellExtraNote,
+                                                                                                        checklists = cellChecklists
+                                                                                                    )
+                                                                                                    currentTable.setCellValue(origRIdx, colIdx, encoded)
+                                                                                                    currentTable.markUpdated()
+                                                                                                }
+                                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                        ) {
+                                                                                            Text("-", fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold)
+                                                                                        }
+
+                                                                                        Box(
+                                                                                            modifier = Modifier
+                                                                                                .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                                                .clickable {
+                                                                                                    val num = displayVal.toIntOrNull() ?: 0
+                                                                                                    val encoded = CellAttachmentHelper.formatCellContent(
+                                                                                                        displayText = (num + 1).toString(),
+                                                                                                        attachments = cellAttachments,
+                                                                                                        note = cellNote,
+                                                                                                        additionalNote = cellExtraNote,
+                                                                                                        checklists = cellChecklists
+                                                                                                    )
+                                                                                                    currentTable.setCellValue(origRIdx, colIdx, encoded)
+                                                                                                    currentTable.markUpdated()
+                                                                                                }
+                                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                                                        ) {
+                                                                                            Text("+", fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold)
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+
+                                                                            ColumnType.DECIMAL -> {
+                                                                                BasicTextField(
+                                                                                    value = displayVal,
+                                                                                    onValueChange = { newVal ->
+                                                                                        val filtered = newVal.filter { it.isDigit() || it == '.' || it == '-' }
+                                                                                        val encoded = CellAttachmentHelper.formatCellContent(
+                                                                                            displayText = filtered,
+                                                                                            attachments = cellAttachments,
+                                                                                            note = cellNote,
+                                                                                            additionalNote = cellExtraNote,
+                                                                                            checklists = cellChecklists
+                                                                                        )
+                                                                                        currentTable.setCellValue(origRIdx, colIdx, encoded)
+                                                                                        currentTable.markUpdated()
+                                                                                    },
+                                                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                                                                    enabled = !isMultiSelectMode,
+                                                                                    textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
+                                                                                    modifier = Modifier
+                                                                                        .fillMaxWidth()
+                                                                                        .onFocusChanged {
+                                                                                            if (it.isFocused && !isMultiSelectMode) {
+                                                                                                anchorCell = cellCoord
+                                                                                                selectedCells.clear()
+                                                                                                selectedCells.add(cellCoord)
+                                                                                            }
+                                                                                        }
+                                                                                )
+                                                                            }
+
+                                                                            ColumnType.TEXT -> {
+                                                                                BasicTextField(
+                                                                                    value = displayVal,
+                                                                                    onValueChange = { newVal ->
+                                                                                        val encoded = CellAttachmentHelper.formatCellContent(
+                                                                                            displayText = newVal,
+                                                                                            attachments = cellAttachments,
+                                                                                            note = cellNote,
+                                                                                            additionalNote = cellExtraNote,
+                                                                                            checklists = cellChecklists
+                                                                                        )
+                                                                                        currentTable.setCellValue(origRIdx, colIdx, encoded)
+                                                                                        currentTable.markUpdated()
+                                                                                    },
+                                                                                    enabled = !isMultiSelectMode,
+                                                                                    textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
+                                                                                    modifier = Modifier
+                                                                                        .fillMaxWidth()
+                                                                                        .onFocusChanged {
+                                                                                            if (it.isFocused && !isMultiSelectMode) {
+                                                                                                anchorCell = cellCoord
+                                                                                                selectedCells.clear()
+                                                                                                selectedCells.add(cellCoord)
+                                                                                            }
+                                                                                        }
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+
+                                                                // 📎 Attachment Manager Trigger Button
+                                                                Text(
+                                                                    text = if (cellAttachments.isNotEmpty()) "📎 ${cellAttachments.size}" else "📎",
+                                                                    fontSize = subTextFontSize,
+                                                                    fontWeight = if (cellAttachments.isNotEmpty()) FontWeight.Bold else FontWeight.Normal,
+                                                                    color = if (cellAttachments.isNotEmpty()) Color(0xFF0D47A1) else Color(0xFF90A4AE),
+                                                                    modifier = Modifier
+                                                                        .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                        .padding(start = 4.dp, end = 2.dp)
+                                                                )
+                                                            }
+
+                                                            // Inline Badges: Notes, Extra Notes, Checklists & Attachments
+                                                            if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank()) {
+                                                                Row(
+                                                                    modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .horizontalScroll(rememberScrollState())
+                                                                        .padding(top = 2.dp),
+                                                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                                    verticalAlignment = Alignment.CenterVertically
+                                                                ) {
+                                                                    if (cellNote.isNotBlank()) {
                                                                         Box(
                                                                             modifier = Modifier
-                                                                                .background(Color(0xFFDCEDC8), RoundedCornerShape(3.dp))
+                                                                                .background(Color(0xFFFFF9C4), RoundedCornerShape(3.dp))
+                                                                                .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                        ) { Text("📝 Note", fontSize = badgeFontSize, color = Color(0xFFF57F17)) }
+                                                                    }
+
+                                                                    if (cellExtraNote.isNotBlank()) {
+                                                                        Box(
+                                                                            modifier = Modifier
+                                                                                .background(Color(0xFFF3E5F5), RoundedCornerShape(3.dp))
+                                                                                .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                        ) { Text("📋 +Note", fontSize = badgeFontSize, color = Color(0xFF7B1FA2)) }
+                                                                    }
+
+                                                                    if (cellChecklists.isNotEmpty()) {
+                                                                        val done = cellChecklists.count { it.isChecked }
+                                                                        Box(
+                                                                            modifier = Modifier
+                                                                                .background(Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
+                                                                                .clickable { activeAttachmentCellCoord = cellCoord }
                                                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                                                         ) {
-                                                                            Text("fx", fontSize = badgeFontSize, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                                                            Text("☑ $done/${cellChecklists.size}", fontSize = badgeFontSize, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
                                                                         }
                                                                     }
-                                                                }
 
-                                                                ColumnType.DATE -> {
-                                                                    Row(
-                                                                        modifier = Modifier.fillMaxWidth(),
-                                                                        verticalAlignment = Alignment.CenterVertically,
-                                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                                    ) {
-                                                                        BasicTextField(
-                                                                            value = cellValue,
-                                                                            onValueChange = {
-                                                                                currentTable.setCellValue(origRIdx, colIdx, it)
-                                                                                currentTable.markUpdated()
-                                                                            },
-                                                                            enabled = !isMultiSelectMode,
-                                                                            textStyle = TextStyle(
-                                                                                fontSize = dateBtnFontSize,
-                                                                                fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
-                                                                                color = when {
-                                                                                    isPresent -> Color(0xFF2E7D32)
-                                                                                    isAbsent -> Color(0xFFC62828)
-                                                                                    else -> Color.Black
-                                                                                }
-                                                                            ),
+                                                                    cellAttachments.take(2).forEach { att ->
+                                                                        Box(
                                                                             modifier = Modifier
-                                                                                .weight(1f)
-                                                                                .onFocusChanged {
-                                                                                    if (it.isFocused && !isMultiSelectMode) {
-                                                                                        anchorCell = cellCoord
-                                                                                        selectedCells.clear()
-                                                                                        selectedCells.add(cellCoord)
-                                                                                    }
-                                                                                }
-                                                                        )
-
-                                                                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                                            Box(
-                                                                                modifier = Modifier
-                                                                                    .background(Color(0xFFE3F2FD), RoundedCornerShape(3.dp))
-                                                                                .clickable { openDatePickerForCell(origRIdx, colIdx) }
-                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                            ) {
-                                                                                Text("📅", fontSize = dateBtnFontSize)
-                                                                            }
-
-                                                                            Box(
-                                                                                modifier = Modifier
-                                                                                    .background(
-                                                                                        if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
-                                                                                        RoundedCornerShape(3.dp)
-                                                                                    )
-                                                                                    .clickable {
-                                                                                        val newVal = if (isPresent) "" else "Present"
-                                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                                        currentTable.markUpdated()
-                                                                                    }
-                                                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                            ) {
-                                                                                Text("P", fontSize = subTextFontSize, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
-                                                                            }
-
-                                                                            Box(
-                                                                                modifier = Modifier
-                                                                                    .background(
-                                                                                        if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
-                                                                                        RoundedCornerShape(3.dp)
-                                                                                    )
-                                                                                    .clickable {
-                                                                                        val newVal = if (isAbsent) "" else "Absent"
-                                                                                        currentTable.setCellValue(origRIdx, colIdx, newVal)
-                                                                                        currentTable.markUpdated()
-                                                                                    }
-                                                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                            ) {
-                                                                                Text("A", fontSize = subTextFontSize, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
-                                                                            }
+                                                                                .background(if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
+                                                                                .clickable { activeAttachmentCellCoord = cellCoord }
+                                                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                        ) {
+                                                                            Text(
+                                                                                text = when (att.type) {
+                                                                                    AttachmentType.IMAGE -> "🖼 ${att.displayName.take(6)}"
+                                                                                    AttachmentType.PDF -> "📄 PDF"
+                                                                                    AttachmentType.CONTACT -> "👤 ${att.displayName.take(6)}"
+                                                                                    AttachmentType.FILE -> "📁 ${att.displayName.take(6)}"
+                                                                                },
+                                                                                fontSize = badgeFontSize,
+                                                                                color = Color.DarkGray,
+                                                                                maxLines = 1
+                                                                            )
                                                                         }
                                                                     }
-                                                                }
 
-                                                                ColumnType.NUMBER -> {
-                                                                    Row(
-                                                                        modifier = Modifier.fillMaxWidth(),
-                                                                        verticalAlignment = Alignment.CenterVertically,
-                                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                                    ) {
-                                                                        BasicTextField(
-                                                                            value = cellValue,
-                                                                            onValueChange = { newVal ->
-                                                                                currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '-' })
-                                                                                currentTable.markUpdated()
-                                                                            },
-                                                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                                                            enabled = !isMultiSelectMode,
-                                                                            textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
-                                                                            modifier = Modifier
-                                                                                .weight(1f)
-                                                                                .onFocusChanged {
-                                                                                    if (it.isFocused && !isMultiSelectMode) {
-                                                                                        anchorCell = cellCoord
-                                                                                        selectedCells.clear()
-                                                                                        selectedCells.add(cellCoord)
-                                                                                    }
-                                                                                }
+                                                                    if (cellAttachments.size > 2) {
+                                                                        Text(
+                                                                            text = "+${cellAttachments.size - 2}",
+                                                                            fontSize = badgeFontSize,
+                                                                            color = Color.Gray,
+                                                                            modifier = Modifier.clickable { activeAttachmentCellCoord = cellCoord }
                                                                         )
-
-                                                                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                                                            Box(
-                                                                                modifier = Modifier
-                                                                                    .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                .clickable {
-                                                                                    val num = cellValue.toIntOrNull() ?: 0
-                                                                                    currentTable.setCellValue(origRIdx, colIdx, (num - 1).toString())
-                                                                                    currentTable.markUpdated()
-                                                                                }
-                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                            ) {
-                                                                                Text("-", fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold)
-                                                                            }
-
-                                                                            Box(
-                                                                                modifier = Modifier
-                                                                                    .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                                                .clickable {
-                                                                                    val num = cellValue.toIntOrNull() ?: 0
-                                                                                    currentTable.setCellValue(origRIdx, colIdx, (num + 1).toString())
-                                                                                    currentTable.markUpdated()
-                                                                                }
-                                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                                                            ) {
-                                                                                Text("+", fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold)
-                                                                            }
-                                                                        }
                                                                     }
-                                                                }
-
-                                                                ColumnType.DECIMAL -> {
-                                                                    BasicTextField(
-                                                                        value = cellValue,
-                                                                        onValueChange = { newVal ->
-                                                                            currentTable.setCellValue(origRIdx, colIdx, newVal.filter { it.isDigit() || it == '.' || it == '-' })
-                                                                            currentTable.markUpdated()
-                                                                        },
-                                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                                                        enabled = !isMultiSelectMode,
-                                                                        textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
-                                                                        modifier = Modifier
-                                                                            .fillMaxWidth()
-                                                                            .onFocusChanged {
-                                                                                if (it.isFocused && !isMultiSelectMode) {
-                                                                                    anchorCell = cellCoord
-                                                                                    selectedCells.clear()
-                                                                                    selectedCells.add(cellCoord)
-                                                                                }
-                                                                            }
-                                                                    )
-                                                                }
-
-                                                                ColumnType.TEXT -> {
-                                                                    BasicTextField(
-                                                                        value = cellValue,
-                                                                        onValueChange = {
-                                                                            currentTable.setCellValue(origRIdx, colIdx, it)
-                                                                            currentTable.markUpdated()
-                                                                        },
-                                                                        enabled = !isMultiSelectMode,
-                                                                        textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
-                                                                        modifier = Modifier
-                                                                            .fillMaxWidth()
-                                                                            .onFocusChanged {
-                                                                                if (it.isFocused && !isMultiSelectMode) {
-                                                                                    anchorCell = cellCoord
-                                                                                    selectedCells.clear()
-                                                                                    selectedCells.add(cellCoord)
-                                                                                }
-                                                                            }
-                                                                    )
                                                                 }
                                                             }
                                                         }
@@ -3288,495 +3472,7 @@ var activeAttachmentCellCoord by remember { mutableStateOf<Pair<Int, Int>?>(null
                                                             )
                                                         }
                                                     }
-                                                }*/
-
-                                                visibleColIndices.forEach { colIdx ->
-    val colDef = currentTable.headers[colIdx]
-    val cellCoord = Pair(origRIdx, colIdx)
-    val cellValue = rowData.getOrElse(colIdx) { "" }
-    val isSelected = selectedCells.contains(cellCoord)
-    val isAnchor = anchorCell == cellCoord
-
-    // Parse visible text and embedded attachments
-   /* val (displayVal, cellAttachments) = remember(cellValue) {
-        CellAttachmentHelper.parseCellContent(cellValue)
-    }*/
-    val payload = remember(cellValue) {
-        CellAttachmentHelper.parseCellContent(cellValue)
-    }
-    val displayVal = payload.displayText
-    val cellAttachments = payload.attachments
-    val cellChecklists = payload.checklists
-    val cellNote = payload.note
-    val cellExtraNote = payload.additionalNote
-
-    val isDateCol = colDef.type == ColumnType.DATE || parseDateFromHeader(colDef.name) != null
-    val isPresent = isAttendancePresent(displayVal)
-    val isAbsent = isAttendanceAbsent(displayVal)
-    val isFormulaCol = colDef.type == ColumnType.FORMULA
-
-    val cellBg = when {
-        isSelected && isMultiSelectMode -> Color(0xFFE1BEE7)
-        isSelected -> Color(0xFFBBDEFB)
-        isFormulaCol -> Color(0xFFF1F8E9)
-        isDateCol && isPresent -> Color(0xFFE8F5E9)
-        isDateCol && isAbsent -> Color(0xFFFFEBEE)
-        else -> Color.White
-    }
-    val cellBorder = when {
-        isAnchor -> Color(0xFF00C853)
-        isSelected && isMultiSelectMode -> Color(0xFF7B1FA2)
-        isSelected -> Color(0xFF1976D2)
-        isFormulaCol -> Color(0xFFA5D6A7)
-        else -> Color.LightGray
-    }
-
-    Box(
-        modifier = Modifier
-            .width(dataColWidth)
-            .border(width = if (isSelected || isAnchor) 2.dp else 0.5.dp, color = cellBorder)
-            .background(cellBg)
-            .padding(horizontal = (6 * tableZoomScale).dp, vertical = (4 * tableZoomScale).dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Top Row: Value / Editor + Clip Icon Button
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    if (isViewMode) {
-                        // VIEW MODE: Magnified read-only text value
-                        Text(
-                            text = displayVal.ifBlank { " " },
-                            fontSize = cellFontSize,
-                            color = when {
-                                isPresent -> Color(0xFF2E7D32)
-                                isAbsent -> Color(0xFFC62828)
-                                else -> Color.Black
-                            },
-                            fontWeight = if (isPresent || isAbsent || isFormulaCol) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    anchorCell = cellCoord
-                                    selectedCells.clear()
-                                    selectedCells.add(cellCoord)
-                                }
-                        )
-                    } else {
-                        // EDIT MODE: Direct in-cell editing
-                        when (colDef.type) {
-                            ColumnType.FORMULA -> {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            formulaEditingColIndex = colIdx
-                                            formulaInitialColName = colDef.name
-                                            formulaInitialExpression = colDef.formula
-                                            showFormulaBuilderDialog = true
-                                        },
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = displayVal.ifBlank { "0" },
-                                        fontSize = cellFontSize,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (displayVal.startsWith("#")) Color.Red else Color(0xFF1B5E20),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .background(Color(0xFFDCEDC8), RoundedCornerShape(3.dp))
-                                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                                    ) {
-                                        Text("fx", fontSize = badgeFontSize, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
-                                    }
-                                }
-                            }
-
-                            ColumnType.DATE -> {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    BasicTextField(
-                                        value = displayVal,
-                                        onValueChange = { newVal ->
-                                            val encoded = CellAttachmentHelper.formatCellContent(newVal, cellAttachments)
-                                            currentTable.setCellValue(origRIdx, colIdx, encoded)
-                                            currentTable.markUpdated()
-                                        },
-                                        enabled = !isMultiSelectMode,
-                                        textStyle = TextStyle(
-                                            fontSize = dateBtnFontSize,
-                                            fontWeight = if (isPresent || isAbsent) FontWeight.Bold else FontWeight.Normal,
-                                            color = when {
-                                                isPresent -> Color(0xFF2E7D32)
-                                                isAbsent -> Color(0xFFC62828)
-                                                else -> Color.Black
-                                            }
-                                        ),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .onFocusChanged {
-                                                if (it.isFocused && !isMultiSelectMode) {
-                                                    anchorCell = cellCoord
-                                                    selectedCells.clear()
-                                                    selectedCells.add(cellCoord)
                                                 }
-                                            }
-                                    )
-
-                                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .background(Color(0xFFE3F2FD), RoundedCornerShape(3.dp))
-                                                .clickable { openDatePickerForCell(origRIdx, colIdx) }
-                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                        ) {
-                                            Text("📅", fontSize = dateBtnFontSize)
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .background(
-                                                    if (isPresent) Color(0xFF2E7D32) else Color(0xFFC8E6C9),
-                                                    RoundedCornerShape(3.dp)
-                                                )
-                                                .clickable {
-                                                    val newVal = if (isPresent) "" else "Present"
-                                                    val encoded = CellAttachmentHelper.formatCellContent(newVal, cellAttachments)
-                                                    currentTable.setCellValue(origRIdx, colIdx, encoded)
-                                                    currentTable.markUpdated()
-                                                }
-                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                        ) {
-                                            Text("P", fontSize = subTextFontSize, fontWeight = FontWeight.Bold, color = if (isPresent) Color.White else Color(0xFF1B5E20))
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .background(
-                                                    if (isAbsent) Color(0xFFC62828) else Color(0xFFFFCDD2),
-                                                    RoundedCornerShape(3.dp)
-                                                )
-                                                .clickable {
-                                                    val newVal = if (isAbsent) "" else "Absent"
-                                                    val encoded = CellAttachmentHelper.formatCellContent(newVal, cellAttachments)
-                                                    currentTable.setCellValue(origRIdx, colIdx, encoded)
-                                                    currentTable.markUpdated()
-                                                }
-                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                        ) {
-                                            Text("A", fontSize = subTextFontSize, fontWeight = FontWeight.Bold, color = if (isAbsent) Color.White else Color(0xFFB71C1C))
-                                        }
-                                    }
-                                }
-                            }
-
-                            ColumnType.NUMBER -> {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    BasicTextField(
-                                        value = displayVal,
-                                        onValueChange = { newVal ->
-                                            val filtered = newVal.filter { it.isDigit() || it == '-' }
-                                            val encoded = CellAttachmentHelper.formatCellContent(filtered, cellAttachments)
-                                            currentTable.setCellValue(origRIdx, colIdx, encoded)
-                                            currentTable.markUpdated()
-                                        },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        enabled = !isMultiSelectMode,
-                                        textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .onFocusChanged {
-                                                if (it.isFocused && !isMultiSelectMode) {
-                                                    anchorCell = cellCoord
-                                                    selectedCells.clear()
-                                                    selectedCells.add(cellCoord)
-                                                }
-                                            }
-                                    )
-
-                                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                        Box(
-                                            modifier = Modifier
-                                                .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                .clickable {
-                                                    val num = displayVal.toIntOrNull() ?: 0
-                                                    val encoded = CellAttachmentHelper.formatCellContent((num - 1).toString(), cellAttachments)
-                                                    currentTable.setCellValue(origRIdx, colIdx, encoded)
-                                                    currentTable.markUpdated()
-                                                }
-                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                        ) {
-                                            Text("-", fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold)
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .background(Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                                                .clickable {
-                                                    val num = displayVal.toIntOrNull() ?: 0
-                                                    val encoded = CellAttachmentHelper.formatCellContent((num + 1).toString(), cellAttachments)
-                                                    currentTable.setCellValue(origRIdx, colIdx, encoded)
-                                                    currentTable.markUpdated()
-                                                }
-                                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                        ) {
-                                            Text("+", fontSize = dateBtnFontSize, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-                                }
-                            }
-
-                            ColumnType.DECIMAL -> {
-                                BasicTextField(
-                                    value = displayVal,
-                                    onValueChange = { newVal ->
-                                        val filtered = newVal.filter { it.isDigit() || it == '.' || it == '-' }
-                                        val encoded = CellAttachmentHelper.formatCellContent(filtered, cellAttachments)
-                                        currentTable.setCellValue(origRIdx, colIdx, encoded)
-                                        currentTable.markUpdated()
-                                    },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                    enabled = !isMultiSelectMode,
-                                    textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .onFocusChanged {
-                                            if (it.isFocused && !isMultiSelectMode) {
-                                                anchorCell = cellCoord
-                                                selectedCells.clear()
-                                                selectedCells.add(cellCoord)
-                                            }
-                                        }
-                                )
-                            }
-
-                            ColumnType.TEXT -> {
-                                BasicTextField(
-                                    value = displayVal,
-                                    onValueChange = { newVal ->
-                                        val encoded = CellAttachmentHelper.formatCellContent(newVal, cellAttachments)
-                                        currentTable.setCellValue(origRIdx, colIdx, encoded)
-                                        currentTable.markUpdated()
-                                    },
-                                    enabled = !isMultiSelectMode,
-                                    textStyle = TextStyle(fontSize = cellFontSize, color = Color.Black),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .onFocusChanged {
-                                            if (it.isFocused && !isMultiSelectMode) {
-                                                anchorCell = cellCoord
-                                                selectedCells.clear()
-                                                selectedCells.add(cellCoord)
-                                            }
-                                        }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 📎 Attachment Manager Trigger Button
-                Text(
-                    text = if (cellAttachments.isNotEmpty()) "📎${cellAttachments.size}" else "📎",
-                    fontSize = subTextFontSize,
-                    fontWeight = if (cellAttachments.isNotEmpty()) FontWeight.Bold else FontWeight.Normal,
-                    color = if (cellAttachments.isNotEmpty()) Color(0xFF0D47A1) else Color(0xFF90A4AE),
-                    modifier = Modifier
-                        .clickable { activeAttachmentCellCoord = cellCoord }
-                        .padding(start = 4.dp, end = 2.dp)
-                )
-            }
-
-            // Inline Previews of Attached Files & Contacts
-           /* if (cellAttachments.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(top = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    cellAttachments.take(3).forEach { att ->
-                        Box(
-                            modifier = Modifier
-                                .background(
-                                    if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1),
-                                    RoundedCornerShape(3.dp)
-                                )
-                                .clickable { activeAttachmentCellCoord = cellCoord }
-                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                        ) {
-                            Text(
-                                text = when (att.type) {
-                                    AttachmentType.IMAGE -> "🖼 ${att.displayName.take(7)}"
-                                    AttachmentType.PDF -> "📄 PDF"
-                                    AttachmentType.CONTACT -> "👤 ${att.displayName.take(8)}"
-                                    AttachmentType.FILE -> "📁 ${att.displayName.take(7)}"
-                                },
-                                fontSize = badgeFontSize,
-                                color = Color.DarkGray,
-                                maxLines = 1
-                            )
-                        }
-                    }*/
-
-                        // Shows status indicators for attachments, checklists, and notes directly on the grid
-    /*if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(top = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (cellNote.isNotBlank()) {
-                Box(
-                    modifier = Modifier
-                        .background(Color(0xFFFFF9C4), RoundedCornerShape(3.dp))
-                        .clickable { activeAttachmentCellCoord = cellCoord }
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) { Text("📝 Note", fontSize = badgeFontSize, color = Color(0xFFF57F17)) }
-            }
-
-            if (cellChecklists.isNotEmpty()) {
-                val done = cellChecklists.count { it.isChecked }
-                Box(
-                    modifier = Modifier
-                        .background(Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
-                        .clickable { activeAttachmentCellCoord = cellCoord }
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) { Text("☑ $done/${cellChecklists.size}", fontSize = badgeFontSize, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold) }
-            }
-
-            cellAttachments.take(2).forEach { att ->
-                Box(
-                    modifier = Modifier
-                        .background(if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                        .clickable { activeAttachmentCellCoord = cellCoord }
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = when (att.type) {
-                            AttachmentType.IMAGE -> "🖼 ${att.displayName.take(6)}"
-                            AttachmentType.PDF -> "📄 PDF"
-                            AttachmentType.CONTACT -> "👤 ${att.displayName.take(6)}"
-                            AttachmentType.FILE -> "📁 ${att.displayName.take(6)}"
-                        },
-                        fontSize = badgeFontSize,
-                        color = Color.DarkGray,
-                        maxLines = 1
-                    )
-                }
-            }*/
-            if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(top = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (cellNote.isNotBlank()) {
-                Box(
-                    modifier = Modifier
-                        .background(Color(0xFFFFF9C4), RoundedCornerShape(3.dp))
-                        .clickable { activeAttachmentCellCoord = cellCoord }
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) { Text("📝 Note", fontSize = badgeFontSize, color = Color(0xFFF57F17)) }
-            }
-
-            if (cellExtraNote.isNotBlank()) {
-                Box(
-                    modifier = Modifier
-                        .background(Color(0xFFF3E5F5), RoundedCornerShape(3.dp))
-                        .clickable { activeAttachmentCellCoord = cellCoord }
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) { Text("📋 +Note", fontSize = badgeFontSize, color = Color(0xFF7B1FA2)) }
-            }
-
-            if (cellChecklists.isNotEmpty()) {
-                val done = cellChecklists.count { it.isChecked }
-                Box(
-                    modifier = Modifier
-                        .background(Color(0xFFE8F5E9), RoundedCornerShape(3.dp))
-                        .clickable { activeAttachmentCellCoord = cellCoord }
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text("☑ $done/${cellChecklists.size}", fontSize = badgeFontSize, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
-                }
-            }
-
-            cellAttachments.take(2).forEach { att ->
-                Box(
-                    modifier = Modifier
-                        .background(if (att.type == AttachmentType.CONTACT) Color(0xFFE0F2FE) else Color(0xFFECEFF1), RoundedCornerShape(3.dp))
-                        .clickable { activeAttachmentCellCoord = cellCoord }
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = when (att.type) {
-                            AttachmentType.IMAGE -> "🖼 ${att.displayName.take(6)}"
-                            AttachmentType.PDF -> "📄 PDF"
-                            AttachmentType.CONTACT -> "👤 ${att.displayName.take(6)}"
-                            AttachmentType.FILE -> "📁 ${att.displayName.take(6)}"
-                        },
-                        fontSize = badgeFontSize,
-                        color = Color.DarkGray,
-                        maxLines = 1
-                    )
-                }
-            }
-            
-        
-    
-
-    
-
-                    if (cellAttachments.size > 2) {
-                        Text(
-                            text = "+${cellAttachments.size - 2}",
-                            fontSize = badgeFontSize,
-                            color = Color.Gray,
-                            modifier = Modifier.clickable { activeAttachmentCellCoord = cellCoord }
-                        )
-                    }
-                }
-            }
-        }
-
-        if (isMultiSelectMode) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable {
-                        anchorCell = cellCoord
-                        if (selectedCells.contains(cellCoord)) {
-                            selectedCells.remove(cellCoord)
-                        } else {
-                            selectedCells.add(cellCoord)
-                        }
-                    }
-            )
-        }
-    }
-}
-
                                             }
                                         }
                                     }

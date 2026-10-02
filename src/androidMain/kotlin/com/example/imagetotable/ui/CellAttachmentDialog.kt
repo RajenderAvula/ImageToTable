@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Environment
 import android.provider.ContactsContract
 import android.speech.RecognizerIntent
 import android.widget.Toast
@@ -19,6 +20,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
@@ -47,6 +51,9 @@ import com.example.imagetotable.model.CellAttachmentHelper
 import com.example.imagetotable.model.CellChecklistItem
 import com.example.imagetotable.model.TableRepository
 import com.example.imagetotable.util.StreamingSpeechHelper
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 enum class ActiveListeningTarget {
@@ -87,21 +94,19 @@ fun CellAttachmentDialog(
     var manualContactPhone by remember { mutableStateOf("") }
 
     var showLinkTableDialog by remember { mutableStateOf(false) }
+    var showInAppFileBrowser by remember { mutableStateOf(false) }
     var selectedImagePreviewUri by remember { mutableStateOf<Uri?>(null) }
 
-    // Offline Streaming Speech Helper instance
     val speechHelper = remember { StreamingSpeechHelper(context) }
     var activeListeningTarget by remember { mutableStateOf<ActiveListeningTarget?>(null) }
     var baseTextBeforeSpeech by remember { mutableStateOf("") }
 
-    // Clean up microphone/recognizer when dialog dismisses
     DisposableEffect(Unit) {
         onDispose {
             speechHelper.stop()
         }
     }
 
-    // Permission launcher for RECORD_AUDIO
     var pendingOfflineTarget by remember { mutableStateOf<ActiveListeningTarget?>(null) }
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -142,7 +147,6 @@ fun CellAttachmentDialog(
         pendingOfflineTarget = null
     }
 
-    // Online STT Launcher (Cloud-assisted)
     var pendingOnlineTarget by remember { mutableStateOf<ActiveListeningTarget?>(null) }
     val onlineSpeechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -231,7 +235,6 @@ fun CellAttachmentDialog(
         )
     }
 
-    // Unified Multi-Media Document Picker (Images, Videos, Audios, PDFs, Files)
     val mediaPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
@@ -264,10 +267,11 @@ fun CellAttachmentDialog(
                     )
                 )
             }
+        } else {
+            Toast.makeText(context, "No files selected. Returned to Cell Details.", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // Direct Phone Picker
     val contactPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -536,7 +540,7 @@ fun CellAttachmentDialog(
                         }
                     }
 
-                    // SECTION 2: MULTIPLE CHECKLISTS
+                    // SECTION 2: CHECKLISTS
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -752,7 +756,7 @@ fun CellAttachmentDialog(
                         }
                     }
 
-                    // SECTION 4: FILES, VOICE, VIDEO, IMAGES & LINKED TABLES
+                    // SECTION 4: FILE, MEDIA & LINKED TABLE ATTACHMENTS
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -770,7 +774,7 @@ fun CellAttachmentDialog(
                                 color = Color(0xFF37474F)
                             )
 
-                            // Dedicated, Un-clipped Multi-Media Toolbar
+                            // Dedicated Multi-Media Toolbar: Never hidden or pushed off screen
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -778,6 +782,15 @@ fun CellAttachmentDialog(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Button(
+                                    onClick = { showInAppFileBrowser = true },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0D47A1)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("📂 Browse Device", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
                                 Button(
                                     onClick = { mediaPickerLauncher.launch(arrayOf("*/*")) },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1565C0)),
@@ -846,13 +859,23 @@ fun CellAttachmentDialog(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Button(
+                                                onClick = { showInAppFileBrowser = true },
+                                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF0D47A1)),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text("📂 Browse Device", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            }
+
+                                            Button(
                                                 onClick = { mediaPickerLauncher.launch(arrayOf("*/*")) },
                                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
                                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                                 shape = RoundedCornerShape(6.dp)
                                             ) {
-                                                Text("📁 Attach File / Media", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                Text("📁 Attach File", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                             }
+
                                             Button(
                                                 onClick = { showLinkTableDialog = true },
                                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF7B1FA2)),
@@ -940,7 +963,43 @@ fun CellAttachmentDialog(
         }
     }
 
-    // Modal to pick a table from TableRepository to link to this cell
+    // IN-APP DEVICE FILE BROWSER MODAL WITH CLEAR REVERT/RETURN BUTTON
+    if (showInAppFileBrowser) {
+        InAppFileBrowserDialog(
+            context = context,
+            onDismiss = { showInAppFileBrowser = false },
+            onFilesSelected = { selectedFiles ->
+                selectedFiles.forEach { file ->
+                    val uri = Uri.fromFile(file)
+                    val mime = getMimeTypeFromExtension(file.extension)
+                    val sizeStr = formatFileSize(file.length())
+                    val type = when {
+                        mime.startsWith("image/") || file.extension.matches(Regex("(?i)jpg|jpeg|png|webp|bmp")) -> AttachmentType.IMAGE
+                        mime.startsWith("video/") || file.extension.matches(Regex("(?i)mp4|mkv|3gp|webm")) -> AttachmentType.VIDEO
+                        mime.startsWith("audio/") || file.extension.matches(Regex("(?i)mp3|m4a|wav|aac|ogg")) -> AttachmentType.VOICE
+                        mime.contains("pdf") || file.extension.equals("pdf", ignoreCase = true) -> AttachmentType.PDF
+                        else -> AttachmentType.FILE
+                    }
+                    attachmentsState.add(
+                        CellAttachment(
+                            type = type,
+                            uriString = uri.toString(),
+                            displayName = file.name,
+                            mimeType = mime,
+                            detail = sizeStr
+                        )
+                    )
+                }
+                showInAppFileBrowser = false
+            },
+            onLaunchSystemPicker = {
+                showInAppFileBrowser = false
+                mediaPickerLauncher.launch(arrayOf("*/*"))
+            }
+        )
+    }
+
+    // Modal to Link Existing Table to Cell
     if (showLinkTableDialog) {
         val availableTables = TableRepository.tables
         AlertDialog(
@@ -1042,6 +1101,366 @@ fun CellAttachmentDialog(
                 }
             }
         }
+    }
+}
+
+// IN-APP DEVICE FILE BROWSER MODAL (ALLOWS EASY EXPLORATION WITH CLEAR REVERT/RETURN BUTTON)
+@Composable
+private fun InAppFileBrowserDialog(
+    context: Context,
+    onDismiss: () -> Unit,
+    onFilesSelected: (List<File>) -> Unit,
+    onLaunchSystemPicker: () -> Unit
+) {
+    val defaultDir = remember {
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            .takeIf { it.exists() && it.canRead() }
+            ?: context.filesDir
+    }
+
+    var currentDir by remember { mutableStateOf(defaultDir) }
+    var searchQuery by remember { mutableStateOf("") }
+    val selectedFiles = remember { mutableStateListOf<File>() }
+
+    val fileList = remember(currentDir, searchQuery) {
+        try {
+            val files = currentDir.listFiles().orEmpty()
+            files.filter { file ->
+                !file.name.startsWith(".") &&
+                (searchQuery.isBlank() || file.name.contains(searchQuery, ignoreCase = true))
+            }.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.94f),
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xFFF8FAFC)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Header Bar with Unmistakable Revert Button
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF0D47A1))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "📂 Device Storage File Browser",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Cannot find file? Use 'Revert to App' anytime.",
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 10.sp
+                        )
+                    }
+
+                    // Direct Revert Button in Top Bar
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD32F2F)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.height(30.dp)
+                    ) {
+                        Text("⬅ Revert to App", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Quick Navigation Shortcut Chips
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .background(Color(0xFFECEFF1))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    val documents = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+                    val pictures = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+                    val dcim = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
+
+                    if (downloads.exists()) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (currentDir == downloads) Color(0xFF1976D2) else Color.White,
+                            border = BorderStroke(0.5.dp, Color(0xFF90CAF9)),
+                            modifier = Modifier.clickable { currentDir = downloads; searchQuery = "" }
+                        ) {
+                            Text("📥 Downloads", fontSize = 10.sp, color = if (currentDir == downloads) Color.White else Color.Black, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+                        }
+                    }
+
+                    if (documents.exists()) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (currentDir == documents) Color(0xFF1976D2) else Color.White,
+                            border = BorderStroke(0.5.dp, Color(0xFF90CAF9)),
+                            modifier = Modifier.clickable { currentDir = documents; searchQuery = "" }
+                        ) {
+                            Text("📄 Documents", fontSize = 10.sp, color = if (currentDir == documents) Color.White else Color.Black, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+                        }
+                    }
+
+                    if (pictures.exists()) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (currentDir == pictures) Color(0xFF1976D2) else Color.White,
+                            border = BorderStroke(0.5.dp, Color(0xFF90CAF9)),
+                            modifier = Modifier.clickable { currentDir = pictures; searchQuery = "" }
+                        ) {
+                            Text("🖼 Pictures", fontSize = 10.sp, color = if (currentDir == pictures) Color.White else Color.Black, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+                        }
+                    }
+
+                    if (dcim.exists()) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (currentDir == dcim) Color(0xFF1976D2) else Color.White,
+                            border = BorderStroke(0.5.dp, Color(0xFF90CAF9)),
+                            modifier = Modifier.clickable { currentDir = dcim; searchQuery = "" }
+                        ) {
+                            Text("🎬 DCIM", fontSize = 10.sp, color = if (currentDir == dcim) Color.White else Color.Black, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+                        }
+                    }
+                }
+
+                // Search & Current Directory Breadcrumb
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text("Filter files in this directory...", fontSize = 11.sp) },
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        singleLine = true,
+                        textStyle = TextStyle(fontSize = 12.sp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "📁 ${currentDir.path.takeLast(35)}",
+                            fontSize = 10.sp,
+                            color = Color.DarkGray,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        if (currentDir.parentFile != null && currentDir.parentFile?.canRead() == true) {
+                            Button(
+                                onClick = { currentDir = currentDir.parentFile!!; searchQuery = "" },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF546E7A)),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                modifier = Modifier.height(26.dp)
+                            ) {
+                                Text("⬆ Up Folder", color = Color.White, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
+
+                Divider(color = Color(0xFFCFD8DC))
+
+                // File & Folder List
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (fileList.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (searchQuery.isNotBlank()) "No files match '$searchQuery'" else "This folder is empty or not accessible.",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                    } else {
+                        items(fileList) { item ->
+                            val isSelected = selectedFiles.contains(item)
+                            val isDir = item.isDirectory
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        color = if (isSelected) Color(0xFFE3F2FD) else Color.White,
+                                        shape = RoundedCornerShape(6.dp)
+                                    )
+                                    .border(
+                                        width = if (isSelected) 1.dp else 0.5.dp,
+                                        color = if (isSelected) Color(0xFF1976D2) else Color(0xFFECEFF1),
+                                        shape = RoundedCornerShape(6.dp)
+                                    )
+                                    .clickable {
+                                        if (isDir) {
+                                            if (item.canRead()) {
+                                                currentDir = item
+                                                searchQuery = ""
+                                            } else {
+                                                Toast.makeText(context, "Permission restricted for folder", Toast.LENGTH_SHORT).show()
+                                            }
+                                        } else {
+                                            if (isSelected) selectedFiles.remove(item)
+                                            else selectedFiles.add(item)
+                                        }
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = when {
+                                        isDir -> "📁"
+                                        item.extension.matches(Regex("(?i)jpg|jpeg|png|webp|bmp")) -> "🖼"
+                                        item.extension.matches(Regex("(?i)mp4|mkv|3gp|webm")) -> "🎬"
+                                        item.extension.matches(Regex("(?i)mp3|m4a|wav|aac|ogg")) -> "🎵"
+                                        item.extension.equals("pdf", ignoreCase = true) -> "📄"
+                                        else -> "📄"
+                                    },
+                                    fontSize = 18.sp
+                                )
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.name,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isDir) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isDir) Color(0xFF0D47A1) else Color(0xFF263238),
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = if (isDir) "Folder" else "${formatFileSize(item.length())} • ${SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(item.lastModified()))}",
+                                        fontSize = 10.sp,
+                                        color = Color.Gray
+                                    )
+                                }
+
+                                if (!isDir) {
+                                    Checkbox(
+                                        checked = isSelected,
+                                        onCheckedChange = { checked ->
+                                            if (checked) selectedFiles.add(item) else selectedFiles.remove(item)
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Sticky Footer: Revert to App, System SAF Launcher, or Attach Selected
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.White,
+                    elevation = 6.dp
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Primary Revert Button at Bottom
+                            OutlinedButton(
+                                onClick = onDismiss,
+                                colors = ButtonDefaults.outlinedButtonColors(backgroundColor = Color(0xFFFFEBEE)),
+                                border = BorderStroke(1.dp, Color(0xFFD32F2F)),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).height(42.dp)
+                            ) {
+                                Text("⬅ Return to App", color = Color(0xFFD32F2F), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            // Launch Google Drive / SAF Picker
+                            Button(
+                                onClick = onLaunchSystemPicker,
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5E35B1)),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1.1f).height(42.dp)
+                            ) {
+                                Text("🌐 System Picker", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (selectedFiles.isNotEmpty()) {
+                            Button(
+                                onClick = { onFilesSelected(selectedFiles.toList()) },
+                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().height(42.dp)
+                            ) {
+                                Text("✓ Attach Selected (${selectedFiles.size} files)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    return when {
+        bytes >= 1024 * 1024 -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1024f * 1024f))
+        bytes >= 1024 -> "${bytes / 1024} KB"
+        else -> "$bytes B"
+    }
+}
+
+private fun getMimeTypeFromExtension(ext: String): String {
+    return when (ext.lowercase(Locale.getDefault())) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "mp4" -> "video/mp4"
+        "mkv" -> "video/x-matroska"
+        "mp3" -> "audio/mpeg"
+        "wav" -> "audio/wav"
+        "m4a" -> "audio/mp4"
+        "pdf" -> "application/pdf"
+        "txt" -> "text/plain"
+        "csv" -> "text/csv"
+        "doc", "docx" -> "application/msword"
+        else -> "*/*"
     }
 }
 
@@ -1179,7 +1598,6 @@ private fun AttachmentPreviewCard(
                     )
                 }
 
-                // Interactive Quick Actions for Contacts
                 if (attachment.type == AttachmentType.CONTACT) {
                     val phoneNum = attachment.detail.trim()
                     if (phoneNum.isNotBlank()) {
@@ -1241,7 +1659,6 @@ private fun AttachmentPreviewCard(
                 }
             }
 
-            // Linked Table Open Action Button
             if (attachment.type == AttachmentType.LINKED_TABLE) {
                 Button(
                     onClick = onOpenLinkedTableClick,

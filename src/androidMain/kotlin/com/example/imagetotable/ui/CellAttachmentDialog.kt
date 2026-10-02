@@ -17,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -177,14 +178,12 @@ fun CellAttachmentDialog(
 
     fun triggerOfflineSpeech(target: ActiveListeningTarget) {
         if (activeListeningTarget == target) {
-            // Already listening on this target: Stop recognition
             speechHelper.stop()
             activeListeningTarget = null
             return
         }
 
         if (activeListeningTarget != null) {
-            // Switching targets: stop previous
             speechHelper.stop()
             activeListeningTarget = null
         }
@@ -232,8 +231,8 @@ fun CellAttachmentDialog(
         )
     }
 
-    // Multi-File Picker (Images, Videos, Audio, PDFs, Documents)
-    val filePickerLauncher = rememberLauncherForActivityResult(
+    // Unified Multi-Media Document Picker (Images, Videos, Audios, PDFs, Files)
+    val mediaPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
@@ -248,9 +247,9 @@ fun CellAttachmentDialog(
                 val mime = context.contentResolver.getType(uri).orEmpty().lowercase()
                 val (name, size) = CellAttachmentHelper.queryFileNameAndSize(context, uri)
                 val type = when {
-                    mime.startsWith("image/") || name.endsWith(".jpg", true) || name.endsWith(".png", true) -> AttachmentType.IMAGE
-                    mime.startsWith("video/") || name.endsWith(".mp4", true) || name.endsWith(".mkv", true) -> AttachmentType.VIDEO
-                    mime.startsWith("audio/") || name.endsWith(".mp3", true) || name.endsWith(".m4a", true) || name.endsWith(".wav", true) -> AttachmentType.VOICE
+                    mime.startsWith("image/") || name.endsWith(".jpg", true) || name.endsWith(".png", true) || name.endsWith(".jpeg", true) || name.endsWith(".webp", true) -> AttachmentType.IMAGE
+                    mime.startsWith("video/") || name.endsWith(".mp4", true) || name.endsWith(".mkv", true) || name.endsWith(".3gp", true) -> AttachmentType.VIDEO
+                    mime.startsWith("audio/") || name.endsWith(".mp3", true) || name.endsWith(".m4a", true) || name.endsWith(".wav", true) || name.endsWith(".aac", true) -> AttachmentType.VOICE
                     mime.contains("pdf") || name.endsWith(".pdf", true) -> AttachmentType.PDF
                     else -> AttachmentType.FILE
                 }
@@ -268,7 +267,7 @@ fun CellAttachmentDialog(
         }
     }
 
-    // Direct Phone Picker: Queries phone row directly without requiring READ_CONTACTS permission
+    // Direct Phone Picker
     val contactPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -288,13 +287,9 @@ fun CellAttachmentDialog(
 
     fun makeCall(phone: String) {
         val clean = phone.trim()
-        if (clean.isBlank()) {
-            Toast.makeText(context, "Enter a valid phone number", Toast.LENGTH_SHORT).show()
-            return
-        }
+        if (clean.isBlank()) return
         try {
-            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$clean"))
-            context.startActivity(intent)
+            context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$clean")))
         } catch (e: Exception) {
             Toast.makeText(context, "Cannot dial: ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -302,13 +297,9 @@ fun CellAttachmentDialog(
 
     fun sendSms(phone: String) {
         val clean = phone.trim()
-        if (clean.isBlank()) {
-            Toast.makeText(context, "Enter a valid phone number", Toast.LENGTH_SHORT).show()
-            return
-        }
+        if (clean.isBlank()) return
         try {
-            val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$clean"))
-            context.startActivity(intent)
+            context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$clean")))
         } catch (e: Exception) {
             Toast.makeText(context, "Cannot open SMS: ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -316,22 +307,17 @@ fun CellAttachmentDialog(
 
     fun openWhatsApp(phone: String) {
         val cleanDigits = phone.replace(Regex("[^0-9]"), "")
-        if (cleanDigits.isBlank()) {
-            Toast.makeText(context, "Enter a valid phone number with country code", Toast.LENGTH_SHORT).show()
-            return
-        }
+        if (cleanDigits.isBlank()) return
         try {
             val uri = Uri.parse("https://api.whatsapp.com/send?phone=$cleanDigits")
-            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                setPackage("com.whatsapp")
-            }
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply { setPackage("com.whatsapp") }
             context.startActivity(intent)
         } catch (_: Exception) {
             try {
                 val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$cleanDigits"))
                 context.startActivity(fallbackIntent)
             } catch (e: Exception) {
-                Toast.makeText(context, "WhatsApp is unavailable: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "WhatsApp error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -345,8 +331,8 @@ fun CellAttachmentDialog(
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.92f),
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.94f),
             shape = RoundedCornerShape(16.dp),
             color = Color(0xFFF8FAFC)
         ) {
@@ -392,7 +378,7 @@ fun CellAttachmentDialog(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // SECTION 1: CELL TEXT, PRIMARY NOTE (ONLINE + OFFLINE STREAMING), ADDITIONAL NOTE (ONLINE + OFFLINE STREAMING)
+                    // SECTION 1: CELL TEXT, PRIMARY NOTE & ADDITIONAL NOTE
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -410,7 +396,6 @@ fun CellAttachmentDialog(
                                 color = Color(0xFF1565C0)
                             )
 
-                            // Primary in-cell display value
                             OutlinedTextField(
                                 value = cellTextState,
                                 onValueChange = { cellTextState = it },
@@ -419,7 +404,7 @@ fun CellAttachmentDialog(
                                 singleLine = true
                             )
 
-                            // 1. PRIMARY CELL NOTE (ONLINE + OFFLINE STREAMING)
+                            // Primary Note
                             val isPrimaryListening = activeListeningTarget == ActiveListeningTarget.PRIMARY_NOTE
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
@@ -475,7 +460,7 @@ fun CellAttachmentDialog(
                                 OutlinedTextField(
                                     value = cellNoteState,
                                     onValueChange = { cellNoteState = it },
-                                    placeholder = { Text("Detailed cell memo or tap 'Online' / 'Offline'...", fontSize = 12.sp) },
+                                    placeholder = { Text("Detailed cell memo or voice-type...", fontSize = 12.sp) },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 70.dp, max = 120.dp),
@@ -485,7 +470,7 @@ fun CellAttachmentDialog(
 
                             Divider(color = Color(0xFFEEEEEE))
 
-                            // 2. ADDITIONAL TEXT NOTE (ONLINE + OFFLINE STREAMING)
+                            // Additional Note
                             val isAdditionalListening = activeListeningTarget == ActiveListeningTarget.ADDITIONAL_NOTE
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
@@ -541,7 +526,7 @@ fun CellAttachmentDialog(
                                 OutlinedTextField(
                                     value = additionalNoteState,
                                     onValueChange = { additionalNoteState = it },
-                                    placeholder = { Text("Extra notes, customer remarks or tap 'Online' / 'Offline'...", fontSize = 12.sp) },
+                                    placeholder = { Text("Extra notes, customer remarks or voice-type...", fontSize = 12.sp) },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 70.dp, max = 120.dp),
@@ -584,7 +569,6 @@ fun CellAttachmentDialog(
                                 }
                             }
 
-                            // Checklist Input Bar
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -604,14 +588,12 @@ fun CellAttachmentDialog(
                                             newChecklistInput = ""
                                         }
                                     },
-                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
                                 ) {
                                     Text("+ Add", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                             }
 
-                            // Checklist Items List
                             if (checklistsState.isNotEmpty()) {
                                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     checklistsState.forEachIndexed { idx, item ->
@@ -634,7 +616,7 @@ fun CellAttachmentDialog(
                                                 onCheckedChange = { checked ->
                                                     checklistsState[idx] = item.copy(isChecked = checked)
                                                 },
-                                                modifier = Modifier.size(28.dp)
+                                                modifier = Modifier.size(24.dp)
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
@@ -675,7 +657,6 @@ fun CellAttachmentDialog(
                                 color = Color(0xFF00796B)
                             )
 
-                            // Manual Contact Input Fields
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -698,7 +679,6 @@ fun CellAttachmentDialog(
                                 )
                             }
 
-                            // Quick Action Buttons for Manual Phone Number
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -731,7 +711,6 @@ fun CellAttachmentDialog(
                                 }
                             }
 
-                            // Save Contact to Cell or Pick from Phonebook
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -773,7 +752,7 @@ fun CellAttachmentDialog(
                         }
                     }
 
-                    // SECTION 4: FILE, MEDIA & LINKED TABLE ATTACHMENTS
+                    // SECTION 4: FILES, VOICE, VIDEO, IMAGES & LINKED TABLES
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         elevation = 2.dp,
@@ -782,48 +761,108 @@ fun CellAttachmentDialog(
                     ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            Text(
+                                text = "📄 Attached Media, Files & Tables (${attachmentsState.size})",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFF37474F)
+                            )
+
+                            // Dedicated, Un-clipped Multi-Media Toolbar
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "📄 Attached Files & Tables (${attachmentsState.size})",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = Color(0xFF37474F)
-                                )
+                                Button(
+                                    onClick = { mediaPickerLauncher.launch(arrayOf("*/*")) },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1565C0)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("📁 + All Files", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
 
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Button(
-                                        onClick = { showLinkTableDialog = true },
-                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                    ) {
-                                        Text("📊 + Link Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
+                                Button(
+                                    onClick = { mediaPickerLauncher.launch(arrayOf("image/*")) },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("🖼 + Image", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
 
-                                    Button(
-                                        onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1565C0)),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                    ) {
-                                        Text("+ Add Files/Images", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
+                                Button(
+                                    onClick = { mediaPickerLauncher.launch(arrayOf("video/*")) },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("🎬 + Video", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = { mediaPickerLauncher.launch(arrayOf("audio/*")) },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFF57C00)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("🎤 + Audio/Voice", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = { showLinkTableDialog = true },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("📊 + Link Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
 
                             if (attachmentsState.isEmpty()) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(55.dp)
-                                        .background(Color(0xFFF1F5F9), RoundedCornerShape(6.dp)),
-                                    contentAlignment = Alignment.Center
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    backgroundColor = Color(0xFFF1F5F9),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, Color(0xFFE2E8F0))
                                 ) {
-                                    Text("No files, contacts or tables linked to this cell.", color = Color.Gray, fontSize = 11.sp)
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "No files, media, or tables attached to this cell yet.",
+                                            color = Color.Gray,
+                                            fontSize = 12.sp
+                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Button(
+                                                onClick = { mediaPickerLauncher.launch(arrayOf("*/*")) },
+                                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text("📁 Attach File / Media", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            Button(
+                                                onClick = { showLinkTableDialog = true },
+                                                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF7B1FA2)),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text("📊 Link Table", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
                                 }
                             } else {
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

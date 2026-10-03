@@ -2,13 +2,7 @@ package com.example.imagetotable.ui
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Typeface
-import android.graphics.pdf.PdfDocument
-import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,6 +41,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.imagetotable.util.PageNumberPosition
+import com.example.imagetotable.util.PageRanges
+import com.example.imagetotable.util.PdfEditor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,7 +69,7 @@ data class RichPdfTextElement(
 
 data class EditablePdfPage(
     val pageIndex: Int,
-    val baseBitmap: Bitmap,
+    var baseBitmap: Bitmap,
     val elements: MutableList<RichPdfTextElement> = mutableListOf()
 )
 
@@ -82,6 +79,7 @@ fun PdfEditorScreen() {
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
+    var activeEditor by remember { mutableStateOf<PdfEditor?>(null) }
     val pages = remember { mutableStateListOf<EditablePdfPage>() }
     var activePageIndex by remember { mutableIntStateOf(0) }
     var activeElementId by remember { mutableStateOf<String?>(null) }
@@ -98,8 +96,25 @@ fun PdfEditorScreen() {
     var editingBgColor by remember { mutableStateOf(Color.Transparent) }
     var editingIsWhiteout by remember { mutableStateOf(false) }
 
+    // Watermark & Page Numbering Modals
+    var showWatermarkDialog by remember { mutableStateOf(false) }
+    var watermarkInput by remember { mutableStateOf("CONFIDENTIAL") }
+
+    var showPageNumbersDialog by remember { mutableStateOf(false) }
+    var pageNumberFormatInput by remember { mutableStateOf("Page {n} of {total}") }
+
     val activePage = pages.getOrNull(activePageIndex)
     val activeElement = activePage?.elements?.find { it.id == activeElementId }
+
+    // Refresh UI bitmaps from PdfEditor engine
+    fun refreshFromEngine(editor: PdfEditor) {
+        pages.clear()
+        for (i in 1..editor.pageCount) {
+            val bmp = editor.renderPage(i, 150f)
+            pages.add(EditablePdfPage(pageIndex = i - 1, baseBitmap = bmp))
+        }
+        if (activePageIndex >= pages.size) activePageIndex = (pages.size - 1).coerceAtLeast(0)
+    }
 
     // Launcher to Open External PDF
     val pdfPickerLauncher = rememberLauncherForActivityResult(
@@ -108,35 +123,24 @@ fun PdfEditorScreen() {
         if (uri != null) {
             coroutineScope.launch {
                 isProcessing = true
-                statusText = "Loading and rasterizing PDF pages..."
+                statusText = "Loading PDF into editing engine..."
                 try {
-                    val loadedPages = withContext(Dispatchers.IO) {
-                        val pfd = context.contentResolver.openFileDescriptor(uri, "r")
-                            ?: throw IllegalArgumentException("Could not open PDF descriptor")
-                        val renderer = PdfRenderer(pfd)
-                        val result = mutableListOf<EditablePdfPage>()
-
-                        for (i in 0 until renderer.pageCount) {
-                            val page = renderer.openPage(i)
-                            val scale = 2.0f
-                            val w = (page.width * scale).toInt().coerceAtMost(2048)
-                            val h = (page.height * scale).toInt().coerceAtMost(2048)
-                            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                            val canvas = Canvas(bmp)
-                            canvas.drawColor(android.graphics.Color.WHITE)
-                            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            page.close()
-                            result.add(EditablePdfPage(pageIndex = i, baseBitmap = bmp))
+                    val tempSource = withContext(Dispatchers.IO) {
+                        val file = File(context.cacheDir, "editor_input_${System.currentTimeMillis()}.pdf")
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            FileOutputStream(file).use { out -> input.copyTo(out) }
                         }
-                        renderer.close()
-                        pfd.close()
-                        result
+                        file
                     }
-                    pages.clear()
-                    pages.addAll(loadedPages)
+
+                    activeEditor?.close()
+                    val editor = PdfEditor.load(context, tempSource)
+                    activeEditor = editor
+                    refreshFromEngine(editor)
+
                     activePageIndex = 0
                     activeElementId = null
-                    statusText = "Loaded ${loadedPages.size} page(s). Tap '+ Text' or '+ Whiteout' to edit."
+                    statusText = "Loaded ${editor.pageCount} pages. You can edit, rotate, add rich text & watermarks."
                 } catch (e: Exception) {
                     statusText = "Open PDF error: ${e.message}"
                 } finally {
@@ -150,76 +154,47 @@ fun PdfEditorScreen() {
     val pdfSaveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/pdf")
     ) { destUri: Uri? ->
-        if (destUri != null) {
+        if (destUri != null && activeEditor != null) {
             coroutineScope.launch {
                 isProcessing = true
-                statusText = "Compiling modified text overlays into PDF..."
+                statusText = "Compiling modified PDF..."
                 try {
-                    withContext(Dispatchers.IO) {
-                        val pdfDoc = PdfDocument()
-
-                        pages.forEachIndexed { idx, pageItem ->
-                            val pageInfo = PdfDocument.PageInfo.Builder(
-                                pageItem.baseBitmap.width,
-                                pageItem.baseBitmap.height,
-                                idx + 1
-                            ).create()
-                            val page = pdfDoc.startPage(pageInfo)
-                            val canvas = page.canvas
-
-                            // Draw original page background
-                            canvas.drawBitmap(pageItem.baseBitmap, 0f, 0f, null)
-
-                            // Render each edited text / whiteout element
-                            pageItem.elements.forEach { elem ->
-                                if (elem.isWhiteout) {
-                                    val bgPaint = Paint().apply {
-                                        color = elem.backgroundColor.toArgb()
-                                        style = Paint.Style.FILL
-                                    }
-                                    canvas.drawRect(
-                                        elem.xOffset,
-                                        elem.yOffset,
-                                        elem.xOffset + elem.width,
-                                        elem.yOffset + elem.height,
-                                        bgPaint
-                                    )
-                                } else {
-                                    if (elem.backgroundColor != Color.Transparent) {
-                                        val bgPaint = Paint().apply {
-                                            color = elem.backgroundColor.toArgb()
-                                            style = Paint.Style.FILL
-                                        }
-                                        canvas.drawRect(
-                                            elem.xOffset - 4f,
-                                            elem.yOffset - elem.fontSize * 1.5f,
-                                            elem.xOffset + elem.width + 4f,
-                                            elem.yOffset + 6f,
-                                            bgPaint
-                                        )
-                                    }
-                                    val textPaint = Paint().apply {
-                                        color = elem.textColor.toArgb()
-                                        textSize = elem.fontSize * 2f
-                                        isAntiAlias = true
-                                        val tfStyle = when {
-                                            elem.isBold && elem.isItalic -> Typeface.BOLD_ITALIC
-                                            elem.isBold -> Typeface.BOLD
-                                            elem.isItalic -> Typeface.ITALIC
-                                            else -> Typeface.NORMAL
-                                        }
-                                        typeface = Typeface.create(Typeface.DEFAULT, tfStyle)
-                                    }
-                                    canvas.drawText(elem.text, elem.xOffset, elem.yOffset, textPaint)
-                                }
+                    val editor = activeEditor!!
+                    // Apply all overlay elements to the engine before save
+                    pages.forEachIndexed { pIdx, page ->
+                        page.elements.forEach { elem ->
+                            if (elem.isWhiteout) {
+                                editor.addRectangle(
+                                    page = pIdx + 1,
+                                    x = elem.xOffset,
+                                    y = elem.yOffset,
+                                    width = elem.width,
+                                    height = elem.height,
+                                    fill = android.graphics.Color.WHITE,
+                                    stroke = null
+                                )
+                            } else {
+                                editor.addText(
+                                    page = pIdx + 1,
+                                    text = elem.text,
+                                    x = elem.xOffset,
+                                    y = elem.yOffset + elem.fontSize,
+                                    fontSize = elem.fontSize,
+                                    color = elem.textColor.toArgb(),
+                                    isBold = elem.isBold,
+                                    isItalic = elem.isItalic
+                                )
                             }
-                            pdfDoc.finishPage(page)
                         }
+                    }
 
-                        context.contentResolver.openOutputStream(destUri)?.use { out ->
-                            pdfDoc.writeTo(out)
+                    withContext(Dispatchers.IO) {
+                        val tempOut = File(context.cacheDir, "compiled_${System.currentTimeMillis()}.pdf")
+                        editor.save(tempOut)
+                        context.contentResolver.openOutputStream(destUri)?.use { outStream ->
+                            tempOut.inputStream().use { inStream -> inStream.copyTo(outStream) }
                         }
-                        pdfDoc.close()
+                        tempOut.delete()
                     }
                     statusText = "Saved edited PDF successfully!"
                     Toast.makeText(context, "Saved Edited PDF!", Toast.LENGTH_SHORT).show()
@@ -237,7 +212,7 @@ fun PdfEditorScreen() {
             .fillMaxSize()
             .background(Color(0xFFF1F5F9))
     ) {
-        // TOP CONTROL HEADER
+        // 1. TOP CONTROL HEADER
         Surface(
             modifier = Modifier.fillMaxWidth(),
             elevation = 3.dp,
@@ -261,7 +236,8 @@ fun PdfEditorScreen() {
                         text = statusText,
                         color = Color.White.copy(alpha = 0.85f),
                         fontSize = 10.sp,
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
 
@@ -290,7 +266,7 @@ fun PdfEditorScreen() {
             }
         }
 
-        // EDITING TOOLBAR: CUT, COPY, PASTE, RICH TEXT & WHITEOUT
+        // 2. MAIN TOOLBAR: ENGINE PAGE OPERATIONS, RICH TEXT & CLIPBOARD
         Surface(
             modifier = Modifier.fillMaxWidth(),
             elevation = 2.dp,
@@ -304,6 +280,31 @@ fun PdfEditorScreen() {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Undo / Redo engine actions
+                Button(
+                    onClick = {
+                        activeEditor?.let {
+                            if (it.undo()) refreshFromEngine(it)
+                        }
+                    },
+                    enabled = activeEditor?.canUndo == true,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFECEFF1)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) { Text("↩ Undo", fontSize = 10.sp, color = Color.Black) }
+
+                Button(
+                    onClick = {
+                        activeEditor?.let {
+                            if (it.redo()) refreshFromEngine(it)
+                        }
+                    },
+                    enabled = activeEditor?.canRedo == true,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFECEFF1)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) { Text("↪ Redo", fontSize = 10.sp, color = Color.Black) }
+
                 // Clipboard controls
                 Button(
                     onClick = {
@@ -394,7 +395,7 @@ fun PdfEditorScreen() {
                             )
                             page.elements.add(whiteout)
                             activeElementId = whiteout.id
-                            statusText = "Added Whiteout cover. Drag to redact/hide original text."
+                            statusText = "Added Whiteout cover. Drag to cover unwanted original text."
                         }
                     },
                     enabled = activePage != null,
@@ -402,6 +403,63 @@ fun PdfEditorScreen() {
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     modifier = Modifier.height(28.dp)
                 ) { Text("⬜ Whiteout", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+
+                // Watermark & Page Numbering Stamping Tools
+                Button(
+                    onClick = { showWatermarkDialog = true },
+                    enabled = activeEditor != null,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) { Text("💧 Watermark", color = Color.White, fontSize = 10.sp) }
+
+                Button(
+                    onClick = { showPageNumbersDialog = true },
+                    enabled = activeEditor != null,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF455A64)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) { Text("🔢 Page #s", color = Color.White, fontSize = 10.sp) }
+
+                // Page Level Operations from pdfeditor.pdf
+                Button(
+                    onClick = {
+                        activeEditor?.let {
+                            it.rotate((activePageIndex + 1).toString(), 90)
+                            refreshFromEngine(it)
+                        }
+                    },
+                    enabled = activeEditor != null,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) { Text("🔄 Rotate 90°", color = Color.White, fontSize = 10.sp) }
+
+                Button(
+                    onClick = {
+                        activeEditor?.let {
+                            it.duplicatePage(activePageIndex + 1, 1)
+                            refreshFromEngine(it)
+                        }
+                    },
+                    enabled = activeEditor != null,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) { Text("📄 Duplicate", color = Color.White, fontSize = 10.sp) }
+
+                Button(
+                    onClick = {
+                        activeEditor?.let {
+                            it.insertBlankPage(at = activePageIndex + 2)
+                            refreshFromEngine(it)
+                        }
+                    },
+                    enabled = activeEditor != null,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00897B)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) { Text("➕ Blank Page", color = Color.White, fontSize = 10.sp) }
 
                 if (activeElement != null) {
                     Button(
@@ -435,7 +493,7 @@ fun PdfEditorScreen() {
             }
         }
 
-        // PAGE CANVAS VIEWER
+        // 3. PAGE CANVAS VIEWER
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -452,7 +510,6 @@ fun PdfEditorScreen() {
                     elevation = 4.dp
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        // Base Rendered PDF Page
                         Image(
                             bitmap = activePage.baseBitmap.asImageBitmap(),
                             contentDescription = "Page ${activePageIndex + 1}",
@@ -460,7 +517,7 @@ fun PdfEditorScreen() {
                             contentScale = ContentScale.Fit
                         )
 
-                        // Editable Overlay Elements
+                        // Draggable Overlays (Text & Whiteout Blocks)
                         activePage.elements.forEach { element ->
                             val isSelected = element.id == activeElementId
                             var offsetX by remember(element.id) { mutableFloatStateOf(element.xOffset) }
@@ -482,8 +539,7 @@ fun PdfEditorScreen() {
                                         activeElementId = element.id
                                     }
                                     .background(
-                                        if (element.isWhiteout) element.backgroundColor
-                                        else element.backgroundColor,
+                                        if (element.isWhiteout) Color.White else element.backgroundColor,
                                         RoundedCornerShape(3.dp)
                                     )
                                     .border(
@@ -529,7 +585,7 @@ fun PdfEditorScreen() {
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "No PDF loaded. Open a document to begin letter & rich text editing.",
+                        text = "No PDF loaded. Open a document to begin editing letters, rotating & adding overlays.",
                         color = Color.Gray,
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center
@@ -544,7 +600,7 @@ fun PdfEditorScreen() {
             }
         }
 
-        // BOTTOM PAGE SEQUENCE STRIP
+        // 4. BOTTOM PAGE SEQUENCE STRIP
         if (pages.isNotEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -569,7 +625,7 @@ fun PdfEditorScreen() {
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        itemsIndexed(pages) { idx, pageItem ->
+                        itemsIndexed(pages) { idx, _ ->
                             val isSel = idx == activePageIndex
                             Surface(
                                 shape = RoundedCornerShape(4.dp),
@@ -594,7 +650,7 @@ fun PdfEditorScreen() {
         }
     }
 
-    // MODAL DIALOG: RICH TEXT, FONT, COLOR & SIZE FORMATTER
+    // MODAL: RICH TEXT & LETTER FORMATTING
     if (showTextEditDialog) {
         AlertDialog(
             onDismissRequest = { showTextEditDialog = false },
@@ -627,7 +683,6 @@ fun PdfEditorScreen() {
                             )
                         )
 
-                        // Rich Style Toggles: Bold, Italic
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -669,7 +724,6 @@ fun PdfEditorScreen() {
                             ) { Text("+") }
                         }
 
-                        // Text Color Palette
                         Text("Text Color:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf(Color.Black, Color(0xFF1565C0), Color(0xFFC62828), Color(0xFF2E7D32), Color(0xFF6A1B9A), Color(0xFFE65100)).forEach { col ->
@@ -687,7 +741,6 @@ fun PdfEditorScreen() {
                             }
                         }
 
-                        // Background Highlight Palette
                         Text("Highlight / Background:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf(Color.Transparent, Color.White, Color(0xFFFFF9C4), Color(0xFFE0F2FE), Color(0xFFE8F5E9)).forEach { bg ->
@@ -726,6 +779,76 @@ fun PdfEditorScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { showTextEditDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // MODAL: ADD WATERMARK DIALOG
+    if (showWatermarkDialog) {
+        AlertDialog(
+            onDismissRequest = { showWatermarkDialog = false },
+            title = { Text("Add Text Watermark", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Enter watermark text to stamp across all pages:", fontSize = 12.sp)
+                    OutlinedTextField(
+                        value = watermarkInput,
+                        onValueChange = { watermarkInput = it },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        activeEditor?.let {
+                            it.addTextWatermark(watermarkInput, pages = "all")
+                            refreshFromEngine(it)
+                            statusText = "Stamped watermark '$watermarkInput' across all pages."
+                        }
+                        showWatermarkDialog = false
+                    }
+                ) { Text("Apply") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showWatermarkDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // MODAL: ADD PAGE NUMBERS DIALOG
+    if (showPageNumbersDialog) {
+        AlertDialog(
+            onDismissRequest = { showPageNumbersDialog = false },
+            title = { Text("Stamp Page Numbers", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Format string ({n} = page, {total} = total pages):", fontSize = 12.sp)
+                    OutlinedTextField(
+                        value = pageNumberFormatInput,
+                        onValueChange = { pageNumberFormatInput = it },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        activeEditor?.let {
+                            it.addPageNumbers(
+                                format = pageNumberFormatInput,
+                                pages = "all",
+                                position = PageNumberPosition.BOTTOM_CENTER
+                            )
+                            refreshFromEngine(it)
+                            statusText = "Stamped page numbers across all pages."
+                        }
+                        showPageNumbersDialog = false
+                    }
+                ) { Text("Apply") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPageNumbersDialog = false }) { Text("Cancel") }
             }
         )
     }

@@ -657,7 +657,7 @@ fun PdfEditorScreen(
         }
     }
 
-    // Launchers
+    // File Operations & Launchers
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -784,11 +784,9 @@ fun PdfEditorScreen(
                             val pdfPage = pdfDocument.startPage(pageInfo)
                             val pdfCanvas = pdfPage.canvas
 
-                            // 1. Draw base page bitmap directly to page points (contains baked erasures & annotations)
                             val dstRect = RectF(0f, 0f, ptWidth.toFloat(), ptHeight.toFloat())
                             pdfCanvas.drawBitmap(page.baseBitmap, null, dstRect, null)
 
-                            // 2. Draw all overlays using exact page-relative ratios
                             page.elements.forEach { elem ->
                                 val scaledX = elem.relX * ptWidth.toFloat()
                                 val scaledY = elem.relY * ptHeight.toFloat()
@@ -1335,7 +1333,7 @@ fun PdfEditorScreen(
             }
         }
 
-        // PEN / ANNOTATION DOCKED PALETTE (COLOR SELECTION & STROKE THICKNESS)
+        // PEN / ANNOTATION DOCKED PALETTE
         if (state.isPenModeActive && activePage != null) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -1515,6 +1513,7 @@ fun PdfEditorScreen(
                         Text("✎ Edit Text", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
 
+                    // REAL-TIME NUDGING
                     Text("Move:", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                     Button(onClick = { activeElement.relX = (activeElement.relX - 0.004f).coerceAtLeast(0f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("◀", fontSize = 10.sp) }
                     Button(onClick = { activeElement.relX = (activeElement.relX + 0.004f).coerceAtMost(0.98f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("▶", fontSize = 10.sp) }
@@ -1523,6 +1522,7 @@ fun PdfEditorScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
+                    // REAL-TIME SIZING
                     Text("Size:", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                     Button(onClick = { activeElement.relWidth = (activeElement.relWidth - 0.02f).coerceAtLeast(0.02f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("W-", fontSize = 9.sp) }
                     Button(onClick = { activeElement.relWidth = (activeElement.relWidth + 0.02f).coerceAtMost(1f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("W+", fontSize = 9.sp) }
@@ -1603,7 +1603,7 @@ fun PdfEditorScreen(
                         )
                     }
 
-                    // LIVE ON-PAGE STROKE DRAWING (EXACT NORMALIZED POSITIONING)
+                    // LIVE ON-PAGE STROKE DRAWING
                     if (liveDrawingNormStroke.size > 1) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             val cW = size.width
@@ -1630,7 +1630,7 @@ fun PdfEditorScreen(
                         }
                     }
 
-                    // PEN MODE GESTURE LAYER: PIXEL-PERFECT SUB-PIXEL SAMPLING
+                    // PEN MODE GESTURE LAYER
                     if (state.isPenModeActive) {
                         Box(
                             modifier = Modifier
@@ -1804,7 +1804,6 @@ fun PdfEditorScreen(
                                 )
                             }
 
-                            // Selection badges: Quick Delete & Corner Resize
                             if (isSelected) {
                                 Box(
                                     modifier = Modifier

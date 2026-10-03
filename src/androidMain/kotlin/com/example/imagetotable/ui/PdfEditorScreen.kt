@@ -3,6 +3,7 @@ package com.example.imagetotable.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
@@ -18,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -78,7 +80,7 @@ data class RichPdfTextElement(
     var fontSize: Float = 14f,
     var isBold: Boolean = false,
     var isItalic: Boolean = false,
-    var textColor: Color = Color.Black,
+    var textColor: Color = Color(0xFF292524),
     var backgroundColor: Color = Color.Transparent,
     var isWhiteout: Boolean = false,
     var width: Float = 140f,
@@ -108,7 +110,8 @@ data class DetectedWordBox(
     var x: Float,
     var y: Float,
     var width: Float,
-    var height: Float
+    var height: Float,
+    var sampledPaperColor: Color = Color.White
 )
 
 data class EditablePdfPage(
@@ -120,7 +123,6 @@ data class EditablePdfPage(
 
 data class CanvasSnapshot(
     val pageIndex: Int,
-    val bitmapCopy: Bitmap,
     val elements: List<RichPdfTextElement>
 )
 
@@ -130,7 +132,7 @@ class PdfEditorState {
     var activePageIndex by mutableIntStateOf(0)
     var activeElementId by mutableStateOf<String?>(null)
     var isProcessing by mutableStateOf(false)
-    var statusText by mutableStateOf("Ready: Open any PDF to edit inline words, letters & rich text")
+    var statusText by mutableStateOf("Ready: Open any PDF to edit words & letters")
 
     var zoomScale by mutableFloatStateOf(1f)
     var panOffsetX by mutableFloatStateOf(0f)
@@ -148,6 +150,7 @@ class PdfEditorState {
     var liveWordIsBold by mutableStateOf(false)
     var liveWordIsItalic by mutableStateOf(false)
     var liveWordColor by mutableStateOf(Color(0xFF292524))
+    var liveWordPaperColor by mutableStateOf(Color.White)
     var liveWordOpacity by mutableFloatStateOf(0.90f)
 
     fun reset() {
@@ -157,7 +160,7 @@ class PdfEditorState {
         activePageIndex = 0
         activeElementId = null
         isProcessing = false
-        statusText = "Ready: Open any PDF to edit inline words, letters & rich text"
+        statusText = "Ready: Open any PDF to edit words & letters"
         zoomScale = 1f
         panOffsetX = 0f
         panOffsetY = 0f
@@ -187,6 +190,15 @@ val InkShadePalette = listOf(
     Pair("Red Ink", Color(0xFFC62828))
 )
 
+val PaperTexturePalette = listOf(
+    Pair("Sampled Auto", Color.Transparent),
+    Pair("Pure White", Color(0xFFFFFFFF)),
+    Pair("Warm Ivory", Color(0xFFFCFBF7)),
+    Pair("Cream Paper", Color(0xFFF9F7F1)),
+    Pair("Scan Grey", Color(0xFFF3F4F6)),
+    Pair("Vintage Parchment", Color(0xFFF5EFEB))
+)
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PdfEditorScreen(
@@ -196,7 +208,6 @@ fun PdfEditorScreen(
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
-    // Dialog Visibilities
     var showTextEditDialog by remember { mutableStateOf(false) }
     var editingTextValue by remember { mutableStateOf("") }
     var editingFontSize by remember { mutableFloatStateOf(14f) }
@@ -231,20 +242,15 @@ fun PdfEditorScreen(
     val activePage = state.pages.getOrNull(state.activePageIndex)
     val activeElement = activePage?.elements?.find { it.id == state.activeElementId }
 
-    // Snapshot creation with direct bitmap clone for full undo capability
     fun pushCanvasSnapshot() {
         activePage?.let { page ->
-            val bmpCopy = page.baseBitmap.copy(page.baseBitmap.config ?: Bitmap.Config.ARGB_8888, true)
             state.canvasUndoStack.add(
                 CanvasSnapshot(
                     pageIndex = state.activePageIndex,
-                    bitmapCopy = bmpCopy,
                     elements = page.elements.map { it.copyElement() }
                 )
             )
-            if (state.canvasUndoStack.size > 20) {
-                state.canvasUndoStack.removeAt(0).bitmapCopy.recycle()
-            }
+            if (state.canvasUndoStack.size > 30) state.canvasUndoStack.removeAt(0)
             state.canvasRedoStack.clear()
         }
     }
@@ -264,15 +270,12 @@ fun PdfEditorScreen(
         if (state.canvasUndoStack.isNotEmpty()) {
             val snapshot = state.canvasUndoStack.removeAt(state.canvasUndoStack.size - 1)
             activePage?.let { page ->
-                val currentBmpCopy = page.baseBitmap.copy(page.baseBitmap.config ?: Bitmap.Config.ARGB_8888, true)
                 state.canvasRedoStack.add(
                     CanvasSnapshot(
                         pageIndex = state.activePageIndex,
-                        bitmapCopy = currentBmpCopy,
                         elements = page.elements.map { it.copyElement() }
                     )
                 )
-                page.baseBitmap = snapshot.bitmapCopy
                 page.elements.clear()
                 page.elements.addAll(snapshot.elements.map { it.copyElement() })
                 state.activeElementId = null
@@ -292,15 +295,12 @@ fun PdfEditorScreen(
         if (state.canvasRedoStack.isNotEmpty()) {
             val snapshot = state.canvasRedoStack.removeAt(state.canvasRedoStack.size - 1)
             activePage?.let { page ->
-                val currentBmpCopy = page.baseBitmap.copy(page.baseBitmap.config ?: Bitmap.Config.ARGB_8888, true)
                 state.canvasUndoStack.add(
                     CanvasSnapshot(
                         pageIndex = state.activePageIndex,
-                        bitmapCopy = currentBmpCopy,
                         elements = page.elements.map { it.copyElement() }
                     )
                 )
-                page.baseBitmap = snapshot.bitmapCopy
                 page.elements.clear()
                 page.elements.addAll(snapshot.elements.map { it.copyElement() })
                 state.activeElementId = null
@@ -316,58 +316,96 @@ fun PdfEditorScreen(
         }
     }
 
-    // Direct, permanent baking of whiteout and text onto the page bitmap
-    fun applyWordEraseOrReplace(target: DetectedWordBox, replacementText: String?) {
+    // Samples ambient background color around a target bounding box
+    fun sampleSurroundingPaperColor(bitmap: Bitmap, box: DetectedWordBox): Color {
+        val sampleOffsets = listOf(
+            Pair(-4, box.height.toInt() / 2),
+            Pair(box.width.toInt() + 4, box.height.toInt() / 2),
+            Pair(box.width.toInt() / 2, -4),
+            Pair(box.width.toInt() / 2, box.height.toInt() + 4)
+        )
+        var rSum = 0L; var gSum = 0L; var bSum = 0L; var count = 0
+        for ((dx, dy) in sampleOffsets) {
+            val sx = (box.x.toInt() + dx).coerceIn(0, bitmap.width - 1)
+            val sy = (box.y.toInt() + dy).coerceIn(0, bitmap.height - 1)
+            val pixel = bitmap.getPixel(sx, sy)
+            rSum += android.graphics.Color.red(pixel)
+            gSum += android.graphics.Color.green(pixel)
+            bSum += android.graphics.Color.blue(pixel)
+            count++
+        }
+        return if (count > 0) {
+            Color((rSum / count).toInt(), (gSum / count).toInt(), (bSum / count).toInt())
+        } else {
+            Color(0xFFFCFBF9)
+        }
+    }
+
+    fun openEditDialogForElement(element: RichPdfTextElement) {
+        state.activeElementId = element.id
+        editingTextValue = element.text
+        editingFontSize = element.fontSize
+        editingIsBold = element.isBold
+        editingIsItalic = element.isItalic
+        editingColor = element.textColor
+        editingOpacity = element.textColor.alpha
+        editingBgColor = element.backgroundColor
+        editingIsWhiteout = element.isWhiteout
+        showTextEditDialog = true
+    }
+
+    // Replaces or erases word by overlaying a persistent, editable element
+    fun applyWordEraseOrReplaceOverlay(target: DetectedWordBox, replacementText: String?) {
         activePage?.let { page ->
             pushCanvasSnapshot()
 
-            val canvas = android.graphics.Canvas(page.baseBitmap)
-
-            // 1. Paint whiteout mask over exact bounding box coordinates
-            val whitePaint = Paint().apply {
-                color = android.graphics.Color.WHITE
-                style = Paint.Style.FILL
-            }
-            // Expand by 2px to ensure 100% eradication of antialiased font halos
-            val whiteoutRect = RectF(
-                (target.x - 2f).coerceAtLeast(0f),
-                (target.y - 2f).coerceAtLeast(0f),
-                (target.x + target.width + 2f).coerceAtMost(page.baseBitmap.width.toFloat()),
-                (target.y + target.height + 2f).coerceAtMost(page.baseBitmap.height.toFloat())
-            )
-            canvas.drawRect(whiteoutRect, whitePaint)
-
-            // 2. If replacement text is provided, paint replacement text on the bitmap
-            if (!replacementText.isNullOrBlank()) {
-                val textPaint = Paint().apply {
-                    color = state.liveWordColor.copy(alpha = state.liveWordOpacity).toArgb()
-                    textSize = (target.height * 0.90f).coerceAtLeast(10f)
-                    isAntiAlias = true
-                    val style = when {
-                        state.liveWordIsBold && state.liveWordIsItalic -> Typeface.BOLD_ITALIC
-                        state.liveWordIsBold -> Typeface.BOLD
-                        state.liveWordIsItalic -> Typeface.ITALIC
-                        else -> Typeface.NORMAL
-                    }
-                    typeface = Typeface.create(Typeface.DEFAULT, style)
-                }
-                // Align to baseline of original word
-                canvas.drawText(replacementText, target.x, target.y + target.height * 0.82f, textPaint)
-                state.statusText = "Replaced '$replacementText' on PDF page."
+            val paperBg = if (state.liveWordPaperColor == Color.Transparent) {
+                target.sampledPaperColor
             } else {
-                state.statusText = "Erased '${target.word}' from PDF page."
+                state.liveWordPaperColor
+            }
+
+            if (!replacementText.isNullOrBlank()) {
+                val newOverlay = RichPdfTextElement(
+                    text = replacementText,
+                    xOffset = target.x - 2f,
+                    yOffset = target.y - 2f,
+                    fontSize = state.liveWordFontSize,
+                    isBold = state.liveWordIsBold,
+                    isItalic = state.liveWordIsItalic,
+                    textColor = state.liveWordColor.copy(alpha = state.liveWordOpacity),
+                    backgroundColor = paperBg,
+                    isWhiteout = false,
+                    width = (target.width + 6f).coerceAtLeast(replacementText.length * state.liveWordFontSize * 0.8f),
+                    height = (target.height + 4f).coerceAtLeast(state.liveWordFontSize + 6f)
+                )
+                page.elements.add(newOverlay)
+                state.activeElementId = newOverlay.id
+                state.statusText = "Applied replacement '$replacementText' on overlay."
+            } else {
+                val eraseWhiteout = RichPdfTextElement(
+                    text = "",
+                    isWhiteout = true,
+                    backgroundColor = paperBg,
+                    xOffset = target.x - 2f,
+                    yOffset = target.y - 2f,
+                    width = target.width + 4f,
+                    height = target.height + 4f
+                )
+                page.elements.add(eraseWhiteout)
+                state.activeElementId = eraseWhiteout.id
+                state.statusText = "Erased '${target.word}' with matched paper patch."
             }
 
             state.editingWordBox = null
         }
     }
 
-    // REAL OCR WORD DETECTION WITH PRECISE PIXEL BOUNDING BOXES
     fun scanCurrentPageWords() {
         activePage?.let { page ->
             coroutineScope.launch {
                 state.isProcessing = true
-                state.statusText = "Detecting words and bounding coordinates on PDF..."
+                state.statusText = "Detecting words on PDF page..."
                 try {
                     val words = withContext(Dispatchers.IO) {
                         val result = mutableListOf<DetectedWordBox>()
@@ -377,14 +415,10 @@ fun PdfEditorScreen(
                             val inputImage = fromBitmapMethod.invoke(null, page.baseBitmap, 0)
 
                             val textRecognitionClass = Class.forName("com.google.mlkit.vision.text.TextRecognition")
-                            val recognizer = try {
-                                val latinOptionsClass = Class.forName("com.google.mlkit.vision.text.latin.TextRecognizerOptions")
-                                val defaultOptions = latinOptionsClass.getField("DEFAULT_OPTIONS").get(null)
-                                textRecognitionClass.getMethod("getClient", Class.forName("com.google.mlkit.vision.text.TextRecognizerOptionsInterface"))
-                                    .invoke(null, defaultOptions)
-                            } catch (_: Throwable) {
-                                textRecognitionClass.getMethod("getClient").invoke(null)
-                            }
+                            val latinOptionsClass = Class.forName("com.google.mlkit.vision.text.latin.TextRecognizerOptions")
+                            val defaultOptions = latinOptionsClass.getField("DEFAULT_OPTIONS").get(null)
+                            val recognizer = textRecognitionClass.getMethod("getClient", Class.forName("com.google.mlkit.vision.text.TextRecognizerOptionsInterface"))
+                                .invoke(null, defaultOptions)
 
                             val processMethod = recognizer.javaClass.getMethod("process", inputImageClass)
                             val task = processMethod.invoke(recognizer, inputImage)
@@ -397,47 +431,44 @@ fun PdfEditorScreen(
 
                             for (block in blocks) {
                                 if (block == null) continue
-                                val getLinesMethod = block.javaClass.getMethod("getLines")
-                                val lines = getLinesMethod.invoke(block) as? List<*> ?: emptyList<Any>()
+                                val lines = block.javaClass.getMethod("getLines").invoke(block) as? List<*> ?: emptyList<Any>()
                                 for (line in lines) {
                                     if (line == null) continue
-                                    val getElementsMethod = line.javaClass.getMethod("getElements")
-                                    val elements = getElementsMethod.invoke(line) as? List<*> ?: emptyList<Any>()
+                                    val elements = line.javaClass.getMethod("getElements").invoke(line) as? List<*> ?: emptyList<Any>()
                                     for (element in elements) {
                                         if (element == null) continue
-                                        val getTextMethod = element.javaClass.getMethod("getText")
-                                        val getBoundingBoxMethod = element.javaClass.getMethod("getBoundingBox")
-                                        val text = getTextMethod.invoke(element) as? String ?: ""
-                                        val rect = getBoundingBoxMethod.invoke(element) as? android.graphics.Rect
+                                        val text = element.javaClass.getMethod("getText").invoke(element) as? String ?: ""
+                                        val rect = element.javaClass.getMethod("getBoundingBox").invoke(element) as? Rect
                                         if (text.isNotBlank() && rect != null) {
-                                            result.add(
-                                                DetectedWordBox(
-                                                    word = text.trim(),
-                                                    x = rect.left.toFloat(),
-                                                    y = rect.top.toFloat(),
-                                                    width = rect.width().toFloat(),
-                                                    height = rect.height().toFloat()
-                                                )
+                                            val wBox = DetectedWordBox(
+                                                word = text.trim(),
+                                                x = rect.left.toFloat(),
+                                                y = rect.top.toFloat(),
+                                                width = rect.width().toFloat(),
+                                                height = rect.height().toFloat()
                                             )
+                                            wBox.sampledPaperColor = sampleSurroundingPaperColor(page.baseBitmap, wBox)
+                                            result.add(wBox)
                                         }
                                     }
                                 }
                             }
                         } catch (_: Throwable) {
-                            // High-reliability fallback if ML Kit reflection encounters device differences
                             try {
                                 val ocr = AndroidOcrService(context) { /* status */ }
                                 val tokens = ocr.extractTokens(page.baseBitmap)
-                                var curX = 40f
-                                var curY = 40f
+                                var curX = 35f
+                                var curY = 35f
                                 tokens.forEach { token ->
-                                    val tw = (token.length * 10f).coerceAtLeast(24f)
-                                    val th = 22f
+                                    val tw = (token.length * 9f).coerceAtLeast(22f)
+                                    val th = 20f
                                     if (curX + tw > page.baseBitmap.width - 40f) {
-                                        curX = 40f
+                                        curX = 35f
                                         curY += 28f
                                     }
-                                    result.add(DetectedWordBox(word = token, x = curX, y = curY, width = tw, height = th))
+                                    val wBox = DetectedWordBox(word = token, x = curX, y = curY, width = tw, height = th)
+                                    wBox.sampledPaperColor = sampleSurroundingPaperColor(page.baseBitmap, wBox)
+                                    result.add(wBox)
                                     curX += tw + 8f
                                 }
                             } catch (_: Throwable) {}
@@ -447,7 +478,7 @@ fun PdfEditorScreen(
                     page.detectedWords.clear()
                     page.detectedWords.addAll(words)
                     state.isInlineWordEditMode = true
-                    state.statusText = "Found ${words.size} word(s). Tap any word in the panel below to edit or erase."
+                    state.statusText = "Found ${words.size} word(s). Tap any word to erase or replace."
                 } catch (e: Exception) {
                     state.statusText = "Detection error: ${e.message}"
                 } finally {
@@ -457,7 +488,6 @@ fun PdfEditorScreen(
         }
     }
 
-    // Launchers
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -519,7 +549,7 @@ fun PdfEditorScreen(
                         context.contentResolver.openOutputStream(destUri)?.use { out ->
                             tempMerged.inputStream().use { inp -> inp.copyTo(out) }
                         }
-                        tempMerged
+                        tempMerged.delete()
                     }
                     pendingMergeUris = null
                     state.statusText = "Merged PDF saved successfully!"
@@ -565,14 +595,14 @@ fun PdfEditorScreen(
         }
     }
 
-    // 100% RELIABLE VECTOR & BITMAP PDF COMPILER (PERMANENTLY BURNS EDITS)
+    // ACCURATE VECTOR AND ALIGNED TEXT COMPILER (ELIMINATES CRASHES AND MISALIGNMENT)
     val pdfSaveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/pdf")
     ) { destUri: Uri? ->
         if (destUri != null && state.pages.isNotEmpty()) {
             coroutineScope.launch {
                 state.isProcessing = true
-                state.statusText = "Compiling and embedding all edits permanently into PDF..."
+                state.statusText = "Compiling PDF with exact baseline typography..."
                 try {
                     withContext(Dispatchers.IO) {
                         val pdfDocument = PdfDocument()
@@ -581,44 +611,38 @@ fun PdfEditorScreen(
                             val bmpWidth = page.baseBitmap.width
                             val bmpHeight = page.baseBitmap.height
 
-                            val pageInfo = PdfDocument.PageInfo.Builder(bmpWidth, bmpHeight, pIdx + 1).create()
+                            // Standardize to PostScript points (72 pt/inch based on 150 DPI render)
+                            val ptWidth = ((bmpWidth * 72f) / 150f).roundToInt().coerceAtLeast(100)
+                            val ptHeight = ((bmpHeight * 72f) / 150f).roundToInt().coerceAtLeast(100)
+                            val scaleFactor = ptWidth.toFloat() / bmpWidth.toFloat()
+
+                            val pageInfo = PdfDocument.PageInfo.Builder(ptWidth, ptHeight, pIdx + 1).create()
                             val pdfPage = pdfDocument.startPage(pageInfo)
                             val pdfCanvas = pdfPage.canvas
 
-                            // 1. Draw page bitmap (which already contains baked erasures & replacements)
-                            pdfCanvas.drawBitmap(page.baseBitmap, 0f, 0f, null)
+                            // 1. Draw base page bitmap scaled to points
+                            val dstRect = RectF(0f, 0f, ptWidth.toFloat(), ptHeight.toFloat())
+                            pdfCanvas.drawBitmap(page.baseBitmap, null, dstRect, null)
 
-                            // 2. Draw all draggable text boxes & whiteout overlays
+                            // 2. Draw overlays scaled directly to point dimensions with baseline alignment
                             page.elements.forEach { elem ->
-                                if (elem.isWhiteout) {
+                                val scaledX = elem.xOffset * scaleFactor
+                                val scaledY = elem.yOffset * scaleFactor
+                                val scaledW = elem.width * scaleFactor
+                                val scaledH = elem.height * scaleFactor
+
+                                if (elem.isWhiteout || elem.backgroundColor != Color.Transparent) {
                                     val bgPaint = Paint().apply {
-                                        color = android.graphics.Color.WHITE
+                                        color = if (elem.isWhiteout) elem.backgroundColor.toArgb() else elem.backgroundColor.toArgb()
                                         style = Paint.Style.FILL
                                     }
-                                    pdfCanvas.drawRect(
-                                        elem.xOffset,
-                                        elem.yOffset,
-                                        elem.xOffset + elem.width,
-                                        elem.yOffset + elem.height,
-                                        bgPaint
-                                    )
-                                } else {
-                                    if (elem.backgroundColor != Color.Transparent) {
-                                        val bgPaint = Paint().apply {
-                                            color = elem.backgroundColor.toArgb()
-                                            style = Paint.Style.FILL
-                                        }
-                                        pdfCanvas.drawRect(
-                                            elem.xOffset - 4f,
-                                            elem.yOffset - elem.fontSize * 1.4f,
-                                            elem.xOffset + elem.width + 4f,
-                                            elem.yOffset + 6f,
-                                            bgPaint
-                                        )
-                                    }
+                                    pdfCanvas.drawRect(scaledX, scaledY, scaledX + scaledW, scaledY + scaledH, bgPaint)
+                                }
+
+                                if (!elem.isWhiteout && elem.text.isNotBlank()) {
                                     val textPaint = Paint().apply {
                                         color = elem.textColor.toArgb()
-                                        textSize = elem.fontSize * 2.2f // scaled to high-res page
+                                        textSize = elem.fontSize * scaleFactor * 1.33f
                                         isAntiAlias = true
                                         val style = when {
                                             elem.isBold && elem.isItalic -> Typeface.BOLD_ITALIC
@@ -628,7 +652,17 @@ fun PdfEditorScreen(
                                         }
                                         typeface = Typeface.create(Typeface.DEFAULT, style)
                                     }
-                                    pdfCanvas.drawText(elem.text, elem.xOffset, elem.yOffset + elem.fontSize * 1.5f, textPaint)
+
+                                    // Multiline baseline typography rendering
+                                    val lines = elem.text.split("\n")
+                                    val lineHeight = textPaint.fontSpacing
+                                    val fontMetrics = textPaint.fontMetrics
+                                    val baselineOffset = -fontMetrics.ascent
+
+                                    lines.forEachIndexed { lineIdx, line ->
+                                        val lineY = scaledY + baselineOffset + (lineIdx * lineHeight)
+                                        pdfCanvas.drawText(line, scaledX, lineY, textPaint)
+                                    }
                                 }
                             }
 
@@ -637,11 +671,12 @@ fun PdfEditorScreen(
 
                         context.contentResolver.openOutputStream(destUri)?.use { outStream ->
                             pdfDocument.writeTo(outStream)
+                            outStream.flush()
                         }
                         pdfDocument.close()
                     }
                     state.statusText = "Saved edited PDF successfully!"
-                    Toast.makeText(context, "Saved Edited PDF with all changes intact!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Saved Edited PDF with changes intact!", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     state.statusText = "Save error: ${e.message}"
                 } finally {
@@ -818,6 +853,15 @@ fun PdfEditorScreen(
 
                     if (activeElement != null) {
                         Button(
+                            onClick = { openEditDialogForElement(activeElement) },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Text("✎ Re-edit Text", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
                             onClick = {
                                 pushCanvasSnapshot()
                                 activePage?.elements?.removeAll { it.id == state.activeElementId }
@@ -842,7 +886,7 @@ fun PdfEditorScreen(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                         modifier = Modifier.height(28.dp)
                     ) {
-                        Text("🗑 Delete Page(s)", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("🗑 Delete Page", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
 
                     Button(
@@ -942,15 +986,7 @@ fun PdfEditorScreen(
                                 )
                                 page.elements.add(newElem)
                                 state.activeElementId = newElem.id
-                                editingTextValue = newElem.text
-                                editingFontSize = newElem.fontSize
-                                editingIsBold = newElem.isBold
-                                editingIsItalic = newElem.isItalic
-                                editingColor = Color(0xFF292524)
-                                editingOpacity = 0.90f
-                                editingBgColor = newElem.backgroundColor
-                                editingIsWhiteout = false
-                                showTextEditDialog = true
+                                openEditDialogForElement(newElem)
                             }
                         },
                         enabled = activePage != null,
@@ -1087,6 +1123,15 @@ fun PdfEditorScreen(
                         color = Color(0xFF283593)
                     )
 
+                    Button(
+                        onClick = { openEditDialogForElement(activeElement) },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3F51B5)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(26.dp)
+                    ) {
+                        Text("✎ Edit Text", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+
                     Text("Move:", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                     Button(onClick = { activeElement.xOffset -= 4f }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("◀", fontSize = 10.sp) }
                     Button(onClick = { activeElement.xOffset += 4f }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("▶", fontSize = 10.sp) }
@@ -1124,7 +1169,7 @@ fun PdfEditorScreen(
             }
         }
 
-        // ZOOMABLE & PANNABLE PAGE CANVAS (GUARANTEED MINIMUM HEIGHT, NEVER INVISIBLE)
+        // ZOOMABLE & PANNABLE PAGE CANVAS
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
@@ -1165,7 +1210,6 @@ fun PdfEditorScreen(
                             translationY = state.panOffsetY
                         )
                 ) {
-                    // Base Page Image (Contains baked erasures & replacements)
                     Image(
                         bitmap = activePage.baseBitmap.asImageBitmap(),
                         contentDescription = "Page ${state.activePageIndex + 1}",
@@ -1173,7 +1217,7 @@ fun PdfEditorScreen(
                         contentScale = ContentScale.Fit
                     )
 
-                    // LIVE VISUAL LOCATOR & REAL-TIME PREVIEW DIRECTLY OVER TARGET WORD
+                    // LIVE VISUAL LOCATOR & REAL-TIME PREVIEW OVER WORD BEING EDITED
                     if (state.editingWordBox != null) {
                         val wordBox = state.editingWordBox!!
                         val targetScreenX = originX + wordBox.x * renderScale
@@ -1181,7 +1225,13 @@ fun PdfEditorScreen(
                         val targetScreenW = (wordBox.width * renderScale).coerceAtLeast(14f)
                         val targetScreenH = (wordBox.height * renderScale).coerceAtLeast(12f)
 
-                        // 1. High-Visibility Pulsing Glowing Frame around the Word
+                        val activePaperBg = if (state.liveWordPaperColor == Color.Transparent) {
+                            wordBox.sampledPaperColor
+                        } else {
+                            state.liveWordPaperColor
+                        }
+
+                        // 1. High-Visibility Pulsing Glowing Frame
                         Box(
                             modifier = Modifier
                                 .offset { IntOffset((targetScreenX - 4f).roundToInt(), (targetScreenY - 4f).roundToInt()) }
@@ -1202,15 +1252,15 @@ fun PdfEditorScreen(
                             )
                         }
 
-                        // 2. Exact Whiteout Mask Covering the Original Word in real time
+                        // 2. Texture-Matched Whiteout Mask Covering the Word
                         Box(
                             modifier = Modifier
                                 .offset { IntOffset(targetScreenX.roundToInt(), targetScreenY.roundToInt()) }
                                 .size(targetScreenW.dp, targetScreenH.dp)
-                                .background(Color.White)
+                                .background(activePaperBg)
                         )
 
-                        // 3. Live Replacement Text Rendered Directly on Top of Original Document
+                        // 3. Live Replacement Text Rendered Directly on Top
                         Text(
                             text = state.liveWordText,
                             fontSize = (targetScreenH * 0.90f).coerceAtLeast(8f).sp,
@@ -1222,7 +1272,7 @@ fun PdfEditorScreen(
                         )
                     }
 
-                    // Regular Text & Whiteout Overlays
+                    // Regular Text & Whiteout Overlays (Selectable & Re-editable)
                     activePage.elements.forEach { element ->
                         val isSelected = element.id == state.activeElementId
                         var offsetX by remember(element.id) { mutableFloatStateOf(element.xOffset) }
@@ -1230,73 +1280,86 @@ fun PdfEditorScreen(
                         var elWidth by remember(element.id) { mutableFloatStateOf(element.width) }
                         var elHeight by remember(element.id) { mutableFloatStateOf(element.height) }
 
+                        val screenElemX = originX + offsetX * renderScale
+                        val screenElemY = originY + offsetY * renderScale
+                        val screenElemW = (elWidth * renderScale).coerceAtLeast(16f)
+                        val screenElemH = (elHeight * renderScale).coerceAtLeast(10f)
+
                         Box(
                             modifier = Modifier
-                                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-                                .size(elWidth.dp, elHeight.dp)
+                                .offset { IntOffset(screenElemX.roundToInt(), screenElemY.roundToInt()) }
+                                .size(screenElemW.dp, screenElemH.dp)
                                 .pointerInput(element.id) {
                                     detectDragGestures { change, dragAmount ->
                                         change.consume()
-                                        offsetX += dragAmount.x
-                                        offsetY += dragAmount.y
+                                        offsetX += dragAmount.x / renderScale
+                                        offsetY += dragAmount.y / renderScale
                                         element.xOffset = offsetX
                                         element.yOffset = offsetY
                                     }
                                 }
-                                .clickable { state.activeElementId = element.id }
+                                .pointerInput(element.id) {
+                                    detectTapGestures(
+                                        onTap = { state.activeElementId = element.id },
+                                        onDoubleTap = { openEditDialogForElement(element) }
+                                    )
+                                }
                                 .background(
-                                    if (element.isWhiteout) Color.White else element.backgroundColor,
-                                    RoundedCornerShape(3.dp)
+                                    if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
+                                    RoundedCornerShape(2.dp)
                                 )
                                 .border(
                                     width = if (isSelected) 1.5.dp else 0.5.dp,
                                     color = if (isSelected) Color(0xFF1976D2) else if (element.isWhiteout) Color.LightGray else Color.Transparent,
-                                    shape = RoundedCornerShape(3.dp)
+                                    shape = RoundedCornerShape(2.dp)
                                 )
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                .padding(horizontal = 2.dp, vertical = 1.dp)
                         ) {
                             if (!element.isWhiteout) {
                                 Text(
                                     text = element.text.ifBlank { " " },
-                                    fontSize = element.fontSize.sp,
+                                    fontSize = (element.fontSize * renderScale * 1.33f).coerceAtLeast(6f).sp,
                                     fontWeight = if (element.isBold) FontWeight.Bold else FontWeight.Normal,
                                     fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
-                                    color = element.textColor,
-                                    modifier = Modifier.clickable {
-                                        state.activeElementId = element.id
-                                        editingTextValue = element.text
-                                        editingFontSize = element.fontSize
-                                        editingIsBold = element.isBold
-                                        editingIsItalic = element.isItalic
-                                        editingColor = element.textColor
-                                        editingOpacity = element.textColor.alpha
-                                        editingBgColor = element.backgroundColor
-                                        editingIsWhiteout = false
-                                        showTextEditDialog = true
-                                    }
+                                    color = element.textColor
                                 )
                             }
 
-                            // DELETE ✕ BADGE ON TOP-RIGHT CORNER
+                            // Active Selection Controls: Edit & Delete Badges
                             if (isSelected) {
-                                Box(
+                                Row(
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
-                                        .offset(x = 8.dp, y = (-8).dp)
-                                        .size(20.dp)
-                                        .background(Color.Red, CircleShape)
-                                        .clickable {
-                                            pushCanvasSnapshot()
-                                            activePage.elements.removeAll { it.id == element.id }
-                                            state.activeElementId = null
-                                            state.statusText = "Deleted element."
-                                        },
-                                    contentAlignment = Alignment.Center
+                                        .offset(x = 12.dp, y = (-12).dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    Text("✕", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .background(Color(0xFF1565C0), CircleShape)
+                                            .clickable { openEditDialogForElement(element) },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("✎", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .background(Color.Red, CircleShape)
+                                            .clickable {
+                                                pushCanvasSnapshot()
+                                                activePage.elements.removeAll { it.id == element.id }
+                                                state.activeElementId = null
+                                                state.statusText = "Deleted element."
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("✕", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
 
-                                // DRAGGABLE CORNER RESIZE HANDLE ON BOTTOM-RIGHT
+                                // Interactive Corner Resize Handle
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.BottomEnd)
@@ -1307,8 +1370,8 @@ fun PdfEditorScreen(
                                         .pointerInput(element.id) {
                                             detectDragGestures { change, dragAmount ->
                                                 change.consume()
-                                                elWidth = (elWidth + dragAmount.x).coerceAtLeast(20f)
-                                                elHeight = (elHeight + dragAmount.y).coerceAtLeast(12f)
+                                                elWidth = (elWidth + dragAmount.x / renderScale).coerceAtLeast(16f)
+                                                elHeight = (elHeight + dragAmount.y / renderScale).coerceAtLeast(10f)
                                                 element.width = elWidth
                                                 element.height = elHeight
                                             }
@@ -1372,7 +1435,7 @@ fun PdfEditorScreen(
             }
         }
 
-        // SEPARATE DOCKED UI: DETECTED WORDS SHELF & LIVE RESIZABLE NOTE BOX WITH INK MATCHING
+        // SEPARATE DOCKED UI: DETECTED WORDS SHELF & LIVE RESIZABLE NOTE BOX
         if (state.isInlineWordEditMode && activePage != null) {
             Card(
                 modifier = Modifier
@@ -1390,7 +1453,6 @@ fun PdfEditorScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     if (state.editingWordBox == null) {
-                        // Word list view
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1436,16 +1498,17 @@ fun PdfEditorScreen(
                                         modifier = Modifier.clickable {
                                             state.editingWordBox = wordBox
                                             state.liveWordText = wordBox.word
-                                            state.liveWordFontSize = 14f
+                                            state.liveWordFontSize = (wordBox.height * 0.70f).coerceIn(10f, 24f)
                                             state.liveWordIsBold = false
                                             state.liveWordIsItalic = false
                                             state.liveWordColor = Color(0xFF292524)
+                                            state.liveWordPaperColor = Color.Transparent
                                             state.liveWordOpacity = 0.90f
                                             state.isNoteBoxMinimized = false
 
-                                            // Automatically pan & zoom directly to this word on the canvas
-                                            state.zoomScale = 1.9f
-                                            state.panOffsetX = -(wordBox.x * 0.35f)
+                                            // Auto-pan directly to this word
+                                            state.zoomScale = 2.0f
+                                            state.panOffsetX = -(wordBox.x * 0.40f)
                                             state.panOffsetY = -(wordBox.y * 0.35f)
                                         }
                                     ) {
@@ -1461,7 +1524,7 @@ fun PdfEditorScreen(
                             }
                         }
                     } else {
-                        // NOTE BOX: REAL-TIME REPLACEMENT & INK MATCHING CONTROLS
+                        // NOTE BOX: REAL-TIME REPLACEMENT & TEXTURE MATCHING CONTROLS
                         val target = state.editingWordBox!!
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1497,7 +1560,7 @@ fun PdfEditorScreen(
                             OutlinedTextField(
                                 value = state.liveWordText,
                                 onValueChange = { state.liveWordText = it },
-                                label = { Text("Replacement Text (Type freely, live preview above)", fontSize = 10.sp) },
+                                label = { Text("Replacement Text (Updates in real time on PDF)", fontSize = 10.sp) },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                                 textStyle = TextStyle(
@@ -1528,7 +1591,39 @@ fun PdfEditorScreen(
                                 Button(onClick = { target.height += 2f }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(22.dp)) { Text("H+", fontSize = 8.sp) }
                             }
 
-                            // INK TONE & OPACITY CONTROLS
+                            // PAPER TEXTURE SELECTION FOR ERASER / WHITEOUT
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Paper Match:", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+                                PaperTexturePalette.forEach { (name, col) ->
+                                    val isSelected = state.liveWordPaperColor == col
+                                    val displayColor = if (col == Color.Transparent) target.sampledPaperColor else col
+                                    Row(
+                                        modifier = Modifier
+                                            .background(if (isSelected) Color(0xFFE0F2F1) else Color.Transparent, RoundedCornerShape(4.dp))
+                                            .border(if (isSelected) 1.dp else 0.dp, if (isSelected) Color(0xFF00796B) else Color.Transparent, RoundedCornerShape(4.dp))
+                                            .clickable { state.liveWordPaperColor = col }
+                                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .background(displayColor, CircleShape)
+                                                .border(0.5.dp, Color.Gray, CircleShape)
+                                        )
+                                        Text(name, fontSize = 8.sp, color = Color.DarkGray)
+                                    }
+                                }
+                            }
+
+                            // INK TONE & DENSITY
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1554,44 +1649,6 @@ fun PdfEditorScreen(
                                             color = if (isSel) Color.White else Color.Black,
                                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                                         )
-                                    }
-                                }
-                            }
-
-                            // Ink Shades Palette
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Ink Tone:", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-                                InkShadePalette.forEach { (name, col) ->
-                                    val isSelected = state.liveWordColor == col
-                                    Row(
-                                        modifier = Modifier
-                                            .background(
-                                                if (isSelected) Color(0xFFE0F2F1) else Color.Transparent,
-                                                RoundedCornerShape(4.dp)
-                                            )
-                                            .border(
-                                                if (isSelected) 1.dp else 0.dp,
-                                                if (isSelected) Color(0xFF00796B) else Color.Transparent,
-                                                RoundedCornerShape(4.dp)
-                                            )
-                                            .clickable { state.liveWordColor = col }
-                                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(16.dp)
-                                                .background(col, CircleShape)
-                                                .border(0.5.dp, Color.Gray, CircleShape)
-                                        )
-                                        Text(name, fontSize = 9.sp, color = Color.DarkGray)
                                     }
                                 }
                             }
@@ -1633,6 +1690,22 @@ fun PdfEditorScreen(
                                     contentPadding = PaddingValues(0.dp),
                                     modifier = Modifier.size(24.dp)
                                 ) { Text("+", fontSize = 10.sp) }
+
+                                Spacer(modifier = Modifier.width(4.dp))
+
+                                listOf(Color(0xFF000000), Color(0xFF292524), Color(0xFF1565C0), Color(0xFFC62828)).forEach { col ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .background(col, CircleShape)
+                                            .border(
+                                                width = if (state.liveWordColor == col) 2.dp else 0.5.dp,
+                                                color = if (state.liveWordColor == col) Color.Cyan else Color.Gray,
+                                                shape = CircleShape
+                                            )
+                                            .clickable { state.liveWordColor = col }
+                                    )
+                                }
                             }
 
                             // Action buttons
@@ -1642,16 +1715,16 @@ fun PdfEditorScreen(
                             ) {
                                 Button(
                                     onClick = {
-                                        applyWordEraseOrReplace(target, state.liveWordText)
+                                        applyWordEraseOrReplaceOverlay(target, state.liveWordText)
                                     },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00796B)),
                                     modifier = Modifier.weight(1.2f).height(32.dp),
                                     shape = RoundedCornerShape(6.dp)
-                                ) { Text("✓ Confirm", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                                ) { Text("✓ Confirm Edit", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
 
                                 Button(
                                     onClick = {
-                                        applyWordEraseOrReplace(target, null)
+                                        applyWordEraseOrReplaceOverlay(target, null)
                                     },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
                                     modifier = Modifier.weight(0.9f).height(32.dp),
@@ -1670,7 +1743,7 @@ fun PdfEditorScreen(
             }
         }
 
-        // BOTTOM PAGE SEQUENCE STRIP WITH DIRECT MOVE BUTTONS
+        // BOTTOM PAGE SEQUENCE STRIP
         if (state.pages.isNotEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -1959,13 +2032,13 @@ fun PdfEditorScreen(
         )
     }
 
-    // MODAL: RICH TEXT FORMATTING
+    // MODAL: RICH TEXT & LETTER FORMATTING (SUPPORTS DOWN TO 1 SP & INK MATCHING)
     if (showTextEditDialog) {
         AlertDialog(
             onDismissRequest = { showTextEditDialog = false },
             title = {
                 Text(
-                    text = if (editingIsWhiteout) "Format Whiteout Block" else "Edit Text & Ink Matching",
+                    text = if (editingIsWhiteout) "Format Whiteout Block" else "Edit Text & Typography",
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
                     color = Color(0xFF0D47A1)
@@ -1982,7 +2055,7 @@ fun PdfEditorScreen(
                         OutlinedTextField(
                             value = editingTextValue,
                             onValueChange = { editingTextValue = it },
-                            label = { Text("Letter / Text Content") },
+                            label = { Text("Text Content (Supports multiline)") },
                             modifier = Modifier.fillMaxWidth(),
                             textStyle = TextStyle(
                                 fontSize = editingFontSize.sp,
@@ -2029,6 +2102,7 @@ fun PdfEditorScreen(
                             ) { Text("+") }
                         }
 
+                        // INK DENSITY
                         Text("Ink Density (Reduce Blackness to Match PDF):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2043,7 +2117,7 @@ fun PdfEditorScreen(
                             ).forEach { (label, opacityVal) ->
                                 val isSel = (editingOpacity * 100).roundToInt() == (opacityVal * 100).roundToInt()
                                 Surface(
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = RoundedCornerShape(3.dp),
                                     color = if (isSel) Color(0xFF00796B) else Color(0xFFECEFF1),
                                     modifier = Modifier.clickable { editingOpacity = opacityVal }
                                 ) {
@@ -2058,6 +2132,7 @@ fun PdfEditorScreen(
                             }
                         }
 
+                        // Ink Shade Palette
                         Text("Ink Shade (Document Print Matching):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
                         Row(
                             modifier = Modifier
@@ -2087,20 +2162,34 @@ fun PdfEditorScreen(
                             }
                         }
 
-                        Text("Highlight / Background:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(Color.Transparent, Color.White, Color(0xFFFFF9C4), Color(0xFFE0F2FE), Color(0xFFE8F5E9)).forEach { bg ->
-                                Box(
+                        // Background Highlight
+                        Text("Background / Highlight Texture:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            PaperTexturePalette.forEach { (name, bg) ->
+                                val isSelected = editingBgColor == bg
+                                val displayColor = if (bg == Color.Transparent) Color.LightGray else bg
+                                Row(
                                     modifier = Modifier
-                                        .size(24.dp)
-                                        .background(if (bg == Color.Transparent) Color.LightGray else bg, CircleShape)
-                                        .border(
-                                            width = if (editingBgColor == bg) 2.dp else 0.5.dp,
-                                            color = if (editingBgColor == bg) Color.Blue else Color.Gray,
-                                            shape = CircleShape
-                                        )
+                                        .background(if (isSelected) Color(0xFFE0F2F1) else Color.Transparent, RoundedCornerShape(4.dp))
+                                        .border(if (isSelected) 1.dp else 0.dp, if (isSelected) Color(0xFF00796B) else Color.Transparent, RoundedCornerShape(4.dp))
                                         .clickable { editingBgColor = bg }
-                                )
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .background(displayColor, CircleShape)
+                                            .border(0.5.dp, Color.Gray, CircleShape)
+                                    )
+                                    Text(name, fontSize = 9.sp, color = Color.DarkGray)
+                                }
                             }
                         }
                     }

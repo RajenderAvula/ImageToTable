@@ -3,6 +3,7 @@ package com.example.imagetotable.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Paint
+import android.graphics.Path as AndroidPath
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -39,7 +40,10 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -73,10 +77,6 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.roundToInt
 
-/**
- * Reactive Compose-state backed model. Mutating any coordinate, dimension or text
- * immediately triggers an instantaneous real-time UI recomposition and redraw.
- */
 class RichPdfTextElement(
     val id: String = UUID.randomUUID().toString(),
     initialText: String = "Tap to type",
@@ -151,6 +151,7 @@ data class EditablePdfPage(
 
 data class CanvasSnapshot(
     val pageIndex: Int,
+    val bitmapCopy: Bitmap,
     val elements: List<RichPdfTextElement>
 )
 
@@ -165,10 +166,12 @@ class PdfEditorState {
     var zoomScale by mutableFloatStateOf(1f)
     var panOffsetX by mutableFloatStateOf(0f)
     var panOffsetY by mutableFloatStateOf(0f)
+    var pageRenderVersion by mutableIntStateOf(0)
 
     val canvasUndoStack = mutableStateListOf<CanvasSnapshot>()
     val canvasRedoStack = mutableStateListOf<CanvasSnapshot>()
 
+    // Word Inspector & Note Box State
     var isInlineWordEditMode by mutableStateOf(false)
     var wordSearchFilter by mutableStateOf("")
     var editingWordBox by mutableStateOf<DetectedWordBox?>(null)
@@ -181,6 +184,17 @@ class PdfEditorState {
     var liveWordPaperColor by mutableStateOf(Color.Transparent)
     var liveWordOpacity by mutableFloatStateOf(0.90f)
 
+    // Dedicated Eraser Tool State
+    var isEraserToolActive by mutableStateOf(false)
+    var selectedEraserTexture by mutableStateOf(Color.Transparent)
+    var eraserPaddingPx by mutableFloatStateOf(4f)
+
+    // Dedicated Pen / Highlighter Tool State
+    var isPenModeActive by mutableStateOf(false)
+    var isHighlighterMode by mutableStateOf(false)
+    var penColor by mutableStateOf(Color(0xFF1565C0)) // Classic ballpoint blue
+    var penStrokeWidth by mutableFloatStateOf(4f)
+
     fun reset() {
         activeEditor?.close()
         activeEditor = null
@@ -192,6 +206,7 @@ class PdfEditorState {
         zoomScale = 1f
         panOffsetX = 0f
         panOffsetY = 0f
+        pageRenderVersion = 0
         canvasUndoStack.clear()
         canvasRedoStack.clear()
         isInlineWordEditMode = false
@@ -200,6 +215,13 @@ class PdfEditorState {
         isNoteBoxMinimized = false
         liveWordText = ""
         liveWordOpacity = 0.90f
+        isEraserToolActive = false
+        selectedEraserTexture = Color.Transparent
+        eraserPaddingPx = 4f
+        isPenModeActive = false
+        isHighlighterMode = false
+        penColor = Color(0xFF1565C0)
+        penStrokeWidth = 4f
     }
 }
 
@@ -224,7 +246,28 @@ val PaperTexturePalette = listOf(
     Pair("Warm Ivory", Color(0xFFFCFBF7)),
     Pair("Cream Paper", Color(0xFFF9F7F1)),
     Pair("Scan Grey", Color(0xFFF3F4F6)),
-    Pair("Vintage", Color(0xFFF5EFEB))
+    Pair("Vintage Parchment", Color(0xFFF5EFEB))
+)
+
+val AnnotationPenColors = listOf(
+    Pair("Blue", Color(0xFF1565C0)),
+    Pair("Black", Color(0xFF000000)),
+    Pair("Red", Color(0xFFD32F2F)),
+    Pair("Green", Color(0xFF2E7D32)),
+    Pair("Yellow", Color(0xFFFFEB3B)),
+    Pair("Pink", Color(0xFFE91E63)),
+    Pair("Orange", Color(0xFFFF9800)),
+    Pair("Purple", Color(0xFF7B1FA2)),
+    Pair("White", Color(0xFFFFFFFF))
+)
+
+val PenThicknesses = listOf(
+    Pair("1pt", 1.5f),
+    Pair("2pt", 3f),
+    Pair("4pt", 6f),
+    Pair("8pt", 12f),
+    Pair("16pt", 22f),
+    Pair("24pt", 34f)
 )
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -267,18 +310,25 @@ fun PdfEditorScreen(
     var showPageNumbersDialog by remember { mutableStateOf(false) }
     var pageNumberFormatInput by remember { mutableStateOf("Page {n} of {total}") }
 
+    // Live stroke points during active touch drag
+    val liveDrawingStroke = remember { mutableStateListOf<Offset>() }
+
     val activePage = state.pages.getOrNull(state.activePageIndex)
     val activeElement = activePage?.elements?.find { it.id == state.activeElementId }
 
     fun pushCanvasSnapshot() {
         activePage?.let { page ->
+            val bmpCopy = page.baseBitmap.copy(page.baseBitmap.config ?: Bitmap.Config.ARGB_8888, true)
             state.canvasUndoStack.add(
                 CanvasSnapshot(
                     pageIndex = state.activePageIndex,
+                    bitmapCopy = bmpCopy,
                     elements = page.elements.map { it.copyElement() }
                 )
             )
-            if (state.canvasUndoStack.size > 30) state.canvasUndoStack.removeAt(0)
+            if (state.canvasUndoStack.size > 25) {
+                state.canvasUndoStack.removeAt(0).bitmapCopy.recycle()
+            }
             state.canvasRedoStack.clear()
         }
     }
@@ -300,22 +350,27 @@ fun PdfEditorScreen(
         if (state.activePageIndex >= state.pages.size) {
             state.activePageIndex = (state.pages.size - 1).coerceAtLeast(0)
         }
+        state.pageRenderVersion++
     }
 
     fun undoLastAction() {
         if (state.canvasUndoStack.isNotEmpty()) {
             val snapshot = state.canvasUndoStack.removeAt(state.canvasUndoStack.size - 1)
             activePage?.let { page ->
+                val currentBmpCopy = page.baseBitmap.copy(page.baseBitmap.config ?: Bitmap.Config.ARGB_8888, true)
                 state.canvasRedoStack.add(
                     CanvasSnapshot(
                         pageIndex = state.activePageIndex,
+                        bitmapCopy = currentBmpCopy,
                         elements = page.elements.map { it.copyElement() }
                     )
                 )
+                page.baseBitmap = snapshot.bitmapCopy
                 page.elements.clear()
                 page.elements.addAll(snapshot.elements.map { it.copyElement() })
                 state.activeElementId = null
-                state.statusText = "Undid last edit."
+                state.pageRenderVersion++
+                state.statusText = "Undid last action."
             }
         } else if (state.activeEditor?.canUndo == true) {
             state.activeEditor?.let { editor ->
@@ -331,16 +386,20 @@ fun PdfEditorScreen(
         if (state.canvasRedoStack.isNotEmpty()) {
             val snapshot = state.canvasRedoStack.removeAt(state.canvasRedoStack.size - 1)
             activePage?.let { page ->
+                val currentBmpCopy = page.baseBitmap.copy(page.baseBitmap.config ?: Bitmap.Config.ARGB_8888, true)
                 state.canvasUndoStack.add(
                     CanvasSnapshot(
                         pageIndex = state.activePageIndex,
+                        bitmapCopy = currentBmpCopy,
                         elements = page.elements.map { it.copyElement() }
                     )
                 )
+                page.baseBitmap = snapshot.bitmapCopy
                 page.elements.clear()
                 page.elements.addAll(snapshot.elements.map { it.copyElement() })
                 state.activeElementId = null
-                state.statusText = "Redid edit."
+                state.pageRenderVersion++
+                state.statusText = "Redid action."
             }
         } else if (state.activeEditor?.canRedo == true) {
             state.activeEditor?.let { editor ->
@@ -352,34 +411,82 @@ fun PdfEditorScreen(
         }
     }
 
-    fun sampleSurroundingPaperColor(bitmap: Bitmap, relX: Float, relY: Float, relW: Float, relH: Float): Color {
+    fun samplePurePaperBackground(bitmap: Bitmap, relX: Float, relY: Float, relW: Float, relH: Float): Color {
         val bW = bitmap.width.toFloat()
         val bH = bitmap.height.toFloat()
-        val pxLeft = (relX * bW).toInt()
-        val pxTop = (relY * bH).toInt()
+        val pxLeft = (relX * bW).toInt().coerceIn(0, bitmap.width - 1)
+        val pxTop = (relY * bH).toInt().coerceIn(0, bitmap.height - 1)
         val pxW = (relW * bW).toInt().coerceAtLeast(4)
         val pxH = (relH * bH).toInt().coerceAtLeast(4)
 
-        val sampleOffsets = listOf(
-            Pair(-4, pxH / 2),
-            Pair(pxW + 4, pxH / 2),
-            Pair(pxW / 2, -4),
-            Pair(pxW / 2, pxH + 4)
-        )
-        var rSum = 0L; var gSum = 0L; var bSum = 0L; var count = 0
-        for ((dx, dy) in sampleOffsets) {
-            val sx = (pxLeft + dx).coerceIn(0, bitmap.width - 1)
-            val sy = (pxTop + dy).coerceIn(0, bitmap.height - 1)
-            val pixel = bitmap.getPixel(sx, sy)
-            rSum += android.graphics.Color.red(pixel)
-            gSum += android.graphics.Color.green(pixel)
-            bSum += android.graphics.Color.blue(pixel)
-            count++
+        val samplePoints = mutableListOf<Pair<Int, Int>>()
+        for (step in 0..4) {
+            val frac = step / 4f
+            samplePoints.add(Pair(pxLeft + (pxW * frac).toInt(), (pxTop - 5).coerceAtLeast(0)))
+            samplePoints.add(Pair(pxLeft + (pxW * frac).toInt(), (pxTop + pxH + 5).coerceAtMost(bitmap.height - 1)))
+            samplePoints.add(Pair((pxLeft - 5).coerceAtLeast(0), pxTop + (pxH * frac).toInt()))
+            samplePoints.add(Pair((pxLeft + pxW + 5).coerceAtMost(bitmap.width - 1), pxTop + (pxH * frac).toInt()))
         }
+
+        var rSum = 0L; var gSum = 0L; var bSum = 0L; var count = 0
+        for ((x, y) in samplePoints) {
+            val pixel = bitmap.getPixel(x.coerceIn(0, bitmap.width - 1), y.coerceIn(0, bitmap.height - 1))
+            val r = android.graphics.Color.red(pixel)
+            val g = android.graphics.Color.green(pixel)
+            val b = android.graphics.Color.blue(pixel)
+            val luminance = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+            if (luminance >= 140) {
+                rSum += r; gSum += g; bSum += b
+                count++
+            }
+        }
+
         return if (count > 0) {
-            Color((rSum / count).toInt(), (gSum / count).toInt(), (bSum / count).toInt())
+            Color((rSum / count).toInt(), (gSum / count).toInt(), (bSum / count).toInt(), 255)
         } else {
             Color(0xFFFCFBF9)
+        }
+    }
+
+    fun eraseWordWithTexture(target: DetectedWordBox) {
+        activePage?.let { page ->
+            pushCanvasSnapshot()
+
+            val targetPaperColor = if (state.selectedEraserTexture == Color.Transparent) {
+                samplePurePaperBackground(page.baseBitmap, target.relX, target.relY, target.relWidth, target.relHeight)
+            } else {
+                state.selectedEraserTexture
+            }
+
+            val canvas = android.graphics.Canvas(page.baseBitmap)
+            val paint = Paint().apply {
+                color = targetPaperColor.toArgb()
+                style = Paint.Style.FILL
+            }
+            val bW = page.baseBitmap.width.toFloat()
+            val bH = page.baseBitmap.height.toFloat()
+            val pad = state.eraserPaddingPx
+            val eraseRect = RectF(
+                (target.relX * bW - pad).coerceAtLeast(0f),
+                (target.relY * bH - pad).coerceAtLeast(0f),
+                ((target.relX + target.relWidth) * bW + pad).coerceAtMost(bW),
+                ((target.relY + target.relHeight) * bH + pad).coerceAtMost(bH)
+            )
+            canvas.drawRect(eraseRect, paint)
+
+            val overlayWhiteout = RichPdfTextElement(
+                initialText = "",
+                initialRelX = target.relX - (pad / bW),
+                initialRelY = target.relY - (pad / bH),
+                initialRelWidth = target.relWidth + (2f * pad / bW),
+                initialRelHeight = target.relHeight + (2f * pad / bH),
+                initialBackgroundColor = targetPaperColor,
+                initialIsWhiteout = true
+            )
+            page.elements.add(overlayWhiteout)
+            state.activeElementId = overlayWhiteout.id
+            state.pageRenderVersion++
+            state.statusText = "Erased '${target.word}' from document."
         }
     }
 
@@ -396,49 +503,55 @@ fun PdfEditorScreen(
         showTextEditDialog = true
     }
 
-    fun applyWordEraseOrReplaceOverlay(target: DetectedWordBox, replacementText: String?) {
+    fun applyWordEraseOrReplace(target: DetectedWordBox, replacementText: String?) {
         activePage?.let { page ->
             pushCanvasSnapshot()
 
-            val paperBg = if (state.liveWordPaperColor == Color.Transparent) {
-                target.sampledPaperColor
+            val solidPaperBg = if (state.liveWordPaperColor == Color.Transparent) {
+                samplePurePaperBackground(page.baseBitmap, target.relX, target.relY, target.relWidth, target.relHeight)
             } else {
                 state.liveWordPaperColor
             }
+
+            val canvas = android.graphics.Canvas(page.baseBitmap)
+            val erasePaint = Paint().apply {
+                color = solidPaperBg.toArgb()
+                style = Paint.Style.FILL
+            }
+            val bW = page.baseBitmap.width.toFloat()
+            val bH = page.baseBitmap.height.toFloat()
+            val pad = state.eraserPaddingPx
+            val eraseRect = RectF(
+                (target.relX * bW - pad).coerceAtLeast(0f),
+                (target.relY * bH - pad).coerceAtLeast(0f),
+                ((target.relX + target.relWidth) * bW + pad).coerceAtMost(bW),
+                ((target.relY + target.relHeight) * bH + pad).coerceAtMost(bH)
+            )
+            canvas.drawRect(eraseRect, erasePaint)
 
             if (!replacementText.isNullOrBlank()) {
                 val newOverlay = RichPdfTextElement(
                     initialText = replacementText,
                     initialRelX = target.relX,
                     initialRelY = target.relY,
-                    initialRelWidth = target.relWidth.coerceAtLeast(replacementText.length * 0.018f),
-                    initialRelHeight = target.relHeight.coerceAtLeast(0.024f),
+                    initialRelWidth = maxOf(target.relWidth, replacementText.length * 0.019f),
+                    initialRelHeight = maxOf(target.relHeight, 0.035f),
                     initialFontSizePt = state.liveWordFontSizePt,
                     initialIsBold = state.liveWordIsBold,
                     initialIsItalic = state.liveWordIsItalic,
                     initialTextColor = state.liveWordColor,
                     initialOpacity = state.liveWordOpacity,
-                    initialBackgroundColor = paperBg,
+                    initialBackgroundColor = solidPaperBg,
                     initialIsWhiteout = false
                 )
                 page.elements.add(newOverlay)
                 state.activeElementId = newOverlay.id
-                state.statusText = "Replaced '$replacementText' on exact line."
+                state.statusText = "Replaced with '$replacementText'. Original word wiped."
             } else {
-                val eraseWhiteout = RichPdfTextElement(
-                    initialText = "",
-                    initialRelX = target.relX - 0.002f,
-                    initialRelY = target.relY - 0.002f,
-                    initialRelWidth = target.relWidth + 0.004f,
-                    initialRelHeight = target.relHeight + 0.004f,
-                    initialBackgroundColor = paperBg,
-                    initialIsWhiteout = true
-                )
-                page.elements.add(eraseWhiteout)
-                state.activeElementId = eraseWhiteout.id
-                state.statusText = "Erased '${target.word}' on page with matched paper patch."
+                state.statusText = "Erased '${target.word}' from document."
             }
 
+            state.pageRenderVersion++
             state.editingWordBox = null
         }
     }
@@ -495,7 +608,7 @@ fun PdfEditorScreen(
                                                 initialRelWidth = rW,
                                                 initialRelHeight = rH
                                             )
-                                            wBox.sampledPaperColor = sampleSurroundingPaperColor(page.baseBitmap, rX, rY, rW, rH)
+                                            wBox.sampledPaperColor = samplePurePaperBackground(page.baseBitmap, rX, rY, rW, rH)
                                             result.add(wBox)
                                         }
                                     }
@@ -521,7 +634,7 @@ fun PdfEditorScreen(
                                         initialRelWidth = tw,
                                         initialRelHeight = th
                                     )
-                                    wBox.sampledPaperColor = sampleSurroundingPaperColor(page.baseBitmap, curX, curY, tw, th)
+                                    wBox.sampledPaperColor = samplePurePaperBackground(page.baseBitmap, curX, curY, tw, th)
                                     result.add(wBox)
                                     curX += tw + 0.015f
                                 }
@@ -532,7 +645,7 @@ fun PdfEditorScreen(
                     page.detectedWords.clear()
                     page.detectedWords.addAll(words)
                     state.isInlineWordEditMode = true
-                    state.statusText = "Found ${words.size} word(s). Tap any word to erase or replace in real time."
+                    state.statusText = "Found ${words.size} word(s). Tap any word below to edit or erase."
                 } catch (e: Exception) {
                     state.statusText = "Detection error: ${e.message}"
                 } finally {
@@ -542,6 +655,7 @@ fun PdfEditorScreen(
         }
     }
 
+    // Launchers
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -655,7 +769,7 @@ fun PdfEditorScreen(
         if (destUri != null && state.pages.isNotEmpty()) {
             coroutineScope.launch {
                 state.isProcessing = true
-                state.statusText = "Compiling PDF with exact baseline typography..."
+                state.statusText = "Compiling PDF with exact typography and erasures..."
                 try {
                     withContext(Dispatchers.IO) {
                         val pdfDocument = PdfDocument()
@@ -668,7 +782,7 @@ fun PdfEditorScreen(
                             val pdfPage = pdfDocument.startPage(pageInfo)
                             val pdfCanvas = pdfPage.canvas
 
-                            // 1. Draw base page bitmap directly to page points
+                            // 1. Draw base page bitmap directly to page points (contains baked erasures & annotations)
                             val dstRect = RectF(0f, 0f, ptWidth.toFloat(), ptHeight.toFloat())
                             pdfCanvas.drawBitmap(page.baseBitmap, null, dstRect, null)
 
@@ -701,7 +815,6 @@ fun PdfEditorScreen(
                                         typeface = Typeface.create(Typeface.DEFAULT, style)
                                     }
 
-                                    // Multiline baseline typography rendering
                                     val lines = elem.text.split("\n")
                                     val lineHeight = textPaint.fontSpacing
                                     val baselineOffset = -textPaint.fontMetrics.ascent
@@ -781,7 +894,12 @@ fun PdfEditorScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (state.editingWordBox != null) "🎯 Editing: '${state.editingWordBox?.word}'" else "✍️ PDF Studio: Real-Time Editor",
+                        text = when {
+                            state.isPenModeActive -> if (state.isHighlighterMode) "🖍️ Highlighter Active" else "✒️ Freehand Pen Active"
+                            state.isEraserToolActive -> "🧹 Document Eraser Active"
+                            state.editingWordBox != null -> "🎯 Editing: '${state.editingWordBox?.word}'"
+                            else -> "✍️ PDF Studio: Real-Time Editor"
+                        },
                         color = Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -898,6 +1016,65 @@ fun PdfEditorScreen(
                         Text("↪ Redo", fontSize = 10.sp, color = if (canRedoAction) Color.White else Color.Gray, fontWeight = FontWeight.Bold)
                     }
 
+                    // FREEHAND PEN / HIGHLIGHTER TOOL BUTTON
+                    Button(
+                        onClick = {
+                            state.isPenModeActive = !state.isPenModeActive
+                            if (state.isPenModeActive) {
+                                state.isEraserToolActive = false
+                                state.isInlineWordEditMode = false
+                                state.editingWordBox = null
+                                state.activeElementId = null
+                                state.statusText = "Pen active: Draw or write on page with finger or stylus."
+                            } else {
+                                state.statusText = "Exited Pen Mode."
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            backgroundColor = if (state.isPenModeActive) Color(0xFF2E7D32) else Color(0xFF43A047)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text(
+                            text = if (state.isPenModeActive) "✓ Pen Mode" else "✏️ Pen / Draw",
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // DEDICATED DOCUMENT TEXTURE ERASER TOGGLE
+                    Button(
+                        onClick = {
+                            state.isEraserToolActive = !state.isEraserToolActive
+                            if (state.isEraserToolActive) {
+                                state.isPenModeActive = false
+                                state.isInlineWordEditMode = false
+                                state.editingWordBox = null
+                                state.activeElementId = null
+                                if (activePage?.detectedWords?.isEmpty() == true) {
+                                    scanCurrentPageWords()
+                                }
+                                state.statusText = "Eraser active: Tap any word to erase with matched paper texture."
+                            } else {
+                                state.statusText = "Exited Eraser Tool."
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            backgroundColor = if (state.isEraserToolActive) Color(0xFFC62828) else Color(0xFFD32F2F)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text(
+                            text = if (state.isEraserToolActive) "✓ Eraser Active" else "🧹 Document Eraser",
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
                     if (activeElement != null) {
                         Button(
                             onClick = { openEditDialogForElement(activeElement) },
@@ -905,7 +1082,7 @@ fun PdfEditorScreen(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                             modifier = Modifier.height(28.dp)
                         ) {
-                            Text("✎ Re-edit Text", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("✎ Re-edit", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
 
                         Button(
@@ -919,7 +1096,7 @@ fun PdfEditorScreen(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                             modifier = Modifier.height(28.dp)
                         ) {
-                            Text("🗑 Delete Box", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("🗑 Delete", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -952,11 +1129,13 @@ fun PdfEditorScreen(
                     Button(
                         onClick = {
                             if (!state.isInlineWordEditMode) {
+                                state.isPenModeActive = false
+                                state.isEraserToolActive = false
                                 scanCurrentPageWords()
                             } else {
                                 state.isInlineWordEditMode = false
                                 state.editingWordBox = null
-                                state.statusText = "Exited inline word edit mode."
+                                state.statusText = "Exited word inspector mode."
                             }
                         },
                         enabled = activePage != null,
@@ -1154,8 +1333,160 @@ fun PdfEditorScreen(
             }
         }
 
+        // PEN / ANNOTATION DOCKED PALETTE (COLOR SELECTION & STROKE THICKNESS)
+        if (state.isPenModeActive && activePage != null) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFFE8F5E9),
+                elevation = 3.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Pen vs. Highlighter Switch
+                    Button(
+                        onClick = { state.isHighlighterMode = !state.isHighlighterMode },
+                        colors = ButtonDefaults.buttonColors(
+                            backgroundColor = if (state.isHighlighterMode) Color(0xFFFFEB3B) else Color(0xFF2E7D32)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(26.dp)
+                    ) {
+                        Text(
+                            text = if (state.isHighlighterMode) "🖍️ Highlight" else "✒️ Solid Pen",
+                            color = if (state.isHighlighterMode) Color.Black else Color.White,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Stroke Thickness Options
+                    Text("Size:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
+                    PenThicknesses.forEach { (lbl, widthVal) ->
+                        val isSel = state.penStrokeWidth == widthVal
+                        Surface(
+                            shape = RoundedCornerShape(3.dp),
+                            color = if (isSel) Color(0xFF2E7D32) else Color.White,
+                            border = BorderStroke(0.5.dp, Color.Gray),
+                            modifier = Modifier.clickable { state.penStrokeWidth = widthVal }
+                        ) {
+                            Text(
+                                text = lbl,
+                                fontSize = 9.sp,
+                                color = if (isSel) Color.White else Color.Black,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    // Color Swatches
+                    Text("Color:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
+                    AnnotationPenColors.forEach { (name, col) ->
+                        val isSel = state.penColor == col
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .background(col, CircleShape)
+                                .border(
+                                    width = if (isSel) 2.dp else 0.5.dp,
+                                    color = if (isSel) Color(0xFF00E676) else Color.Gray,
+                                    shape = CircleShape
+                                )
+                                .clickable { state.penColor = col }
+                        )
+                    }
+
+                    Button(
+                        onClick = { state.isPenModeActive = false },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF37474F)),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text("Done ✕", color = Color.White, fontSize = 9.sp)
+                    }
+                }
+            }
+        }
+
+        // DOCUMENT ERASER TEXTURE PALETTE DOCK
+        if (state.isEraserToolActive && activePage != null) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFFFFF3E0),
+                elevation = 3.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "🧹 Eraser Texture:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFE65100)
+                    )
+
+                    PaperTexturePalette.forEach { (name, col) ->
+                        val isSelected = state.selectedEraserTexture == col
+                        val displayColor = if (col == Color.Transparent) Color(0xFFF1EAD8) else col
+                        Row(
+                            modifier = Modifier
+                                .background(if (isSelected) Color(0xFFFFCC80) else Color.White, RoundedCornerShape(4.dp))
+                                .border(if (isSelected) 1.5.dp else 0.5.dp, if (isSelected) Color(0xFFE65100) else Color.LightGray, RoundedCornerShape(4.dp))
+                                .clickable { state.selectedEraserTexture = col }
+                                .padding(horizontal = 5.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .background(displayColor, CircleShape)
+                                    .border(0.5.dp, Color.Gray, CircleShape)
+                            )
+                            Text(name, fontSize = 9.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Bleed:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+                    listOf(Pair("Tight", 2f), Pair("Norm", 4f), Pair("Wide", 7f)).forEach { (lbl, pad) ->
+                        val isSel = state.eraserPaddingPx == pad
+                        Surface(
+                            shape = RoundedCornerShape(3.dp),
+                            color = if (isSel) Color(0xFFE65100) else Color.White,
+                            border = BorderStroke(0.5.dp, Color.Gray),
+                            modifier = Modifier.clickable { state.eraserPaddingPx = pad }
+                        ) {
+                            Text(lbl, fontSize = 9.sp, color = if (isSel) Color.White else Color.Black, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                        }
+                    }
+
+                    Button(
+                        onClick = { state.isEraserToolActive = false },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5D4037)),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text("Done ✕", color = Color.White, fontSize = 9.sp)
+                    }
+                }
+            }
+        }
+
         // ELEMENT GEOMETRY & RESIZE TOOLBAR
-        if (activeElement != null && state.editingWordBox == null) {
+        if (activeElement != null && state.editingWordBox == null && !state.isEraserToolActive && !state.isPenModeActive) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = Color(0xFFE8EAF6),
@@ -1185,7 +1516,6 @@ fun PdfEditorScreen(
                         Text("✎ Edit Text", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    // REAL-TIME NUDGING (UPDATES IMMEDIATELY ON SCREEN)
                     Text("Move:", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                     Button(onClick = { activeElement.relX = (activeElement.relX - 0.004f).coerceAtLeast(0f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("◀", fontSize = 10.sp) }
                     Button(onClick = { activeElement.relX = (activeElement.relX + 0.004f).coerceAtMost(0.98f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("▶", fontSize = 10.sp) }
@@ -1194,7 +1524,6 @@ fun PdfEditorScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // REAL-TIME SIZING (EXPANDS IMMEDIATELY ON SCREEN)
                     Text("Size:", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                     Button(onClick = { activeElement.relWidth = (activeElement.relWidth - 0.02f).coerceAtLeast(0.02f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("W-", fontSize = 9.sp) }
                     Button(onClick = { activeElement.relWidth = (activeElement.relWidth + 0.02f).coerceAtMost(1f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("W+", fontSize = 9.sp) }
@@ -1263,14 +1592,94 @@ fun PdfEditorScreen(
                             translationY = state.panOffsetY
                         )
                 ) {
-                    Image(
-                        bitmap = activePage.baseBitmap.asImageBitmap(),
-                        contentDescription = "Page ${state.activePageIndex + 1}",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.FillBounds
-                    )
+                    key(activePage.baseBitmap, state.pageRenderVersion) {
+                        Image(
+                            bitmap = activePage.baseBitmap.asImageBitmap(),
+                            contentDescription = "Page ${state.activePageIndex + 1}",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.FillBounds
+                        )
+                    }
 
-                    // LIVE PREVIEW DIRECTLY ON TARGET WORD AT EXACT LINE
+                    // LIVE FREEHAND STROKE DRAWING ON PAGE
+                    if (liveDrawingStroke.isNotEmpty()) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val strokeColor = if (state.isHighlighterMode) {
+                                state.penColor.copy(alpha = 0.40f)
+                            } else {
+                                state.penColor
+                            }
+                            val path = androidx.compose.ui.graphics.Path()
+                            path.moveTo(liveDrawingStroke[0].x, liveDrawingStroke[0].y)
+                            for (i in 1 until liveDrawingStroke.size) {
+                                path.lineTo(liveDrawingStroke[i].x, liveDrawingStroke[i].y)
+                            }
+                            drawPath(
+                                path = path,
+                                color = strokeColor,
+                                style = Stroke(
+                                    width = state.penStrokeWidth,
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                        }
+                    }
+
+                    // PEN MODE GESTURE LAYER: DRAWS REAL STROKES DIRECTLY ON PAGE
+                    if (state.isPenModeActive) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(activePage.pageIndex, state.isHighlighterMode, state.penColor, state.penStrokeWidth) {
+                                    detectDragGestures(
+                                        onDragStart = { offset ->
+                                            pushCanvasSnapshot()
+                                            liveDrawingStroke.clear()
+                                            liveDrawingStroke.add(offset)
+                                        },
+                                        onDrag = { change, _ ->
+                                            change.consume()
+                                            liveDrawingStroke.add(change.position)
+                                        },
+                                        onDragEnd = {
+                                            if (liveDrawingStroke.size > 1) {
+                                                val canvas = android.graphics.Canvas(activePage.baseBitmap)
+                                                val paint = Paint().apply {
+                                                    isAntiAlias = true
+                                                    isDither = true
+                                                    style = Paint.Style.STROKE
+                                                    strokeJoin = Paint.Join.ROUND
+                                                    strokeCap = Paint.Cap.ROUND
+                                                    strokeWidth = (state.penStrokeWidth * (bW / pagePixelW)).coerceAtLeast(1.5f)
+                                                    color = if (state.isHighlighterMode) {
+                                                        state.penColor.copy(alpha = 0.40f).toArgb()
+                                                    } else {
+                                                        state.penColor.toArgb()
+                                                    }
+                                                }
+                                                val path = AndroidPath()
+                                                val scaleX = bW / pagePixelW
+                                                val scaleY = bH / pagePixelH
+                                                path.moveTo(liveDrawingStroke[0].x * scaleX, liveDrawingStroke[0].y * scaleY)
+                                                for (i in 1 until liveDrawingStroke.size) {
+                                                    path.lineTo(liveDrawingStroke[i].x * scaleX, liveDrawingStroke[i].y * scaleY)
+                                                }
+                                                canvas.drawPath(path, paint)
+                                                state.pageRenderVersion++
+                                                state.statusText = "Annotated on page ${state.activePageIndex + 1}."
+                                            }
+                                            liveDrawingStroke.clear()
+                                        },
+                                        onDragCancel = {
+                                            liveDrawingStroke.clear()
+                                        }
+                                    )
+                                }
+                        )
+                    }
+
+                    // LIVE PREVIEW DIRECTLY ON TARGET WORD: SOLID WHITEOUT MASK + NEW WORD
                     if (state.editingWordBox != null) {
                         val wordBox = state.editingWordBox!!
                         val activePaperBg = if (state.liveWordPaperColor == Color.Transparent) {
@@ -1279,120 +1688,143 @@ fun PdfEditorScreen(
                             state.liveWordPaperColor
                         }
 
-                        // 1. Ambient Paper-Tone Whiteout
+                        val patchW = maxOf(
+                            wordBox.relWidth * pagePixelW + 8f,
+                            state.liveWordText.length * (state.liveWordFontSizePt * 0.70f) + 8f
+                        )
+                        val patchH = maxOf(
+                            wordBox.relHeight * pagePixelH + 6f,
+                            state.liveWordFontSizePt + 6f
+                        )
+
                         Box(
                             modifier = Modifier
                                 .offset(
-                                    x = (wordBox.relX * pagePixelW).dp,
-                                    y = (wordBox.relY * pagePixelH).dp
+                                    x = (wordBox.relX * pagePixelW - 4f).dp,
+                                    y = (wordBox.relY * pagePixelH - 3f).dp
                                 )
-                                .size(
-                                    width = (wordBox.relWidth * pagePixelW).dp,
-                                    height = (wordBox.relHeight * pagePixelH).dp
-                                )
+                                .size(width = patchW.dp, height = patchH.dp)
                                 .background(activePaperBg)
                                 .border(1.dp, Color(0xFF00E676), RoundedCornerShape(2.dp))
-                        )
-
-                        // 2. Real-Time Replacement Text rendered on exact line
-                        Text(
-                            text = state.liveWordText,
-                            fontSize = (state.liveWordFontSizePt * (pagePixelH / activePage.heightPt)).sp,
-                            fontWeight = if (state.liveWordIsBold) FontWeight.Bold else FontWeight.Normal,
-                            fontStyle = if (state.liveWordIsItalic) FontStyle.Italic else FontStyle.Normal,
-                            color = state.liveWordColor.copy(alpha = state.liveWordOpacity),
-                            modifier = Modifier
-                                .offset(
-                                    x = (wordBox.relX * pagePixelW + 1f).dp,
-                                    y = (wordBox.relY * pagePixelH).dp
-                                )
-                        )
+                                .padding(horizontal = 2.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            Text(
+                                text = state.liveWordText,
+                                fontSize = (state.liveWordFontSizePt * (pagePixelH / activePage.heightPt)).sp,
+                                fontWeight = if (state.liveWordIsBold) FontWeight.Bold else FontWeight.Normal,
+                                fontStyle = if (state.liveWordIsItalic) FontStyle.Italic else FontStyle.Normal,
+                                color = state.liveWordColor.copy(alpha = state.liveWordOpacity)
+                            )
+                        }
                     }
 
-                    // REAL-TIME DRAGGABLE & RESIZABLE OVERLAYS
-                    activePage.elements.forEach { element ->
-                        val isSelected = element.id == state.activeElementId
-                        val elemLeft = element.relX * pagePixelW
-                        val elemTop = element.relY * pagePixelH
-                        val elemW = (element.relWidth * pagePixelW).coerceAtLeast(20f)
-                        val elemH = (element.relHeight * pagePixelH).coerceAtLeast(14f)
+                    // ERASER MODE ON-CANVAS HITBOXES
+                    if (state.isEraserToolActive) {
+                        activePage.detectedWords.forEach { wordBox ->
+                            Box(
+                                modifier = Modifier
+                                    .offset(
+                                        x = (wordBox.relX * pagePixelW - 2f).dp,
+                                        y = (wordBox.relY * pagePixelH - 2f).dp
+                                    )
+                                    .size(
+                                        width = (wordBox.relWidth * pagePixelW + 4f).dp,
+                                        height = (wordBox.relHeight * pagePixelH + 4f).dp
+                                    )
+                                    .background(Color(0x33FF5722), RoundedCornerShape(2.dp))
+                                    .border(1.dp, Color(0xFFD32F2F), RoundedCornerShape(2.dp))
+                                    .clickable {
+                                        eraseWordWithTexture(wordBox)
+                                    }
+                            )
+                        }
+                    }
 
-                        Box(
-                            modifier = Modifier
-                                .offset(x = elemLeft.dp, y = elemTop.dp)
-                                .size(width = elemW.dp, height = elemH.dp)
-                                .pointerInput(element.id) {
-                                    detectDragGestures(
-                                        onDragStart = { state.activeElementId = element.id },
-                                        onDrag = { change, dragAmount ->
-                                            change.consume()
-                                            element.relX = (element.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
-                                            element.relY = (element.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
-                                        }
+                    // REAL-TIME DRAGGABLE & RESIZABLE OVERLAYS (DISABLED WHILE PEN IS DRAWING)
+                    if (!state.isPenModeActive) {
+                        activePage.elements.forEach { element ->
+                            val isSelected = element.id == state.activeElementId
+                            val elemLeft = element.relX * pagePixelW
+                            val elemTop = element.relY * pagePixelH
+                            val elemW = (element.relWidth * pagePixelW).coerceAtLeast(20f)
+                            val elemH = (element.relHeight * pagePixelH).coerceAtLeast(14f)
+
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = elemLeft.dp, y = elemTop.dp)
+                                    .size(width = elemW.dp, height = elemH.dp)
+                                    .pointerInput(element.id) {
+                                        detectDragGestures(
+                                            onDragStart = { state.activeElementId = element.id },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                element.relX = (element.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
+                                                element.relY = (element.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
+                                            }
+                                        )
+                                    }
+                                    .background(
+                                        if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
+                                        RoundedCornerShape(2.dp)
+                                    )
+                                    .border(
+                                        width = if (isSelected) 1.5.dp else 0.5.dp,
+                                        color = if (isSelected) Color(0xFF1976D2) else if (element.isWhiteout) Color.LightGray else Color.Transparent,
+                                        shape = RoundedCornerShape(2.dp)
+                                    )
+                                    .padding(horizontal = 2.dp)
+                            ) {
+                                if (!element.isWhiteout) {
+                                    BasicTextField(
+                                        value = element.text,
+                                        onValueChange = { element.text = it },
+                                        textStyle = TextStyle(
+                                            fontSize = (element.fontSizePt * (pagePixelH / activePage.heightPt)).sp,
+                                            fontWeight = if (element.isBold) FontWeight.Bold else FontWeight.Normal,
+                                            fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
+                                            color = element.textColor.copy(alpha = element.opacity)
+                                        ),
+                                        modifier = Modifier.fillMaxSize()
                                     )
                                 }
-                                .background(
-                                    if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
-                                    RoundedCornerShape(2.dp)
-                                )
-                                .border(
-                                    width = if (isSelected) 1.5.dp else 0.5.dp,
-                                    color = if (isSelected) Color(0xFF1976D2) else if (element.isWhiteout) Color.LightGray else Color.Transparent,
-                                    shape = RoundedCornerShape(2.dp)
-                                )
-                                .padding(horizontal = 2.dp)
-                        ) {
-                            if (!element.isWhiteout) {
-                                BasicTextField(
-                                    value = element.text,
-                                    onValueChange = { element.text = it },
-                                    textStyle = TextStyle(
-                                        fontSize = (element.fontSizePt * (pagePixelH / activePage.heightPt)).sp,
-                                        fontWeight = if (element.isBold) FontWeight.Bold else FontWeight.Normal,
-                                        fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
-                                        color = element.textColor.copy(alpha = element.opacity)
-                                    ),
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
 
-                            // Selection badges: Quick Delete & Corner Resize
-                            if (isSelected) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .offset(x = 10.dp, y = (-10).dp)
-                                        .size(20.dp)
-                                        .background(Color.Red, CircleShape)
-                                        .clickable {
-                                            pushCanvasSnapshot()
-                                            activePage.elements.removeAll { it.id == element.id }
-                                            state.activeElementId = null
-                                            state.statusText = "Deleted element."
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text("✕", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
+                                if (isSelected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .offset(x = 10.dp, y = (-10).dp)
+                                            .size(20.dp)
+                                            .background(Color.Red, CircleShape)
+                                            .clickable {
+                                                pushCanvasSnapshot()
+                                                activePage.elements.removeAll { it.id == element.id }
+                                                state.activeElementId = null
+                                                state.statusText = "Deleted element."
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("✕", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
 
-                                // Interactive Corner Resize Handle (Expands Freely on Drag)
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .offset(x = 10.dp, y = 10.dp)
-                                        .size(24.dp)
-                                        .background(Color(0xFF1976D2), CircleShape)
-                                        .border(2.dp, Color.White, CircleShape)
-                                        .pointerInput(element.id) {
-                                            detectDragGestures { change, dragAmount ->
-                                                change.consume()
-                                                element.relWidth = (element.relWidth + dragAmount.x / pagePixelW).coerceIn(0.02f, 1f)
-                                                element.relHeight = (element.relHeight + dragAmount.y / pagePixelH).coerceIn(0.015f, 1f)
-                                            }
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text("⤡", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .offset(x = 10.dp, y = 10.dp)
+                                            .size(24.dp)
+                                            .background(Color(0xFF1976D2), CircleShape)
+                                            .border(2.dp, Color.White, CircleShape)
+                                            .pointerInput(element.id) {
+                                                detectDragGestures { change, dragAmount ->
+                                                    change.consume()
+                                                    element.relWidth = (element.relWidth + dragAmount.x / pagePixelW).coerceIn(0.02f, 1f)
+                                                    element.relHeight = (element.relHeight + dragAmount.y / pagePixelH).coerceIn(0.015f, 1f)
+                                                }
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("⤡", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
@@ -1476,7 +1908,7 @@ fun PdfEditorScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "🔤 Detected Words (${activePage.detectedWords.size}) - Tap Word to Edit/Erase",
+                                text = "🔤 Detected Words (${activePage.detectedWords.size}) - Tap 🧹 to Erase Instantly",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
                                 color = Color(0xFF00796B)
@@ -1511,31 +1943,42 @@ fun PdfEditorScreen(
                                     Surface(
                                         shape = RoundedCornerShape(4.dp),
                                         color = Color(0xFFE0F2F1),
-                                        border = BorderStroke(0.5.dp, Color(0xFF00897B)),
-                                        modifier = Modifier.clickable {
-                                            state.editingWordBox = wordBox
-                                            state.liveWordText = wordBox.word
-                                            state.liveWordFontSizePt = 14f
-                                            state.liveWordIsBold = false
-                                            state.liveWordIsItalic = false
-                                            state.liveWordColor = Color(0xFF292524)
-                                            state.liveWordPaperColor = Color.Transparent
-                                            state.liveWordOpacity = 0.90f
-                                            state.isNoteBoxMinimized = false
-
-                                            // Auto-pan directly to this word
-                                            state.zoomScale = 1.9f
-                                            state.panOffsetX = -(wordBox.relX * 200f)
-                                            state.panOffsetY = -(wordBox.relY * 200f)
-                                        }
+                                        border = BorderStroke(0.5.dp, Color(0xFF00897B))
                                     ) {
-                                        Text(
-                                            text = wordBox.word,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = Color(0xFF004D40),
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = wordBox.word,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color(0xFF004D40),
+                                                modifier = Modifier.clickable {
+                                                    state.editingWordBox = wordBox
+                                                    state.liveWordText = wordBox.word
+                                                    state.liveWordFontSizePt = 14f
+                                                    state.liveWordIsBold = false
+                                                    state.liveWordIsItalic = false
+                                                    state.liveWordColor = Color(0xFF292524)
+                                                    state.liveWordPaperColor = Color.Transparent
+                                                    state.liveWordOpacity = 0.90f
+                                                    state.isNoteBoxMinimized = false
+
+                                                    state.zoomScale = 1.9f
+                                                    state.panOffsetX = -(wordBox.relX * 200f)
+                                                    state.panOffsetY = -(wordBox.relY * 200f)
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "🧹",
+                                                fontSize = 10.sp,
+                                                modifier = Modifier.clickable {
+                                                    eraseWordWithTexture(wordBox)
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1576,7 +2019,7 @@ fun PdfEditorScreen(
                             OutlinedTextField(
                                 value = state.liveWordText,
                                 onValueChange = { state.liveWordText = it },
-                                label = { Text("Replacement Text (Updates in real time on PDF)", fontSize = 10.sp) },
+                                label = { Text("Replacement Text (Type freely, live preview above)", fontSize = 10.sp) },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                                 textStyle = TextStyle(
@@ -1587,7 +2030,6 @@ fun PdfEditorScreen(
                                 )
                             )
 
-                            // Position & Box Size Adjustments (Nudging on the line)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1607,7 +2049,6 @@ fun PdfEditorScreen(
                                 Button(onClick = { target.relHeight += 0.005f }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(22.dp)) { Text("H+", fontSize = 8.sp) }
                             }
 
-                            // PAPER TEXTURE SELECTION FOR ERASER / WHITEOUT
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1639,7 +2080,6 @@ fun PdfEditorScreen(
                                 }
                             }
 
-                            // INK TONE & DENSITY
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1669,7 +2109,6 @@ fun PdfEditorScreen(
                                 }
                             }
 
-                            // Ultra-Fine Word Font Sizing (Down to 1pt) & Formatting
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1724,14 +2163,13 @@ fun PdfEditorScreen(
                                 }
                             }
 
-                            // Action buttons: Apply to Overlay (Re-editable at any time)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Button(
                                     onClick = {
-                                        applyWordEraseOrReplaceOverlay(target, state.liveWordText)
+                                        applyWordEraseOrReplace(target, state.liveWordText)
                                     },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00796B)),
                                     modifier = Modifier.weight(1.2f).height(32.dp),
@@ -1740,7 +2178,7 @@ fun PdfEditorScreen(
 
                                 Button(
                                     onClick = {
-                                        applyWordEraseOrReplaceOverlay(target, null)
+                                        applyWordEraseOrReplace(target, null)
                                     },
                                     colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
                                     modifier = Modifier.weight(0.9f).height(32.dp),
@@ -2048,7 +2486,7 @@ fun PdfEditorScreen(
         )
     }
 
-    // MODAL: RICH TEXT FORMATTING WITH INK DENSITY AND SHADES OF BLACK
+    // MODAL: RICH TEXT FORMATTING
     if (showTextEditDialog) {
         AlertDialog(
             onDismissRequest = { showTextEditDialog = false },
@@ -2118,7 +2556,6 @@ fun PdfEditorScreen(
                             ) { Text("+") }
                         }
 
-                        // INK DENSITY
                         Text("Ink Density (Reduce Blackness to Match PDF):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2148,7 +2585,6 @@ fun PdfEditorScreen(
                             }
                         }
 
-                        // Ink Shade Palette
                         Text("Ink Shade (Document Print Matching):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
                         Row(
                             modifier = Modifier
@@ -2178,7 +2614,6 @@ fun PdfEditorScreen(
                             }
                         }
 
-                        // Background Highlight
                         Text("Background / Highlight Texture:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Row(
                             modifier = Modifier
@@ -2203,7 +2638,7 @@ fun PdfEditorScreen(
                                             .size(16.dp)
                                             .background(displayColor, CircleShape)
                                             .border(0.5.dp, Color.Gray, CircleShape)
-                                    )
+                                        )
                                     Text(name, fontSize = 9.sp, color = Color.DarkGray)
                                 }
                             }
@@ -2378,11 +2813,11 @@ private fun FourCornerCropDialog(
                                 color = Color(0xFF00E676),
                                 topLeft = Offset(l, t),
                                 size = Size(r - l, b - t),
-                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
+                                style = Stroke(width = 3f)
                             )
                         }
 
-                        // 4 Draggable Handles
+                        // 4 Draggable Corner Handles
                         Box(
                             modifier = Modifier
                                 .align(Alignment.TopStart)

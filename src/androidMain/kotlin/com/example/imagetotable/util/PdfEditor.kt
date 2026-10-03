@@ -2,17 +2,18 @@ package com.example.imagetotable.util
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.util.UUID
-import kotlin.math.PI
 
 data class PageInfo(
     val number: Int,
@@ -135,6 +136,25 @@ class PdfEditor private constructor(
             saveAtomically(doc, output)
             doc.close()
         }
+
+        internal fun saveAtomically(document: PdfDocument, output: File) {
+            output.absoluteFile.parentFile?.mkdirs()
+            val tmp = File.createTempFile(".pdfeditor-", ".tmp", output.parentFile)
+            try {
+                FileOutputStream(tmp).use { fos -> document.writeTo(fos) }
+                if (output.exists()) output.delete()
+                if (!tmp.renameTo(output)) {
+                    tmp.inputStream().use { input ->
+                        FileOutputStream(output).use { out ->
+                            input.copyTo(out)
+                        }
+                    }
+                    tmp.delete()
+                }
+            } finally {
+                if (tmp.exists()) tmp.delete()
+            }
+        }
     }
 
     data class PageModel(
@@ -237,7 +257,7 @@ class PdfEditor private constructor(
         val canvas = Canvas(outputBmp)
         canvas.drawColor(android.graphics.Color.WHITE)
 
-        val matrix = android.graphics.Matrix()
+        val matrix = Matrix()
         matrix.postRotate(p.rotation.toFloat(), dispW / 2f, dispH / 2f)
         matrix.postScale(dispW.toFloat() / p.baseBitmap.width, dispH.toFloat() / p.baseBitmap.height)
         canvas.drawBitmap(p.baseBitmap, matrix, null)
@@ -469,7 +489,7 @@ class PdfEditor private constructor(
     ) {
         checkPage(page)
         mutate {
-            pageList[page - 1].overlayDrawers.add { canvas, w, h ->
+            pageList[page - 1].overlayDrawers.add { canvas, _, _ ->
                 val paint = Paint().apply {
                     this.color = color
                     this.textSize = fontSize
@@ -491,11 +511,11 @@ class PdfEditor private constructor(
         checkPage(page)
         require(image.isFile) { "Image not found: ${image.path}" }
         val bmp = BitmapFactory.decodeFile(image.path) ?: return
-        val finalH = height ?: (width * bmp.height / bmp.width.toFloat())
+        val finalH = height ?: (width * bmp.height.toFloat() / bmp.width.toFloat())
 
         mutate {
             pageList[page - 1].overlayDrawers.add { canvas, _, _ ->
-                val rect = android.graphics.RectF(x, y, x + width, y + finalH)
+                val rect = RectF(x, y, x + width, y + finalH)
                 canvas.drawBitmap(bmp, null, rect, null)
             }
         }
@@ -514,7 +534,7 @@ class PdfEditor private constructor(
         checkPage(page)
         mutate {
             pageList[page - 1].overlayDrawers.add { canvas, _, _ ->
-                val rect = android.graphics.RectF(x, y, x + width, y + height)
+                val rect = RectF(x, y, x + width, y + height)
                 fill?.let { fColor ->
                     val fPaint = Paint().apply {
                         color = fColor
@@ -627,7 +647,7 @@ class PdfEditor private constructor(
             val pdfPage = doc.startPage(pageInfo)
             val canvas = pdfPage.canvas
 
-            val matrix = android.graphics.Matrix()
+            val matrix = Matrix()
             matrix.postRotate(p.rotation.toFloat(), p.widthPt / 2f, p.heightPt / 2f)
             matrix.postScale(p.widthPt / p.baseBitmap.width, p.heightPt / p.baseBitmap.height)
             canvas.drawBitmap(p.baseBitmap, matrix, null)
@@ -673,19 +693,5 @@ class PdfEditor private constructor(
         pageList.forEach { it.baseBitmap.recycle() }
         pageList.clear()
         pageList.addAll(snapshot.map { it.copySnapshot() })
-    }
-
-    companion object Helper {
-        private fun saveAtomically(document: PdfDocument, output: File) {
-            output.absoluteFile.parentFile?.mkdirs()
-            val tmp = File.createTempFile(".pdfeditor-", ".tmp", output.parentFile)
-            try {
-                FileOutputStream(tmp).use { fos -> document.writeTo(fos) }
-                if (output.exists()) output.delete()
-                tmp.renameTo(output)
-            } finally {
-                if (tmp.exists()) tmp.delete()
-            }
-        }
     }
 }

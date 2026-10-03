@@ -242,6 +242,7 @@ fun MobileTableEditorScreen() {
     var panOffsetX by remember { mutableFloatStateOf(0f) }
     var panOffsetY by remember { mutableFloatStateOf(0f) }
 
+    // Table Navigation: Open Linked Table
     fun openLinkedTable(targetTableId: String) {
         val target = TableRepository.tables.firstOrNull { it.id == targetTableId }
         if (target != null) {
@@ -261,6 +262,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
+    // Table Navigation: Return / Revert to Parent Table
     fun returnToParentTable(revertChanges: Boolean) {
         if (tableBackStack.isNotEmpty()) {
             if (revertChanges) {
@@ -583,6 +585,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
+    // Device Backup Document Creator Launcher (.ittzip)
     var pendingBackupArchiveFile by remember { mutableStateOf<File?>(null) }
     val deviceBackupSaveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip")
@@ -604,6 +607,7 @@ fun MobileTableEditorScreen() {
         }
     }
 
+    // Device / Mail Restore Picker Launcher (.ittzip or .zip)
     val restoreFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { restoreUri: Uri? ->
@@ -1678,7 +1682,6 @@ fun MobileTableEditorScreen() {
         topBar = {
             if (!isFullScreen) {
                 Column {
-                    // Line 1: Primary Top App Bar
                     TopAppBar(
                         title = {
                             Column {
@@ -1704,7 +1707,6 @@ fun MobileTableEditorScreen() {
                         }
                     )
 
-                    // LINKED TABLE PARENT BREADCRUMB BANNER
                     if (tableBackStack.isNotEmpty()) {
                         val parentTable = tableBackStack.last()
                         Surface(
@@ -1765,7 +1767,6 @@ fun MobileTableEditorScreen() {
                         }
                     }
 
-                    // Line 2: PERMANENT CANCEL & SAVE BAR (PROTECTED FROM SQUISHING)
                     Surface(
                         color = Color(0xFFFFFFFF),
                         elevation = 3.dp,
@@ -2118,7 +2119,7 @@ fun MobileTableEditorScreen() {
                             }, colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF1976D2)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("+ Col", color = Color.White, fontSize = 11.sp) }
                         }
 
-                        // ATTENDANCE CHART (FIXED SELECT DATES CLIPPING)
+                        // ATTENDANCE CHART
                         if (showAttendanceChart) {
                             Card(
                                 modifier = Modifier
@@ -3363,6 +3364,7 @@ fun MobileTableEditorScreen() {
                                                                     }
                                                                 }
 
+                                                                // Attachment Manager Button
                                                                 Text(
                                                                     text = if (cellAttachments.isNotEmpty()) "📎 ${cellAttachments.size}" else "📎",
                                                                     fontSize = subTextFontSize,
@@ -3374,7 +3376,7 @@ fun MobileTableEditorScreen() {
                                                                 )
                                                             }
 
-                                                            // Inline Badges: Notes, Checklists & Attachments
+                                                            // Inline Badges: Linked Tables, Notes, Checklists & Attachments
                                                             if (cellAttachments.isNotEmpty() || cellChecklists.isNotEmpty() || cellNote.isNotBlank() || cellExtraNote.isNotBlank()) {
                                                                 Row(
                                                                     modifier = Modifier
@@ -3384,6 +3386,7 @@ fun MobileTableEditorScreen() {
                                                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                                                     verticalAlignment = Alignment.CenterVertically
                                                                 ) {
+                                                                    // Direct Clickable Linked Table Badges
                                                                     cellAttachments.filter { it.type == AttachmentType.LINKED_TABLE }.forEach { tableAtt ->
                                                                         Box(
                                                                             modifier = Modifier

@@ -312,7 +312,6 @@ fun PdfEditorScreen(
     var showPageNumbersDialog by remember { mutableStateOf(false) }
     var pageNumberFormatInput by remember { mutableStateOf("Page {n} of {total}") }
 
-    // Normalized relative points (0f..1f) for live stroke rendering
     val liveDrawingNormStroke = remember { mutableStateListOf<Offset>() }
     var measuredPageSizePx by remember { mutableStateOf(IntSize(1, 1)) }
 
@@ -1351,7 +1350,6 @@ fun PdfEditorScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Pen vs. Highlighter Switch
                     Button(
                         onClick = { state.isHighlighterMode = !state.isHighlighterMode },
                         colors = ButtonDefaults.buttonColors(
@@ -1368,7 +1366,6 @@ fun PdfEditorScreen(
                         )
                     }
 
-                    // Stroke Thickness Options
                     Text("Size:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
                     PenThicknesses.forEach { (lbl, widthVal) ->
                         val isSel = state.penStrokeWidth == widthVal
@@ -1389,7 +1386,6 @@ fun PdfEditorScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // Color Swatches
                     Text("Color:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
                     AnnotationPenColors.forEach { (_, col) ->
                         val isSel = state.penColor == col
@@ -1565,8 +1561,7 @@ fun PdfEditorScreen(
                 .padding(4.dp)
                 .clipToBounds()
                 .background(Color(0xFF1E293B), RoundedCornerShape(8.dp))
-                .pointerInput(Unit) {
-                    // Two-finger pinch & pan detection on parent container
+                .pointerInput(state.isPenModeActive) {
                     detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
                         if (!state.isPenModeActive) {
                             state.zoomScale = (state.zoomScale * zoom).coerceIn(0.5f, 6.0f)
@@ -1809,6 +1804,7 @@ fun PdfEditorScreen(
                                 )
                             }
 
+                            // Selection badges: Quick Delete & Corner Resize
                             if (isSelected) {
                                 Box(
                                     modifier = Modifier
@@ -1830,18 +1826,21 @@ fun PdfEditorScreen(
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.BottomEnd)
-                                        .offset(x = 8.dp, y = 8.dp)
-                                        .size(18.dp)
-                                        .background(Color(0xFF1976D2), RoundedCornerShape(3.dp))
-                                        .border(1.dp, Color.White, RoundedCornerShape(3.dp))
+                                        .offset(x = 10.dp, y = 10.dp)
+                                        .size(24.dp)
+                                        .background(Color(0xFF1976D2), CircleShape)
+                                        .border(2.dp, Color.White, CircleShape)
                                         .pointerInput(element.id) {
                                             detectDragGestures { change, dragAmount ->
                                                 change.consume()
                                                 element.relWidth = (element.relWidth + dragAmount.x / pagePixelW).coerceIn(0.02f, 1f)
                                                 element.relHeight = (element.relHeight + dragAmount.y / pagePixelH).coerceIn(0.015f, 1f)
                                             }
-                                        }
-                                )
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("⤡", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -2380,7 +2379,7 @@ fun PdfEditorScreen(
         FourCornerCropDialog(
             sourceBitmap = activePage.baseBitmap,
             onDismiss = { showFourCornerCropDialog = false },
-            onCropConfirmed = { cL, cT, cR, cB ->
+            onCropConfirmed = { cL: Float, cT: Float, cR: Float, cB: Float ->
                 state.activeEditor?.let { editor ->
                     editor.crop(
                         pages = (state.activePageIndex + 1).toString(),
@@ -2756,7 +2755,7 @@ fun PdfEditorScreen(
 
 // 4-CORNER INTERACTIVE VISUAL CROPPING DIALOG
 @Composable
-private fun FourCornerCropDialog(
+fun FourCornerCropDialog(
     sourceBitmap: Bitmap,
     onDismiss: () -> Unit,
     onCropConfirmed: (cropL: Float, cropT: Float, cropR: Float, cropB: Float) -> Unit

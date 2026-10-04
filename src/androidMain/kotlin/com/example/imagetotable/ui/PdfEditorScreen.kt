@@ -228,6 +228,7 @@ class PdfEditorState {
     var selectedEraserTexture by mutableStateOf(Color.Transparent)
     var eraserPaddingPx by mutableFloatStateOf(4f)
     var eraserBrushSize by mutableFloatStateOf(20f) // <-- ADD THIS: Manual eraser width in points
+    var isEraserPanMode by mutableStateOf(false) // <-- ADD THIS: false = Erase, true = Pan/Move page
 
 
     // Dedicated Pen / Highlighter Tool State
@@ -1644,7 +1645,7 @@ fun openWordInNoteBox(target: DetectedWordBox) {
                 color = Color(0xFFFFF3E0),
                 elevation = 3.dp
             ) {
-                Row(
+                /*Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
@@ -1657,7 +1658,35 @@ fun openWordInNoteBox(target: DetectedWordBox) {
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFFE65100)
-                    )
+                    )*/
+
+                                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 1-FINGER TOGGLE: ERASE vs MOVE PAGE
+                    Button(
+                        onClick = { state.isEraserPanMode = !state.isEraserPanMode },
+                        colors = ButtonDefaults.buttonColors(
+                            backgroundColor = if (state.isEraserPanMode) Color(0xFF1565C0) else Color(0xFFE65100)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(26.dp)
+                    ) {
+                        Text(
+                            text = if (state.isEraserPanMode) "✋ Move Mode" else "🧹 Erase Mode",
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(2.dp))
+
 
                     PaperTexturePalette.forEach { (name, col) ->
                         val isSelected = state.selectedEraserTexture == col
@@ -2530,7 +2559,7 @@ fun openWordInNoteBox(target: DetectedWordBox) {
                             }*/
 
                                                 // 2. Full-Viewport Manual Eraser Dispatcher (Allows 2-finger pinch/zoom)
-                    Box(
+                    /*Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .pointerInput(activePage.pageIndex, state.selectedEraserTexture, state.eraserBrushSize, state.zoomScale, state.panOffsetX, state.panOffsetY) {
@@ -2602,7 +2631,159 @@ fun openWordInNoteBox(target: DetectedWordBox) {
                                     liveEraserScreenStroke.clear()
                                 }
                             }
+                    )*/
+                                  /* Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(activePage.pageIndex, state.selectedEraserTexture, state.eraserBrushSize, state.zoomScale, state.panOffsetX, state.panOffsetY) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        isMultiTouchGesture = false
+                                        liveEraserScreenStroke.clear()
+                                        liveEraserScreenStroke.add(offset)
+                                    },
+                                    onDrag = { change, _ ->
+                                        // If user pinches or uses 2 fingers, cancel erasing so zoom takes over
+                                        if (isMultiTouchGesture) {
+                                            liveEraserScreenStroke.clear()
+                                            return@detectDragGestures
+                                        }
+                                        change.consume()
+                                        liveEraserScreenStroke.add(change.position)
+                                    },
+                                    onDragEnd = {
+                                        if (!isMultiTouchGesture && liveEraserScreenStroke.size > 1) {
+                                            pushCanvasSnapshot()
+                                            val canvas = android.graphics.Canvas(activePage.baseBitmap)
+                                            val strokeWidthBmp = state.eraserBrushSize * (bH / activePage.heightPt)
+                                            val paint = Paint().apply {
+                                                isAntiAlias = true
+                                                isDither = true
+                                                style = Paint.Style.STROKE
+                                                strokeJoin = Paint.Join.ROUND
+                                                strokeCap = Paint.Cap.ROUND
+                                                strokeWidth = strokeWidthBmp.coerceAtLeast(2f)
+                                                color = eraserColor.toArgb()
+                                            }
+
+                                            val screenCenterX = containerWidthPx / 2f + state.panOffsetX
+                                            val screenCenterY = containerHeightPx / 2f + state.panOffsetY
+
+                                            fun screenToBmp(pt: Offset): Offset {
+                                                val relX = (pt.x - screenCenterX) / state.zoomScale
+                                                val relY = (pt.y - screenCenterY) / state.zoomScale
+                                                val pageX = relX + (pagePixelW / 2f)
+                                                val pageY = relY + (pagePixelH / 2f)
+                                                return Offset(
+                                                    (pageX / fitScale).coerceIn(0f, bW),
+                                                    (pageY / fitScale).coerceIn(0f, bH)
+                                                )
+                                            }
+
+                                            val path = AndroidPath()
+                                            val start = screenToBmp(liveEraserScreenStroke[0])
+                                            path.moveTo(start.x, start.y)
+                                            for (i in 1 until liveEraserScreenStroke.size) {
+                                                val next = screenToBmp(liveEraserScreenStroke[i])
+                                                path.lineTo(next.x, next.y)
+                                            }
+                                            canvas.drawPath(path, paint)
+                                            state.pageRenderVersion++
+                                            state.statusText = "Erased text on page ${state.activePageIndex + 1}."
+                                        }
+                                        liveEraserScreenStroke.clear()
+                                    },
+                                    onDragCancel = {
+                                        liveEraserScreenStroke.clear()
+                                    }
+                                )
+                            }
+                    )*/
+                                        // Manual Eraser / 1-Finger Pan Dispatcher
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(activePage.pageIndex, state.isEraserPanMode, state.selectedEraserTexture, state.eraserBrushSize, state.zoomScale, state.panOffsetX, state.panOffsetY) {
+                                /*if (state.isEraserPanMode) {
+                                    // 1-FINGER PANNING: Moves the zoomed document freely
+                                    detectDragGestures { change, dragAmount ->
+                                        change.consume()
+                                        val maxPan = 1200f * (state.zoomScale - 1f).coerceAtLeast(0f)
+                                        state.panOffsetX = (state.panOffsetX + dragAmount.x).coerceIn(-maxPan, maxPan)
+                                        state.panOffsetY = (state.panOffsetY + dragAmount.y).coerceIn(-maxPan, maxPan)
+                                    }
+                                } else {*/
+
+                                                                if (state.isEraserPanMode) {
+                                    // MOVE MODE: Single finger pans; two fingers simultaneously pinch-to-zoom & pan
+                                    detectTransformGestures(panZoomLock = false) { _, pan: Offset, zoom: Float, _ ->
+                                        state.zoomScale = (state.zoomScale * zoom).coerceIn(0.5f, 6.0f)
+                                        val maxPan = 1200f * (state.zoomScale - 1f).coerceAtLeast(0f)
+                                        state.panOffsetX = (state.panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
+                                        state.panOffsetY = (state.panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
+                                    }
+                                } else {
+
+                                    // 1-FINGER ERASING: Erases text with document texture
+                                    detectDragGestures(
+                                        onDragStart = { offset ->
+                                            pushCanvasSnapshot()
+                                            liveEraserScreenStroke.clear()
+                                            liveEraserScreenStroke.add(offset)
+                                        },
+                                        onDrag = { change, _ ->
+                                            change.consume()
+                                            liveEraserScreenStroke.add(change.position)
+                                        },
+                                        onDragEnd = {
+                                            if (liveEraserScreenStroke.size > 1) {
+                                                val canvas = android.graphics.Canvas(activePage.baseBitmap)
+                                                val strokeWidthBmp = state.eraserBrushSize * (bH / activePage.heightPt)
+                                                val paint = Paint().apply {
+                                                    isAntiAlias = true
+                                                    isDither = true
+                                                    style = Paint.Style.STROKE
+                                                    strokeJoin = Paint.Join.ROUND
+                                                    strokeCap = Paint.Cap.ROUND
+                                                    strokeWidth = strokeWidthBmp.coerceAtLeast(2f)
+                                                    color = eraserColor.toArgb()
+                                                }
+
+                                                val screenCenterX = containerWidthPx / 2f + state.panOffsetX
+                                                val screenCenterY = containerHeightPx / 2f + state.panOffsetY
+
+                                                fun screenToBmp(pt: Offset): Offset {
+                                                    val relX = (pt.x - screenCenterX) / state.zoomScale
+                                                    val relY = (pt.y - screenCenterY) / state.zoomScale
+                                                    val pageX = relX + (pagePixelW / 2f)
+                                                    val pageY = relY + (pagePixelH / 2f)
+                                                    return Offset(
+                                                        (pageX / fitScale).coerceIn(0f, bW),
+                                                        (pageY / fitScale).coerceIn(0f, bH)
+                                                    )
+                                                }
+
+                                                val path = AndroidPath()
+                                                val start = screenToBmp(liveEraserScreenStroke[0])
+                                                path.moveTo(start.x, start.y)
+                                                for (i in 1 until liveEraserScreenStroke.size) {
+                                                    val next = screenToBmp(liveEraserScreenStroke[i])
+                                                    path.lineTo(next.x, next.y)
+                                                }
+                                                canvas.drawPath(path, paint)
+                                                state.pageRenderVersion++
+                                                state.statusText = "Erased text on page ${state.activePageIndex + 1}."
+                                            }
+                                            liveEraserScreenStroke.clear()
+                                        },
+                                        onDragCancel = {
+                                            liveEraserScreenStroke.clear()
+                                        }
+                                    )
+                                }
+                            }
                     )
+
 
 
 

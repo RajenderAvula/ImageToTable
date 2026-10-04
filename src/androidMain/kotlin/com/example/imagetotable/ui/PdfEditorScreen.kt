@@ -2076,15 +2076,20 @@ fun openWordInNoteBox(target: DetectedWordBox) {
                                     .offset(x = elemLeftDp, y = elemTopDp)
                                     .size(width = elemWDp, height = elemHDp)
                                     // 1. Direct drag gesture for finger movement anywhere on the box
-                                    .pointerInput(element.id, pagePixelW, pagePixelH) {
+                                    .pointerInput(element.id, pagePixelW, pagePixelH, state.zoomScale) {
                                         detectDragGestures(
                                             onDragStart = {
                                                 state.activeElementId = element.id
                                             },
                                             onDrag = { change, dragAmount ->
                                                 change.consume()
-                                                element.relX = (element.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
-                                                element.relY = (element.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
+                                                // Divide by zoomScale so dragging remains 1:1 with your finger when zoomed in
+                                                val effectiveZoom = state.zoomScale.coerceAtLeast(0.1f)
+                                                element.relX = (element.relX + (dragAmount.x / effectiveZoom) / pagePixelW).coerceIn(0f, 0.98f)
+                                                element.relY = (element.relY + (dragAmount.y / effectiveZoom) / pagePixelH).coerceIn(0f, 0.98f)
+                                            
+                                                //element.relX = (element.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
+                                                //element.relY = (element.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
                                             }
                                         )
                                     }

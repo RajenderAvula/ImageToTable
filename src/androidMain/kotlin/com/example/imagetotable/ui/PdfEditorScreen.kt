@@ -220,9 +220,15 @@ class PdfEditorState {
     var liveWordOpacity by mutableFloatStateOf(0.90f) // Shading 0.0f..1.0f
 
     // Dedicated Eraser Tool State
+   // var isEraserToolActive by mutableStateOf(false)
+   // var selectedEraserTexture by mutableStateOf(Color.Transparent)
+   // var eraserPaddingPx by mutableFloatStateOf(4f)
+        // Dedicated Eraser Tool State
     var isEraserToolActive by mutableStateOf(false)
     var selectedEraserTexture by mutableStateOf(Color.Transparent)
     var eraserPaddingPx by mutableFloatStateOf(4f)
+    var eraserBrushSize by mutableFloatStateOf(20f) // <-- ADD THIS: Manual eraser width in points
+
 
     // Dedicated Pen / Highlighter Tool State
     var isPenModeActive by mutableStateOf(false)
@@ -348,7 +354,9 @@ fun PdfEditorScreen(
     var pageNumberFormatInput by remember { mutableStateOf("Page {n} of {total}") }
 
     // Live points in screen display pixels [0..containerW, 0..containerH]
+    //val liveDrawingScreenStroke = remember { mutableStateListOf<Offset>() }
     val liveDrawingScreenStroke = remember { mutableStateListOf<Offset>() }
+    val liveEraserScreenStroke = remember { mutableStateListOf<Offset>() } // <-- ADD THIS
 
     val activePage = state.pages.getOrNull(state.activePageIndex)
     val activeElement = activePage?.elements?.find { it.id == state.activeElementId }
@@ -1499,7 +1507,7 @@ fun PdfEditorScreen(
         }
 
         // DOCUMENT ERASER TEXTURE PALETTE DOCK
-        if (state.isEraserToolActive && activePage != null) {
+        /*if (state.isEraserToolActive && activePage != null) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = Color(0xFFFFF3E0),
@@ -1566,7 +1574,78 @@ fun PdfEditorScreen(
                     }
                 }
             }
+        }*/
+
+                // DOCUMENT ERASER TEXTURE PALETTE DOCK
+        if (state.isEraserToolActive && activePage != null) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFFFFF3E0),
+                elevation = 3.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "🧹 Texture Eraser:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFE65100)
+                    )
+
+                    PaperTexturePalette.forEach { (name, col) ->
+                        val isSelected = state.selectedEraserTexture == col
+                        val displayColor = if (col == Color.Transparent) Color(0xFFF1EAD8) else col
+                        Row(
+                            modifier = Modifier
+                                .background(if (isSelected) Color(0xFFFFCC80) else Color.White, RoundedCornerShape(4.dp))
+                                .border(if (isSelected) 1.5.dp else 0.5.dp, if (isSelected) Color(0xFFE65100) else Color.LightGray, RoundedCornerShape(4.dp))
+                            .clickable { state.selectedEraserTexture = col }
+                            .padding(horizontal = 5.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .background(displayColor, CircleShape)
+                                    .border(0.5.dp, Color.Gray, CircleShape)
+                            )
+                            Text(name, fontSize = 9.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Brush:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+                    listOf(Pair("Fine", 8f), Pair("Med", 18f), Pair("Wide", 32f), Pair("Block", 52f)).forEach { (lbl, sz) ->
+                        val isSel = state.eraserBrushSize == sz
+                        Surface(
+                            shape = RoundedCornerShape(3.dp),
+                            color = if (isSel) Color(0xFFE65100) else Color.White,
+                            border = BorderStroke(0.5.dp, Color.Gray),
+                            modifier = Modifier.clickable { state.eraserBrushSize = sz }
+                        ) {
+                            Text(lbl, fontSize = 9.sp, color = if (isSel) Color.White else Color.Black, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                        }
+                    }
+
+                    Button(
+                        onClick = { state.isEraserToolActive = false },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5D4037)),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text("Done ✕", color = Color.White, fontSize = 9.sp)
+                    }
+                }
+            }
         }
+
 
         // ELEMENT GEOMETRY & RESIZE TOOLBAR
         if (activeElement != null && state.editingWordBox == null && !state.isEraserToolActive && !state.isPenModeActive) {
@@ -1761,7 +1840,7 @@ fun PdfEditorScreen(
                             val elemWDp = (element.relWidth * pageDpW.value).coerceAtLeast(20f).dp
                             val elemHDp = (element.relHeight * pageDpH.value).coerceAtLeast(14f).dp
 
-                            Box(
+                            /*Box(
                                 modifier = Modifier
                                     .offset(x = elemLeftDp, y = elemTopDp)
                                     .size(width = elemWDp, height = elemHDp)
@@ -1779,7 +1858,60 @@ fun PdfEditorScreen(
                                     )
                                     .padding(horizontal = 2.dp),
                                 contentAlignment = Alignment.CenterStart
+                            ) {*/
+
+                                                            Box(
+                                modifier = Modifier
+                                    .offset(x = elemLeftDp, y = elemTopDp)
+                                    .size(width = elemWDp, height = elemHDp)
+                                    // 1. Direct drag gesture for finger movement anywhere on the box
+                                    .pointerInput(element.id, pagePixelW, pagePixelH) {
+                                        detectDragGestures(
+                                            onDragStart = {
+                                                state.activeElementId = element.id
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                element.relX = (element.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
+                                                element.relY = (element.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
+                                            }
+                                        )
+                                    }
+                                    // 2. Tap gestures for selection and opening the re-edit dialog
+                                    .pointerInput(element.id) {
+                                        detectTapGestures(
+                                            onTap = {
+                                                state.activeElementId = element.id
+                                                if (element.isReplacedWord && element.associatedWordBoxId != null) {
+                                                    val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
+                                                    if (wBox != null) openWordInNoteBox(wBox)
+                                                }
+                                            },
+                                            onDoubleTap = {
+                                                state.activeElementId = element.id
+                                                if (element.isReplacedWord && element.associatedWordBoxId != null) {
+                                                    val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
+                                                    if (wBox != null) openWordInNoteBox(wBox)
+                                                    else openEditDialogForElement(element)
+                                                } else {
+                                                    openEditDialogForElement(element)
+                                                }
+                                            }
+                                        )
+                                    }
+                                    .background(
+                                        if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
+                                        RoundedCornerShape(2.dp)
+                                    )
+                                    .border(
+                                        width = if (isSelected) 1.5.dp else 0.5.dp,
+                                        color = if (isSelected) Color(0xFF1976D2) else if (element.isWhiteout) Color.LightGray else Color.Transparent,
+                                        shape = RoundedCornerShape(2.dp)
+                                    )
+                                    .padding(horizontal = 2.dp),
+                                contentAlignment = Alignment.CenterStart
                             ) {
+
                                 if (!element.isWhiteout) {
                                     val fontSizeSp = with(density) {
                                         (element.fontSizePt * (pagePixelH / activePage.heightPt)).toSp()
@@ -1880,7 +2012,7 @@ fun PdfEditorScreen(
                 }
 
                 // CONTAINER-LEVEL FULL-VIEWPORT PEN DRAWING & PAN GESTURE LAYER
-                if (state.isPenModeActive) {
+              /*  if (state.isPenModeActive) {
                     // 1. Live Stroke Screen Canvas (Never clipped by Box bounds)
                     if (liveDrawingScreenStroke.size > 1) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -1988,7 +2120,209 @@ fun PdfEditorScreen(
                                 }
                             }
                     )
+                }*/
+
+                                // CONTAINER-LEVEL FULL-VIEWPORT GESTURE LAYER (PEN & MANUAL ERASER)
+                if (state.isPenModeActive) {
+                    // Live Pen Stroke Screen Canvas
+                    if (liveDrawingScreenStroke.size > 1) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val strokeColor = if (state.isHighlighterMode) {
+                                state.penColor.copy(alpha = 0.40f)
+                            } else {
+                                state.penColor
+                            }
+                            val strokeWidthScreen = state.penStrokeWidth * (pagePixelH / activePage.heightPt) * state.zoomScale
+                            val path = androidx.compose.ui.graphics.Path()
+                            path.moveTo(liveDrawingScreenStroke[0].x, liveDrawingScreenStroke[0].y)
+                            for (i in 1 until liveDrawingScreenStroke.size) {
+                                path.lineTo(liveDrawingScreenStroke[i].x, liveDrawingScreenStroke[i].y)
+                            }
+                            drawPath(
+                                path = path,
+                                color = strokeColor,
+                                style = Stroke(
+                                    width = strokeWidthScreen,
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                        }
+                    }
+
+                    // Pen Drag Dispatcher
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(activePage.pageIndex, state.isHighlighterMode, state.penColor, state.penStrokeWidth, state.zoomScale, state.panOffsetX, state.panOffsetY) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        pushCanvasSnapshot()
+                                        liveDrawingScreenStroke.clear()
+                                        liveDrawingScreenStroke.add(offset)
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        liveDrawingScreenStroke.add(change.position)
+                                    },
+                                    onDragEnd = {
+                                        if (liveDrawingScreenStroke.size > 1) {
+                                            val canvas = android.graphics.Canvas(activePage.baseBitmap)
+                                            val strokeWidthBmp = state.penStrokeWidth * (bH / activePage.heightPt)
+                                            val paint = Paint().apply {
+                                                isAntiAlias = true
+                                                isDither = true
+                                                style = Paint.Style.STROKE
+                                                strokeJoin = Paint.Join.ROUND
+                                                strokeCap = Paint.Cap.ROUND
+                                                strokeWidth = strokeWidthBmp.coerceAtLeast(1.5f)
+                                                color = if (state.isHighlighterMode) {
+                                                    state.penColor.copy(alpha = 0.40f).toArgb()
+                                                } else {
+                                                    state.penColor.toArgb()
+                                                }
+                                            }
+
+                                            val screenCenterX = containerWidthPx / 2f + state.panOffsetX
+                                            val screenCenterY = containerHeightPx / 2f + state.panOffsetY
+
+                                            fun screenToBmp(pt: Offset): Offset {
+                                                val relX = (pt.x - screenCenterX) / state.zoomScale
+                                                val relY = (pt.y - screenCenterY) / state.zoomScale
+                                                val pageX = relX + (pagePixelW / 2f)
+                                                val pageY = relY + (pagePixelH / 2f)
+                                                return Offset(
+                                                    (pageX / fitScale).coerceIn(0f, bW),
+                                                    (pageY / fitScale).coerceIn(0f, bH)
+                                                )
+                                            }
+
+                                            val path = AndroidPath()
+                                            val start = screenToBmp(liveDrawingScreenStroke[0])
+                                            path.moveTo(start.x, start.y)
+                                            for (i in 1 until liveDrawingScreenStroke.size) {
+                                                val next = screenToBmp(liveDrawingScreenStroke[i])
+                                                path.lineTo(next.x, next.y)
+                                            }
+                                            canvas.drawPath(path, paint)
+                                            state.pageRenderVersion++
+                                            state.statusText = "Annotated on page ${state.activePageIndex + 1}."
+                                        }
+                                        liveDrawingScreenStroke.clear()
+                                    },
+                                    onDragCancel = {
+                                        liveDrawingScreenStroke.clear()
+                                    }
+                                )
+                            }
+                    )
+                } else if (state.isEraserToolActive) {
+                    // MANUAL FREEHAND TEXTURE ERASER (WORKS ZOOMED IN ON ANY LANGUAGE / UNDETECTED TEXT)
+                    val eraserColor = if (state.selectedEraserTexture == Color.Transparent) {
+                        samplePurePaperBackground(activePage.baseBitmap, 0.5f, 0.5f, 0.1f, 0.1f)
+                    } else {
+                        state.selectedEraserTexture
+                    }
+
+                    // Live Eraser Screen Preview
+                    if (liveEraserScreenStroke.size > 1) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val strokeWidthScreen = state.eraserBrushSize * (pagePixelH / activePage.heightPt) * state.zoomScale
+                            val path = androidx.compose.ui.graphics.Path()
+                            path.moveTo(liveEraserScreenStroke[0].x, liveEraserScreenStroke[0].y)
+                            for (i in 1 until liveEraserScreenStroke.size) {
+                                path.lineTo(liveEraserScreenStroke[i].x, liveEraserScreenStroke[i].y)
+                            }
+                            drawPath(
+                                path = path,
+                                color = eraserColor,
+                                style = Stroke(
+                                    width = strokeWidthScreen,
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                        }
+                    }
+
+                    // Manual Eraser Drag Dispatcher
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(activePage.pageIndex, state.selectedEraserTexture, state.eraserBrushSize, state.zoomScale, state.panOffsetX, state.panOffsetY) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        pushCanvasSnapshot()
+                                        liveEraserScreenStroke.clear()
+                                        liveEraserScreenStroke.add(offset)
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        liveEraserScreenStroke.add(change.position)
+                                    },
+                                    onDragEnd = {
+                                        if (liveEraserScreenStroke.size > 1) {
+                                            val canvas = android.graphics.Canvas(activePage.baseBitmap)
+                                            val strokeWidthBmp = state.eraserBrushSize * (bH / activePage.heightPt)
+                                            val paint = Paint().apply {
+                                                isAntiAlias = true
+                                                isDither = true
+                                                style = Paint.Style.STROKE
+                                                strokeJoin = Paint.Join.ROUND
+                                                strokeCap = Paint.Cap.ROUND
+                                                strokeWidth = strokeWidthBmp.coerceAtLeast(2f)
+                                                color = eraserColor.toArgb()
+                                            }
+
+                                            val screenCenterX = containerWidthPx / 2f + state.panOffsetX
+                                            val screenCenterY = containerHeightPx / 2f + state.panOffsetY
+
+                                            fun screenToBmp(pt: Offset): Offset {
+                                                val relX = (pt.x - screenCenterX) / state.zoomScale
+                                                val relY = (pt.y - screenCenterY) / state.zoomScale
+                                                val pageX = relX + (pagePixelW / 2f)
+                                                val pageY = relY + (pagePixelH / 2f)
+                                                return Offset(
+                                                    (pageX / fitScale).coerceIn(0f, bW),
+                                                    (pageY / fitScale).coerceIn(0f, bH)
+                                                )
+                                            }
+
+                                            val path = AndroidPath()
+                                            val start = screenToBmp(liveEraserScreenStroke[0])
+                                            path.moveTo(start.x, start.y)
+                                            for (i in 1 until liveEraserScreenStroke.size) {
+                                                val next = screenToBmp(liveEraserScreenStroke[i])
+                                                path.lineTo(next.x, next.y)
+                                            }
+                                            canvas.drawPath(path, paint)
+                                            state.pageRenderVersion++
+                                            state.statusText = "Erased custom text on page ${state.activePageIndex + 1}."
+                                        }
+                                        liveEraserScreenStroke.clear()
+                                    },
+                                    onDragCancel = {
+                                        liveEraserScreenStroke.clear()
+                                    }
+                                )
+                            }
+                    )
+                } else {
+                    // Standard Two-Finger Pan & Pinch Detector when not drawing or manually erasing
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
+                                    state.zoomScale = (state.zoomScale * zoom).coerceIn(0.5f, 6.0f)
+                                    val maxPan = 1200f * (state.zoomScale - 1f).coerceAtLeast(0f)
+                                    state.panOffsetX = (state.panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
+                                    state.panOffsetY = (state.panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
+                                }
+                            }
+                    )
                 }
+
 
                 // Floating Zoom & Reset Buttons
                 Row(

@@ -2896,7 +2896,7 @@ fun refreshFromEngine(editor: PdfEditor) {
 
 
                             
-                    )
+                    
                 } else {
                     // Standard Two-Finger Pan & Pinch Detector when not drawing or manually erasing
                     Box(

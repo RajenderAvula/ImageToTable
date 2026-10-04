@@ -3024,10 +3024,14 @@ fun refreshFromEngine(editor: PdfEditor) {
                                     )
                                 }
                             }
+                                                            IconButton(onClick = { state.editingWordBox = null }, modifier = Modifier.size(22.dp)) {
+                                    Text("✕", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                                }
 
-                            IconButton(onClick = { state.isInlineWordEditMode = false }, modifier = Modifier.size(20.dp)) {
+
+                           /* IconButton(onClick = { state.isInlineWordEditMode = false }, modifier = Modifier.size(20.dp)) {
                                 Text("✕", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
-                            }
+                            }*/
                         }
 
                         OutlinedTextField(

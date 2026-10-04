@@ -378,7 +378,7 @@ fun PdfEditorScreen(
         }
     }
 
-    fun refreshFromEngine(editor: PdfEditor) {
+   /* fun refreshFromEngine(editor: PdfEditor) {
         state.pages.clear()
         for (i in 1..editor.pageCount) {
             val info = editor.pageInfo(i)
@@ -396,8 +396,35 @@ fun PdfEditorScreen(
             state.activePageIndex = (state.pages.size - 1).coerceAtLeast(0)
         }
         state.pageRenderVersion++
-    }
+    }*/
 
+fun refreshFromEngine(editor: PdfEditor) {
+        val existingPages = state.pages.toList()
+        state.pages.clear()
+        for (i in 1..editor.pageCount) {
+            val info = editor.pageInfo(i)
+            val bmp = editor.renderPage(i, 150f)
+            val oldPage = existingPages.getOrNull(i - 1)
+            val newPage = EditablePdfPage(
+                pageIndex = i - 1,
+                baseBitmap = bmp,
+                widthPt = info.displayWidth,
+                heightPt = info.displayHeight
+            )
+            // Preserve elements & detected words
+            if (oldPage != null) {
+                newPage.elements.addAll(oldPage.elements)
+                newPage.detectedWords.addAll(oldPage.detectedWords)
+            }
+            state.pages.add(newPage)
+        }
+        if (state.activePageIndex >= state.pages.size) {
+            state.activePageIndex = (state.pages.size - 1).coerceAtLeast(0)
+        }
+        state.pageRenderVersion++
+}
+
+    
     fun undoLastAction() {
         if (state.canvasUndoStack.isNotEmpty()) {
             val snapshot = state.canvasUndoStack.removeAt(state.canvasUndoStack.size - 1)
@@ -541,7 +568,7 @@ fun PdfEditorScreen(
         showTextEditDialog = true
     }
 
-    fun openWordInNoteBox(target: DetectedWordBox) {
+   /* fun openWordInNoteBox(target: DetectedWordBox) {
         state.isInlineWordEditMode = true
         state.isEraserToolActive = false
         state.isPenModeActive = false
@@ -558,7 +585,41 @@ fun PdfEditorScreen(
         state.zoomScale = 1.9f
         state.panOffsetX = -(target.relX * 200f)
         state.panOffsetY = -(target.relY * 200f)
-    }
+    }*/
+
+fun openWordInNoteBox(target: DetectedWordBox) {
+        state.isInlineWordEditMode = true
+        state.isEraserToolActive = false
+        state.isPenModeActive = false
+        state.editingWordBox = target
+
+        // Load existing element properties if this word was previously replaced
+        val existingElem = activePage?.elements?.find { it.id == target.associatedElementId }
+        if (existingElem != null) {
+            state.liveWordText = existingElem.text
+            state.liveWordFontSizePt = existingElem.fontSizePt
+            state.liveWordIsBold = existingElem.isBold
+            state.liveWordIsItalic = existingElem.isItalic
+            state.liveWordColor = existingElem.textColor
+            state.liveWordOpacity = existingElem.opacity
+            state.liveWordPaperColor = existingElem.backgroundColor
+            state.activeElementId = existingElem.id
+        } else {
+            state.liveWordText = if (target.isReplaced) target.replacedText else target.word
+            state.liveWordFontSizePt = 14f
+            state.liveWordIsBold = false
+            state.liveWordIsItalic = false
+            state.liveWordColor = Color(0xFF292524)
+            state.liveWordPaperColor = Color.Transparent
+            state.liveWordOpacity = 0.90f
+        }
+        state.isNoteBoxMinimized = false
+
+        state.zoomScale = 1.9f
+        state.panOffsetX = -(target.relX * 200f)
+        state.panOffsetY = -(target.relY * 200f)
+}
+    
 
     // Permanently wipes original word on baseBitmap and updates/creates the interactive overlay element
     fun applyWordEraseOrReplace(target: DetectedWordBox, replacementText: String?) {
@@ -1999,7 +2060,7 @@ fun PdfEditorScreen(
                                         )
                                     }
                                     // 2. Tap gestures for selection and opening the re-edit dialog
-                                    .pointerInput(element.id) {
+                                   /* .pointerInput(element.id) {
                                         detectTapGestures(
                                             onTap = {
                                                 state.activeElementId = element.id
@@ -2019,7 +2080,47 @@ fun PdfEditorScreen(
                                                 }
                                             }
                                         )
-                                    }
+                                    }*/
+
+                                                                    .pointerInput(element.id) {
+                                        detectTapGestures(
+                                            onTap = {
+                                                state.activeElementId = element.id
+                                                if (element.isReplacedWord) {
+                                                    // Find or restore word box link so it can be re-edited immediately
+                                                    val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
+                                                        ?: DetectedWordBox(
+                                                            id = element.associatedWordBoxId ?: UUID.randomUUID().toString(),
+                                                            initialWord = element.originalWord.ifBlank { element.text },
+                                                            initialRelX = element.relX,
+                                                            initialRelY = element.relY,
+                                                            initialRelWidth = element.relWidth,
+                                                            initialRelHeight = element.relHeight,
+                                                            initialIsReplaced = true,
+                                                            initialReplacedText = element.text,
+                                                            initialAssociatedElementId = element.id
+                                                        ).also {
+                                                            if (activePage.detectedWords.none { w -> w.id == it.id }) {
+                                                                activePage.detectedWords.add(it)
+                                                            }
+                                                        }
+                                                    openWordInNoteBox(wBox)
+                                                } else {
+                                                    state.statusText = "Selected '${element.text}'. Tap ✎ Re-edit to edit."
+                                                }
+                                            },
+                                            onDoubleTap = {
+                                                state.activeElementId = element.id
+                                                if (element.isReplacedWord) {
+                                                    val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
+                                                    if (wBox != null) openWordInNoteBox(wBox)
+                                                    else openEditDialogForElement(element)
+                                                } else {
+                                                    openEditDialogForElement(element)
+                                                }
+                                            }
+                                        )
+                                                                    }
                                     .background(
                                         if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
                                         RoundedCornerShape(2.dp)

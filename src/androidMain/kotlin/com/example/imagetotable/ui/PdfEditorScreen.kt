@@ -50,6 +50,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
@@ -192,8 +193,8 @@ class PdfEditorState {
     // Dedicated Pen / Highlighter Tool State
     var isPenModeActive by mutableStateOf(false)
     var isHighlighterMode by mutableStateOf(false)
-    var penColor by mutableStateOf(Color(0xFF1565C0)) // Classic ballpoint blue
-    var penStrokeWidth by mutableFloatStateOf(4f)
+    var penColor by mutableStateOf(Color(0xFF1565C0))
+    var penStrokeWidth by mutableFloatStateOf(3f)
 
     fun reset() {
         activeEditor?.close()
@@ -221,7 +222,7 @@ class PdfEditorState {
         isPenModeActive = false
         isHighlighterMode = false
         penColor = Color(0xFF1565C0)
-        penStrokeWidth = 4f
+        penStrokeWidth = 3f
     }
 }
 
@@ -276,6 +277,7 @@ fun PdfEditorScreen(
     state: PdfEditorState = PdfEditorStateManager.state
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
@@ -310,8 +312,8 @@ fun PdfEditorScreen(
     var showPageNumbersDialog by remember { mutableStateOf(false) }
     var pageNumberFormatInput by remember { mutableStateOf("Page {n} of {total}") }
 
-    // Live stroke points during active touch drag
-    val liveDrawingStroke = remember { mutableStateListOf<Offset>() }
+    // Live points in bitmap coordinate pixels [0..bW, 0..bH]
+    val liveDrawingBmpStroke = remember { mutableStateListOf<Offset>() }
 
     val activePage = state.pages.getOrNull(state.activePageIndex)
     val activeElement = activePage?.elements?.find { it.id == state.activeElementId }
@@ -769,7 +771,7 @@ fun PdfEditorScreen(
         if (destUri != null && state.pages.isNotEmpty()) {
             coroutineScope.launch {
                 state.isProcessing = true
-                state.statusText = "Compiling PDF with exact typography and erasures..."
+                state.statusText = "Compiling PDF with exact typography and annotations..."
                 try {
                     withContext(Dispatchers.IO) {
                         val pdfDocument = PdfDocument()
@@ -1025,7 +1027,7 @@ fun PdfEditorScreen(
                                 state.isInlineWordEditMode = false
                                 state.editingWordBox = null
                                 state.activeElementId = null
-                                state.statusText = "Pen active: Draw or write on page with finger or stylus."
+                                state.statusText = "Pen active: Draw directly on page."
                             } else {
                                 state.statusText = "Exited Pen Mode."
                             }
@@ -1333,7 +1335,7 @@ fun PdfEditorScreen(
             }
         }
 
-        // PEN / ANNOTATION DOCKED PALETTE (COLOR SELECTION & STROKE THICKNESS)
+        // PEN / ANNOTATION DOCKED PALETTE
         if (state.isPenModeActive && activePage != null) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -1348,7 +1350,6 @@ fun PdfEditorScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Pen vs. Highlighter Switch
                     Button(
                         onClick = { state.isHighlighterMode = !state.isHighlighterMode },
                         colors = ButtonDefaults.buttonColors(
@@ -1365,7 +1366,6 @@ fun PdfEditorScreen(
                         )
                     }
 
-                    // Stroke Thickness Options
                     Text("Size:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
                     PenThicknesses.forEach { (lbl, widthVal) ->
                         val isSel = state.penStrokeWidth == widthVal
@@ -1386,9 +1386,8 @@ fun PdfEditorScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // Color Swatches
                     Text("Color:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
-                    AnnotationPenColors.forEach { (name, col) ->
+                    AnnotationPenColors.forEach { (_, col) ->
                         val isSel = state.penColor == col
                         Box(
                             modifier = Modifier
@@ -1562,29 +1561,33 @@ fun PdfEditorScreen(
                 .padding(4.dp)
                 .clipToBounds()
                 .background(Color(0xFF1E293B), RoundedCornerShape(8.dp))
-                .pointerInput(Unit) {
+                .pointerInput(state.isPenModeActive) {
                     detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
-                        state.zoomScale = (state.zoomScale * zoom).coerceIn(0.5f, 6.0f)
-                        val maxPan = 1200f * (state.zoomScale - 1f).coerceAtLeast(0f)
-                        state.panOffsetX = (state.panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
-                        state.panOffsetY = (state.panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
+                        if (!state.isPenModeActive) {
+                            state.zoomScale = (state.zoomScale * zoom).coerceIn(0.5f, 6.0f)
+                            val maxPan = 1200f * (state.zoomScale - 1f).coerceAtLeast(0f)
+                            state.panOffsetX = (state.panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
+                            state.panOffsetY = (state.panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
+                        }
                     }
                 },
             contentAlignment = Alignment.Center
         ) {
-            val containerW = maxWidth.value
-            val containerH = maxHeight.value
+            val containerWidthPx = with(density) { maxWidth.toPx() }
+            val containerHeightPx = with(density) { maxHeight.toPx() }
 
             if (activePage != null) {
                 val bW = activePage.baseBitmap.width.toFloat().coerceAtLeast(1f)
                 val bH = activePage.baseBitmap.height.toFloat().coerceAtLeast(1f)
-                val fitScale = minOf(containerW / bW, containerH / bH)
+                val fitScale = minOf(containerWidthPx / bW, containerHeightPx / bH)
                 val pagePixelW = bW * fitScale
                 val pagePixelH = bH * fitScale
+                val pageDpW = with(density) { pagePixelW.toDp() }
+                val pageDpH = with(density) { pagePixelH.toDp() }
 
                 Box(
                     modifier = Modifier
-                        .size(pagePixelW.dp, pagePixelH.dp)
+                        .size(pageDpW, pageDpH)
                         .graphicsLayer(
                             scaleX = state.zoomScale,
                             scaleY = state.zoomScale,
@@ -1601,24 +1604,25 @@ fun PdfEditorScreen(
                         )
                     }
 
-                    // LIVE FREEHAND STROKE DRAWING ON PAGE
-                    if (liveDrawingStroke.isNotEmpty()) {
+                    // LIVE ON-PAGE STROKE DRAWING (PRECISE LOCAL SCREEN PIXELS)
+                    if (liveDrawingBmpStroke.size > 1) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             val strokeColor = if (state.isHighlighterMode) {
                                 state.penColor.copy(alpha = 0.40f)
                             } else {
                                 state.penColor
                             }
+                            val strokeWidthScreen = state.penStrokeWidth * (size.height / activePage.heightPt)
                             val path = androidx.compose.ui.graphics.Path()
-                            path.moveTo(liveDrawingStroke[0].x, liveDrawingStroke[0].y)
-                            for (i in 1 until liveDrawingStroke.size) {
-                                path.lineTo(liveDrawingStroke[i].x, liveDrawingStroke[i].y)
+                            path.moveTo(liveDrawingBmpStroke[0].x * fitScale, liveDrawingBmpStroke[0].y * fitScale)
+                            for (i in 1 until liveDrawingBmpStroke.size) {
+                                path.lineTo(liveDrawingBmpStroke[i].x * fitScale, liveDrawingBmpStroke[i].y * fitScale)
                             }
                             drawPath(
                                 path = path,
                                 color = strokeColor,
                                 style = Stroke(
-                                    width = state.penStrokeWidth,
+                                    width = strokeWidthScreen,
                                     cap = StrokeCap.Round,
                                     join = StrokeJoin.Round
                                 )
@@ -1626,32 +1630,37 @@ fun PdfEditorScreen(
                         }
                     }
 
-                    // PEN MODE GESTURE LAYER: DRAWS REAL STROKES DIRECTLY ON PAGE
+                    // PEN MODE GESTURE LAYER: MAPS DIRECTLY TO PAGE BITMAP PIXELS
                     if (state.isPenModeActive) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .pointerInput(activePage.pageIndex, state.isHighlighterMode, state.penColor, state.penStrokeWidth) {
+                                .pointerInput(activePage.pageIndex, state.isHighlighterMode, state.penColor, state.penStrokeWidth, fitScale) {
                                     detectDragGestures(
                                         onDragStart = { offset ->
                                             pushCanvasSnapshot()
-                                            liveDrawingStroke.clear()
-                                            liveDrawingStroke.add(offset)
+                                            liveDrawingBmpStroke.clear()
+                                            val bmpX = (offset.x / fitScale).coerceIn(0f, bW)
+                                            val bmpY = (offset.y / fitScale).coerceIn(0f, bH)
+                                            liveDrawingBmpStroke.add(Offset(bmpX, bmpY))
                                         },
                                         onDrag = { change, _ ->
                                             change.consume()
-                                            liveDrawingStroke.add(change.position)
+                                            val bmpX = (change.position.x / fitScale).coerceIn(0f, bW)
+                                            val bmpY = (change.position.y / fitScale).coerceIn(0f, bH)
+                                            liveDrawingBmpStroke.add(Offset(bmpX, bmpY))
                                         },
                                         onDragEnd = {
-                                            if (liveDrawingStroke.size > 1) {
+                                            if (liveDrawingBmpStroke.size > 1) {
                                                 val canvas = android.graphics.Canvas(activePage.baseBitmap)
+                                                val strokeWidthBmp = state.penStrokeWidth * (bH / activePage.heightPt)
                                                 val paint = Paint().apply {
                                                     isAntiAlias = true
                                                     isDither = true
                                                     style = Paint.Style.STROKE
                                                     strokeJoin = Paint.Join.ROUND
                                                     strokeCap = Paint.Cap.ROUND
-                                                    strokeWidth = (state.penStrokeWidth * (bW / pagePixelW)).coerceAtLeast(1.5f)
+                                                    strokeWidth = strokeWidthBmp.coerceAtLeast(1.5f)
                                                     color = if (state.isHighlighterMode) {
                                                         state.penColor.copy(alpha = 0.40f).toArgb()
                                                     } else {
@@ -1659,20 +1668,18 @@ fun PdfEditorScreen(
                                                     }
                                                 }
                                                 val path = AndroidPath()
-                                                val scaleX = bW / pagePixelW
-                                                val scaleY = bH / pagePixelH
-                                                path.moveTo(liveDrawingStroke[0].x * scaleX, liveDrawingStroke[0].y * scaleY)
-                                                for (i in 1 until liveDrawingStroke.size) {
-                                                    path.lineTo(liveDrawingStroke[i].x * scaleX, liveDrawingStroke[i].y * scaleY)
+                                                path.moveTo(liveDrawingBmpStroke[0].x, liveDrawingBmpStroke[0].y)
+                                                for (i in 1 until liveDrawingBmpStroke.size) {
+                                                    path.lineTo(liveDrawingBmpStroke[i].x, liveDrawingBmpStroke[i].y)
                                                 }
                                                 canvas.drawPath(path, paint)
                                                 state.pageRenderVersion++
                                                 state.statusText = "Annotated on page ${state.activePageIndex + 1}."
                                             }
-                                            liveDrawingStroke.clear()
+                                            liveDrawingBmpStroke.clear()
                                         },
                                         onDragCancel = {
-                                            liveDrawingStroke.clear()
+                                            liveDrawingBmpStroke.clear()
                                         }
                                     )
                                 }
@@ -1688,22 +1695,21 @@ fun PdfEditorScreen(
                             state.liveWordPaperColor
                         }
 
-                        val patchW = maxOf(
-                            wordBox.relWidth * pagePixelW + 8f,
-                            state.liveWordText.length * (state.liveWordFontSizePt * 0.70f) + 8f
+                        val targetWordLeftDp = (wordBox.relX * pageDpW.value).dp
+                        val targetWordTopDp = (wordBox.relY * pageDpH.value).dp
+                        val patchWDp = maxOf(
+                            (wordBox.relWidth * pageDpW.value + 8f).dp,
+                            (state.liveWordText.length * (state.liveWordFontSizePt * 0.70f) + 8f).dp
                         )
-                        val patchH = maxOf(
-                            wordBox.relHeight * pagePixelH + 6f,
-                            state.liveWordFontSizePt + 6f
+                        val patchHDp = maxOf(
+                            (wordBox.relHeight * pageDpH.value + 6f).dp,
+                            (state.liveWordFontSizePt + 6f).dp
                         )
 
                         Box(
                             modifier = Modifier
-                                .offset(
-                                    x = (wordBox.relX * pagePixelW - 4f).dp,
-                                    y = (wordBox.relY * pagePixelH - 3f).dp
-                                )
-                                .size(width = patchW.dp, height = patchH.dp)
+                                .offset(x = targetWordLeftDp - 4.dp, y = targetWordTopDp - 3.dp)
+                                .size(width = patchWDp, height = patchHDp)
                                 .background(activePaperBg)
                                 .border(1.dp, Color(0xFF00E676), RoundedCornerShape(2.dp))
                                 .padding(horizontal = 2.dp),
@@ -1725,12 +1731,12 @@ fun PdfEditorScreen(
                             Box(
                                 modifier = Modifier
                                     .offset(
-                                        x = (wordBox.relX * pagePixelW - 2f).dp,
-                                        y = (wordBox.relY * pagePixelH - 2f).dp
+                                        x = (wordBox.relX * pageDpW.value - 2f).dp,
+                                        y = (wordBox.relY * pageDpH.value - 2f).dp
                                     )
                                     .size(
-                                        width = (wordBox.relWidth * pagePixelW + 4f).dp,
-                                        height = (wordBox.relHeight * pagePixelH + 4f).dp
+                                        width = (wordBox.relWidth * pageDpW.value + 4f).dp,
+                                        height = (wordBox.relHeight * pageDpH.value + 4f).dp
                                     )
                                     .background(Color(0x33FF5722), RoundedCornerShape(2.dp))
                                     .border(1.dp, Color(0xFFD32F2F), RoundedCornerShape(2.dp))
@@ -1745,16 +1751,16 @@ fun PdfEditorScreen(
                     if (!state.isPenModeActive) {
                         activePage.elements.forEach { element ->
                             val isSelected = element.id == state.activeElementId
-                            val elemLeft = element.relX * pagePixelW
-                            val elemTop = element.relY * pagePixelH
-                            val elemW = (element.relWidth * pagePixelW).coerceAtLeast(20f)
-                            val elemH = (element.relHeight * pagePixelH).coerceAtLeast(14f)
+                            val elemLeftDp = (element.relX * pageDpW.value).dp
+                            val elemTopDp = (element.relY * pageDpH.value).dp
+                            val elemWDp = (element.relWidth * pageDpW.value).coerceAtLeast(20f).dp
+                            val elemHDp = (element.relHeight * pageDpH.value).coerceAtLeast(14f).dp
 
                             Box(
                                 modifier = Modifier
-                                    .offset(x = elemLeft.dp, y = elemTop.dp)
-                                    .size(width = elemW.dp, height = elemH.dp)
-                                    .pointerInput(element.id) {
+                                    .offset(x = elemLeftDp, y = elemTopDp)
+                                    .size(width = elemWDp, height = elemHDp)
+                                    .pointerInput(element.id, pagePixelW, pagePixelH) {
                                         detectDragGestures(
                                             onDragStart = { state.activeElementId = element.id },
                                             onDrag = { change, dragAmount ->
@@ -1814,7 +1820,7 @@ fun PdfEditorScreen(
                                             .size(24.dp)
                                             .background(Color(0xFF1976D2), CircleShape)
                                             .border(2.dp, Color.White, CircleShape)
-                                            .pointerInput(element.id) {
+                                            .pointerInput(element.id, pagePixelW, pagePixelH) {
                                                 detectDragGestures { change, dragAmount ->
                                                     change.consume()
                                                     element.relWidth = (element.relWidth + dragAmount.x / pagePixelW).coerceIn(0.02f, 1f)
@@ -2364,7 +2370,7 @@ fun PdfEditorScreen(
         FourCornerCropDialog(
             sourceBitmap = activePage.baseBitmap,
             onDismiss = { showFourCornerCropDialog = false },
-            onCropConfirmed = { cL, cT, cR, cB ->
+            onCropConfirmed = { cL: Float, cT: Float, cR: Float, cB: Float ->
                 state.activeEditor?.let { editor ->
                     editor.crop(
                         pages = (state.activePageIndex + 1).toString(),
@@ -2638,7 +2644,7 @@ fun PdfEditorScreen(
                                             .size(16.dp)
                                             .background(displayColor, CircleShape)
                                             .border(0.5.dp, Color.Gray, CircleShape)
-                                        )
+                                    )
                                     Text(name, fontSize = 9.sp, color = Color.DarkGray)
                                 }
                             }
@@ -2740,7 +2746,7 @@ fun PdfEditorScreen(
 
 // 4-CORNER INTERACTIVE VISUAL CROPPING DIALOG
 @Composable
-private fun FourCornerCropDialog(
+fun FourCornerCropDialog(
     sourceBitmap: Bitmap,
     onDismiss: () -> Unit,
     onCropConfirmed: (cropL: Float, cropT: Float, cropR: Float, cropB: Float) -> Unit
@@ -2817,7 +2823,7 @@ private fun FourCornerCropDialog(
                             )
                         }
 
-                        // 4 Draggable Corner Handles
+                        // 4 Draggable Handles
                         Box(
                             modifier = Modifier
                                 .align(Alignment.TopStart)

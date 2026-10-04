@@ -93,7 +93,10 @@ class RichPdfTextElement(
     initialTextColor: Color = Color(0xFF292524),
     initialOpacity: Float = 0.90f,
     initialBackgroundColor: Color = Color.Transparent,
-    initialIsWhiteout: Boolean = false
+    initialIsWhiteout: Boolean = false,
+    initialIsReplacedWord: Boolean = false,
+    initialOriginalWord: String = "",
+    initialAssociatedWordBoxId: String? = null
 ) {
     var text by mutableStateOf(initialText)
     var relX by mutableFloatStateOf(initialRelX)
@@ -104,9 +107,12 @@ class RichPdfTextElement(
     var isBold by mutableStateOf(initialIsBold)
     var isItalic by mutableStateOf(initialIsItalic)
     var textColor by mutableStateOf(initialTextColor)
-    var opacity by mutableFloatStateOf(initialOpacity)
+    var opacity by mutableFloatStateOf(initialOpacity) // Shading 0.0f to 1.0f (0% to 100%)
     var backgroundColor by mutableStateOf(initialBackgroundColor)
     var isWhiteout by mutableStateOf(initialIsWhiteout)
+    var isReplacedWord by mutableStateOf(initialIsReplacedWord)
+    var originalWord by mutableStateOf(initialOriginalWord)
+    var associatedWordBoxId by mutableStateOf(initialAssociatedWordBoxId)
 
     fun copyElement(): RichPdfTextElement {
         return RichPdfTextElement(
@@ -122,7 +128,10 @@ class RichPdfTextElement(
             initialTextColor = textColor,
             initialOpacity = opacity,
             initialBackgroundColor = backgroundColor,
-            initialIsWhiteout = isWhiteout
+            initialIsWhiteout = isWhiteout,
+            initialIsReplacedWord = isReplacedWord,
+            initialOriginalWord = originalWord,
+            initialAssociatedWordBoxId = associatedWordBoxId
         )
     }
 }
@@ -134,7 +143,10 @@ class DetectedWordBox(
     initialRelY: Float,
     initialRelWidth: Float,
     initialRelHeight: Float,
-    initialSampledPaperColor: Color = Color.White
+    initialSampledPaperColor: Color = Color.White,
+    initialIsReplaced: Boolean = false,
+    initialReplacedText: String = "",
+    initialAssociatedElementId: String? = null
 ) {
     var word by mutableStateOf(initialWord)
     var relX by mutableFloatStateOf(initialRelX)
@@ -142,6 +154,9 @@ class DetectedWordBox(
     var relWidth by mutableFloatStateOf(initialRelWidth)
     var relHeight by mutableFloatStateOf(initialRelHeight)
     var sampledPaperColor by mutableStateOf(initialSampledPaperColor)
+    var isReplaced by mutableStateOf(initialIsReplaced)
+    var replacedText by mutableStateOf(initialReplacedText)
+    var associatedElementId by mutableStateOf(initialAssociatedElementId)
 }
 
 data class EditablePdfPage(
@@ -177,6 +192,7 @@ class PdfEditorState {
 
     // Word Inspector & Note Box State
     var isInlineWordEditMode by mutableStateOf(false)
+    var selectedWordsTab by mutableIntStateOf(0) // 0 = Detected Words, 1 = Replaced Words
     var wordSearchFilter by mutableStateOf("")
     var editingWordBox by mutableStateOf<DetectedWordBox?>(null)
     var isNoteBoxMinimized by mutableStateOf(false)
@@ -186,7 +202,7 @@ class PdfEditorState {
     var liveWordIsItalic by mutableStateOf(false)
     var liveWordColor by mutableStateOf(Color(0xFF292524))
     var liveWordPaperColor by mutableStateOf(Color.Transparent)
-    var liveWordOpacity by mutableFloatStateOf(0.90f)
+    var liveWordOpacity by mutableFloatStateOf(0.90f) // Shading 0.0f..1.0f
 
     // Dedicated Eraser Tool State
     var isEraserToolActive by mutableStateOf(false)
@@ -214,6 +230,7 @@ class PdfEditorState {
         canvasUndoStack.clear()
         canvasRedoStack.clear()
         isInlineWordEditMode = false
+        selectedWordsTab = 0
         wordSearchFilter = ""
         editingWordBox = null
         isNoteBoxMinimized = false
@@ -374,7 +391,7 @@ fun PdfEditorScreen(
                 page.elements.addAll(snapshot.elements.map { it.copyElement() })
                 state.activeElementId = null
                 state.pageRenderVersion++
-                state.statusText = "Undid last action."
+                state.statusText = "Undid last edit."
             }
         } else if (state.activeEditor?.canUndo == true) {
             state.activeEditor?.let { editor ->
@@ -403,7 +420,7 @@ fun PdfEditorScreen(
                 page.elements.addAll(snapshot.elements.map { it.copyElement() })
                 state.activeElementId = null
                 state.pageRenderVersion++
-                state.statusText = "Redid action."
+                state.statusText = "Redid edit."
             }
         } else if (state.activeEditor?.canRedo == true) {
             state.activeEditor?.let { editor ->
@@ -452,7 +469,6 @@ fun PdfEditorScreen(
         }
     }
 
-    // Direct permanent erasure on the document bitmap
     fun eraseWordWithTexture(target: DetectedWordBox) {
         activePage?.let { page ->
             pushCanvasSnapshot()
@@ -498,7 +514,24 @@ fun PdfEditorScreen(
         showTextEditDialog = true
     }
 
-    // Completely erases original word on baseBitmap and paints the replacement text permanently
+    // Opens Note Box for a word box or an already replaced word
+    fun openWordInNoteBox(target: DetectedWordBox) {
+        state.editingWordBox = target
+        state.liveWordText = if (target.isReplaced) target.replacedText else target.word
+        state.liveWordFontSizePt = 14f
+        state.liveWordIsBold = false
+        state.liveWordIsItalic = false
+        state.liveWordColor = Color(0xFF292524)
+        state.liveWordPaperColor = Color.Transparent
+        state.liveWordOpacity = 0.90f
+        state.isNoteBoxMinimized = false
+
+        state.zoomScale = 1.9f
+        state.panOffsetX = -(target.relX * 200f)
+        state.panOffsetY = -(target.relY * 200f)
+    }
+
+    // Completely erases original word on baseBitmap and creates/updates a persistent, re-editable overlay
     fun applyWordEraseOrReplace(target: DetectedWordBox, replacementText: String?) {
         activePage?.let { page ->
             pushCanvasSnapshot()
@@ -527,48 +560,49 @@ fun PdfEditorScreen(
             )
             canvas.drawRect(eraseRect, erasePaint)
 
-            // 2. If replacement text is provided, paint it directly onto the bitmap at font baseline
+            // 2. Add or update the re-editable overlay
             val cleanReplacement = replacementText?.trim().orEmpty()
             if (cleanReplacement.isNotEmpty()) {
-                val ptToBmpScale = bH / page.heightPt
-                val textPaint = Paint().apply {
-                    color = state.liveWordColor.copy(alpha = state.liveWordOpacity).toArgb()
-                    textSize = state.liveWordFontSizePt * ptToBmpScale
-                    isAntiAlias = true
-                    val style = when {
-                        state.liveWordIsBold && state.liveWordIsItalic -> Typeface.BOLD_ITALIC
-                        state.liveWordIsBold -> Typeface.BOLD
-                        state.liveWordIsItalic -> Typeface.ITALIC
-                        else -> Typeface.NORMAL
-                    }
-                    typeface = Typeface.create(Typeface.DEFAULT, style)
-                }
-
-                val baselineOffset = -textPaint.fontMetrics.ascent
-                val startX = target.relX * bW
-                val startY = (target.relY * bH) + baselineOffset
-
-                // If new text is wider than the original box, expand the whiteout patch to clean background
-                val measuredWidth = textPaint.measureText(cleanReplacement)
-                if (measuredWidth > (eraseRect.width() - pad)) {
-                    val extendedEraseRect = RectF(
-                        eraseRect.left,
-                        eraseRect.top,
-                        (startX + measuredWidth + pad).coerceAtMost(bW),
-                        eraseRect.bottom
+                val existingElem = page.elements.find { it.id == target.associatedElementId }
+                if (existingElem != null) {
+                    existingElem.text = cleanReplacement
+                    existingElem.fontSizePt = state.liveWordFontSizePt
+                    existingElem.isBold = state.liveWordIsBold
+                    existingElem.isItalic = state.liveWordIsItalic
+                    existingElem.textColor = state.liveWordColor
+                    existingElem.opacity = state.liveWordOpacity
+                    existingElem.backgroundColor = solidPaperBg
+                    state.activeElementId = existingElem.id
+                } else {
+                    val newOverlay = RichPdfTextElement(
+                        initialText = cleanReplacement,
+                        initialRelX = target.relX,
+                        initialRelY = target.relY,
+                        initialRelWidth = maxOf(target.relWidth, cleanReplacement.length * 0.019f),
+                        initialRelHeight = maxOf(target.relHeight, 0.035f),
+                        initialFontSizePt = state.liveWordFontSizePt,
+                        initialIsBold = state.liveWordIsBold,
+                        initialIsItalic = state.liveWordIsItalic,
+                        initialTextColor = state.liveWordColor,
+                        initialOpacity = state.liveWordOpacity,
+                        initialBackgroundColor = solidPaperBg,
+                        initialIsWhiteout = false,
+                        initialIsReplacedWord = true,
+                        initialOriginalWord = target.word,
+                        initialAssociatedWordBoxId = target.id
                     )
-                    canvas.drawRect(extendedEraseRect, erasePaint)
+                    page.elements.add(newOverlay)
+                    target.associatedElementId = newOverlay.id
+                    state.activeElementId = newOverlay.id
                 }
 
-                // Draw the replacement text permanently onto the document
-                canvas.drawText(cleanReplacement, startX, startY, textPaint)
-
-                // Update the word box with the new replacement text so it can be re-edited anytime
-                target.word = cleanReplacement
-                target.relWidth = maxOf(target.relWidth, (measuredWidth + pad * 2f) / bW)
-
-                state.statusText = "Replaced with '$cleanReplacement' successfully!"
+                target.isReplaced = true
+                target.replacedText = cleanReplacement
+                state.statusText = "Replaced with '$cleanReplacement' (re-editable overlay created)."
             } else {
+                target.associatedElementId?.let { elId ->
+                    page.elements.removeAll { it.id == elId }
+                }
                 page.detectedWords.removeAll { it.id == target.id }
                 state.statusText = "Erased '${target.word}' from document."
             }
@@ -677,6 +711,7 @@ fun PdfEditorScreen(
         }
     }
 
+    // Launchers
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -1098,12 +1133,28 @@ fun PdfEditorScreen(
 
                     if (activeElement != null) {
                         Button(
-                            onClick = { openEditDialogForElement(activeElement) },
+                            onClick = {
+                                if (activeElement.isReplacedWord && activeElement.associatedWordBoxId != null) {
+                                    val wBox = activePage?.detectedWords?.find { it.id == activeElement.associatedWordBoxId }
+                                    if (wBox != null) {
+                                        openWordInNoteBox(wBox)
+                                    } else {
+                                        openEditDialogForElement(activeElement)
+                                    }
+                                } else {
+                                    openEditDialogForElement(activeElement)
+                                }
+                            },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                             modifier = Modifier.height(28.dp)
                         ) {
-                            Text("✎ Re-edit", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (activeElement.isReplacedWord) "✎ Re-edit Word" else "✎ Re-edit Text",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
 
                         Button(
@@ -1519,19 +1570,35 @@ fun PdfEditorScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (activeElement.isWhiteout) "⬜ Whiteout:" else "✏️ Text Box:",
+                        text = if (activeElement.isReplacedWord) "✏️ Replaced Word:" else if (activeElement.isWhiteout) "⬜ Whiteout:" else "✏️ Text Box:",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF283593)
                     )
 
                     Button(
-                        onClick = { openEditDialogForElement(activeElement) },
+                        onClick = {
+                            if (activeElement.isReplacedWord && activeElement.associatedWordBoxId != null) {
+                                val wBox = activePage?.detectedWords?.find { it.id == activeElement.associatedWordBoxId }
+                                if (wBox != null) {
+                                    openWordInNoteBox(wBox)
+                                } else {
+                                    openEditDialogForElement(activeElement)
+                                }
+                            } else {
+                                openEditDialogForElement(activeElement)
+                            }
+                        },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3F51B5)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                         modifier = Modifier.height(26.dp)
                     ) {
-                        Text("✎ Edit Text", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (activeElement.isReplacedWord) "✎ Re-edit Word" else "✎ Edit Text",
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
 
                     // REAL-TIME NUDGING
@@ -1625,7 +1692,7 @@ fun PdfEditorScreen(
                         )
                     }
 
-                    // LIVE ON-PAGE STROKE DRAWING (PRECISE LOCAL SCREEN PIXELS)
+                    // LIVE ON-PAGE STROKE DRAWING
                     if (liveDrawingBmpStroke.size > 1) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             val strokeColor = if (state.isHighlighterMode) {
@@ -1651,7 +1718,7 @@ fun PdfEditorScreen(
                         }
                     }
 
-                    // PEN MODE GESTURE LAYER: MAPS DIRECTLY TO PAGE BITMAP PIXELS
+                    // PEN MODE GESTURE LAYER
                     if (state.isPenModeActive) {
                         Box(
                             modifier = Modifier
@@ -1707,7 +1774,7 @@ fun PdfEditorScreen(
                         )
                     }
 
-                    // LIVE PREVIEW DIRECTLY ON TARGET WORD: SOLID WHITEOUT MASK + NEW WORD
+                    // LIVE PREVIEW DIRECTLY ON TARGET WORD
                     if (state.editingWordBox != null) {
                         val wordBox = state.editingWordBox!!
                         val activePaperBg = if (state.liveWordPaperColor == Color.Transparent) {
@@ -1768,7 +1835,7 @@ fun PdfEditorScreen(
                         }
                     }
 
-                    // REAL-TIME DRAGGABLE & RESIZABLE OVERLAYS (DISABLED WHILE PEN IS DRAWING)
+                    // REAL-TIME DRAGGABLE & RE-EDITABLE OVERLAYS
                     if (!state.isPenModeActive) {
                         activePage.elements.forEach { element ->
                             val isSelected = element.id == state.activeElementId
@@ -1788,6 +1855,20 @@ fun PdfEditorScreen(
                                                 change.consume()
                                                 element.relX = (element.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
                                                 element.relY = (element.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
+                                            }
+                                        )
+                                    }
+                                    .pointerInput(element.id) {
+                                        detectTapGestures(
+                                            onTap = { state.activeElementId = element.id },
+                                            onDoubleTap = {
+                                                if (element.isReplacedWord && element.associatedWordBoxId != null) {
+                                                    val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
+                                                    if (wBox != null) openWordInNoteBox(wBox)
+                                                    else openEditDialogForElement(element)
+                                                } else {
+                                                    openEditDialogForElement(element)
+                                                }
                                             }
                                         )
                                     }
@@ -1817,21 +1898,44 @@ fun PdfEditorScreen(
                                 }
 
                                 if (isSelected) {
-                                    Box(
+                                    Row(
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
-                                            .offset(x = 10.dp, y = (-10).dp)
-                                            .size(20.dp)
-                                            .background(Color.Red, CircleShape)
-                                            .clickable {
-                                                pushCanvasSnapshot()
-                                                activePage.elements.removeAll { it.id == element.id }
-                                                state.activeElementId = null
-                                                state.statusText = "Deleted element."
-                                            },
-                                        contentAlignment = Alignment.Center
+                                            .offset(x = 12.dp, y = (-12).dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
-                                        Text("✕", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        Box(
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .background(Color(0xFF6A1B9A), CircleShape)
+                                                .clickable {
+                                                    if (element.isReplacedWord && element.associatedWordBoxId != null) {
+                                                        val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
+                                                        if (wBox != null) openWordInNoteBox(wBox)
+                                                        else openEditDialogForElement(element)
+                                                    } else {
+                                                        openEditDialogForElement(element)
+                                                    }
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("✎", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .background(Color.Red, CircleShape)
+                                                .clickable {
+                                                    pushCanvasSnapshot()
+                                                    activePage.elements.removeAll { it.id == element.id }
+                                                    state.activeElementId = null
+                                                    state.statusText = "Deleted element."
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("✕", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
 
                                     Box(
@@ -1911,8 +2015,12 @@ fun PdfEditorScreen(
             }
         }
 
-        // SEPARATE DOCKED UI: DETECTED WORDS SHELF & LIVE RESIZABLE NOTE BOX
+        // SEPARATE DOCKED UI: DETECTED WORDS SHELF & RE-EDITABLE NOTE BOX
         if (state.isInlineWordEditMode && activePage != null) {
+            val replacedWordsCount = remember(activePage.detectedWords.size, activePage.elements.size, state.pageRenderVersion) {
+                activePage.detectedWords.count { it.isReplaced }
+            }
+
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1929,17 +2037,42 @@ fun PdfEditorScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     if (state.editingWordBox == null) {
+                        // Word list view header with tabs
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "🔤 Detected Words (${activePage.detectedWords.size}) - Tap 🧹 to Erase Instantly",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                color = Color(0xFF00796B)
-                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = if (state.selectedWordsTab == 0) Color(0xFF00796B) else Color(0xFFECEFF1),
+                                    modifier = Modifier.clickable { state.selectedWordsTab = 0 }
+                                ) {
+                                    Text(
+                                        text = "🔤 Detected (${activePage.detectedWords.size})",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (state.selectedWordsTab == 0) Color.White else Color.Black,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = if (state.selectedWordsTab == 1) Color(0xFF6A1B9A) else Color(0xFFECEFF1),
+                                    modifier = Modifier.clickable { state.selectedWordsTab = 1 }
+                                ) {
+                                    Text(
+                                        text = "✏️ Replaced (${replacedWordsCount})",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (state.selectedWordsTab == 1) Color.White else Color.Black,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+
                             IconButton(onClick = { state.isInlineWordEditMode = false }, modifier = Modifier.size(20.dp)) {
                                 Text("✕", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
                             }
@@ -1954,12 +2087,24 @@ fun PdfEditorScreen(
                             textStyle = TextStyle(fontSize = 11.sp)
                         )
 
-                        val filteredWords = activePage.detectedWords.filter {
-                            state.wordSearchFilter.isBlank() || it.word.contains(state.wordSearchFilter, ignoreCase = true)
+                        val sourceList = if (state.selectedWordsTab == 0) {
+                            activePage.detectedWords
+                        } else {
+                            activePage.detectedWords.filter { it.isReplaced }
+                        }
+
+                        val filteredWords = sourceList.filter {
+                            state.wordSearchFilter.isBlank() ||
+                            it.word.contains(state.wordSearchFilter, ignoreCase = true) ||
+                            it.replacedText.contains(state.wordSearchFilter, ignoreCase = true)
                         }
 
                         if (filteredWords.isEmpty()) {
-                            Text("No matching words.", fontSize = 11.sp, color = Color.Gray)
+                            Text(
+                                text = if (state.selectedWordsTab == 1) "No words have been replaced yet." else "No matching words found.",
+                                fontSize = 11.sp,
+                                color = Color.Gray
+                            )
                         } else {
                             FlowRow(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1969,40 +2114,34 @@ fun PdfEditorScreen(
                                 filteredWords.forEach { wordBox ->
                                     Surface(
                                         shape = RoundedCornerShape(4.dp),
-                                        color = Color(0xFFE0F2F1),
-                                        border = BorderStroke(0.5.dp, Color(0xFF00897B))
+                                        color = if (wordBox.isReplaced) Color(0xFFF3E5F5) else Color(0xFFE0F2F1),
+                                        border = BorderStroke(0.5.dp, if (wordBox.isReplaced) Color(0xFF6A1B9A) else Color(0xFF00897B))
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                         ) {
                                             Text(
-                                                text = wordBox.word,
+                                                text = if (wordBox.isReplaced) "${wordBox.word} ➔ ${wordBox.replacedText}" else wordBox.word,
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Medium,
-                                                color = Color(0xFF004D40),
+                                                color = if (wordBox.isReplaced) Color(0xFF4A148C) else Color(0xFF004D40),
                                                 modifier = Modifier.clickable {
-                                                    state.editingWordBox = wordBox
-                                                    state.liveWordText = wordBox.word
-                                                    state.liveWordFontSizePt = 14f
-                                                    state.liveWordIsBold = false
-                                                    state.liveWordIsItalic = false
-                                                    state.liveWordColor = Color(0xFF292524)
-                                                    state.liveWordPaperColor = Color.Transparent
-                                                    state.liveWordOpacity = 0.90f
-                                                    state.isNoteBoxMinimized = false
-
-                                                    state.zoomScale = 1.9f
-                                                    state.panOffsetX = -(wordBox.relX * 200f)
-                                                    state.panOffsetY = -(wordBox.relY * 200f)
+                                                    openWordInNoteBox(wordBox)
                                                 }
                                             )
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Text(
-                                                text = "🧹",
+                                                text = if (wordBox.isReplaced) "✎" else "🧹",
                                                 fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (wordBox.isReplaced) Color(0xFF6A1B9A) else Color.Red,
                                                 modifier = Modifier.clickable {
-                                                    eraseWordWithTexture(wordBox)
+                                                    if (wordBox.isReplaced) {
+                                                        openWordInNoteBox(wordBox)
+                                                    } else {
+                                                        eraseWordWithTexture(wordBox)
+                                                    }
                                                 }
                                             )
                                         }
@@ -2011,6 +2150,7 @@ fun PdfEditorScreen(
                             }
                         }
                     } else {
+                        // NOTE BOX: REAL-TIME REPLACEMENT & RESIZING CONTROLS
                         val target = state.editingWordBox!!
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2018,7 +2158,7 @@ fun PdfEditorScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "✏️ Live Word: '${target.word}'",
+                                text = if (target.isReplaced) "✏️ Re-editing '${target.word}' (Was: '${target.replacedText}')" else "✏️ Live Word: '${target.word}'",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
                                 color = Color(0xFF00796B),
@@ -2057,6 +2197,7 @@ fun PdfEditorScreen(
                                 )
                             )
 
+                            // Position & Box Size Adjustments (Nudging on the line)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -2076,6 +2217,7 @@ fun PdfEditorScreen(
                                 Button(onClick = { target.relHeight += 0.005f }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(22.dp)) { Text("H+", fontSize = 8.sp) }
                             }
 
+                            // PAPER TEXTURE SELECTION FOR ERASER / WHITEOUT
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -2107,35 +2249,57 @@ fun PdfEditorScreen(
                                 }
                             }
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Ink Density:", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-                                listOf(
-                                    Pair("100%", 1.0f),
-                                    Pair("85% (Laser)", 0.85f),
-                                    Pair("75% (Scan)", 0.75f),
-                                    Pair("60% (Faded)", 0.60f)
-                                ).forEach { (label, opacityVal) ->
-                                    val isSel = (state.liveWordOpacity * 100).roundToInt() == (opacityVal * 100).roundToInt()
-                                    Surface(
-                                        shape = RoundedCornerShape(3.dp),
-                                        color = if (isSel) Color(0xFF00796B) else Color(0xFFECEFF1),
-                                        modifier = Modifier.clickable { state.liveWordOpacity = opacityVal }
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            fontSize = 8.sp,
-                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (isSel) Color.White else Color.Black,
-                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                        )
+                            // CONTINUOUS 0% TO 100% SHADING SLIDER & PRESET CHIPS
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Shading / Ink Density: ${(state.liveWordOpacity * 100).roundToInt()}%",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF00796B)
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        listOf(
+                                            Pair("0%", 0.0f),
+                                            Pair("25%", 0.25f),
+                                            Pair("50%", 0.50f),
+                                            Pair("75%", 0.75f),
+                                            Pair("85%", 0.85f),
+                                            Pair("100%", 1.0f)
+                                        ).forEach { (lbl, valOp) ->
+                                            Surface(
+                                                shape = RoundedCornerShape(3.dp),
+                                                color = if ((state.liveWordOpacity * 100).roundToInt() == (valOp * 100).roundToInt()) Color(0xFF00796B) else Color(0xFFECEFF1),
+                                                modifier = Modifier.clickable { state.liveWordOpacity = valOp }
+                                            ) {
+                                                Text(
+                                                    text = lbl,
+                                                    fontSize = 8.sp,
+                                                    color = if ((state.liveWordOpacity * 100).roundToInt() == (valOp * 100).roundToInt()) Color.White else Color.Black,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
                                     }
                                 }
+
+                                Slider(
+                                    value = state.liveWordOpacity,
+                                    onValueChange = { state.liveWordOpacity = it },
+                                    valueRange = 0.0f..1.0f,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = Color(0xFF00796B),
+                                        activeTrackColor = Color(0xFF00796B)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth().height(26.dp)
+                                )
                             }
 
+                            // Ultra-Fine Word Font Sizing & Formatting
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2190,6 +2354,7 @@ fun PdfEditorScreen(
                                 }
                             }
 
+                            // Action buttons: Permanently Erase & Apply to PDF
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -2513,7 +2678,7 @@ fun PdfEditorScreen(
         )
     }
 
-    // MODAL: RICH TEXT FORMATTING
+    // MODAL: RICH TEXT FORMATTING WITH CONTINUOUS 0% TO 100% SHADING
     if (showTextEditDialog) {
         AlertDialog(
             onDismissRequest = { showTextEditDialog = false },
@@ -2583,35 +2748,57 @@ fun PdfEditorScreen(
                             ) { Text("+") }
                         }
 
-                        Text("Ink Density (Reduce Blackness to Match PDF):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            listOf(
-                                Pair("100%", 1.0f),
-                                Pair("85% (Laser)", 0.85f),
-                                Pair("75% (Scan)", 0.75f),
-                                Pair("60% (Faded)", 0.60f)
-                            ).forEach { (label, opacityVal) ->
-                                val isSel = (editingOpacity * 100).roundToInt() == (opacityVal * 100).roundToInt()
-                                Surface(
-                                    shape = RoundedCornerShape(3.dp),
-                                    color = if (isSel) Color(0xFF00796B) else Color(0xFFECEFF1),
-                                    modifier = Modifier.clickable { editingOpacity = opacityVal }
-                                ) {
-                                    Text(
-                                        text = label,
-                                        fontSize = 9.sp,
-                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSel) Color.White else Color.Black,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 3.dp)
-                                    )
+                        // CONTINUOUS 0% TO 100% SHADING CONTROLS
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Shading / Ink Density: ${(editingOpacity * 100).roundToInt()}%",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.DarkGray
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    listOf(
+                                        Pair("0%", 0.0f),
+                                        Pair("25%", 0.25f),
+                                        Pair("50%", 0.50f),
+                                        Pair("75%", 0.75f),
+                                        Pair("85%", 0.85f),
+                                        Pair("100%", 1.0f)
+                                    ).forEach { (lbl, valOp) ->
+                                        Surface(
+                                            shape = RoundedCornerShape(3.dp),
+                                            color = if ((editingOpacity * 100).roundToInt() == (valOp * 100).roundToInt()) Color(0xFF00796B) else Color(0xFFECEFF1),
+                                            modifier = Modifier.clickable { editingOpacity = valOp }
+                                        ) {
+                                            Text(
+                                                text = lbl,
+                                                fontSize = 8.sp,
+                                                color = if ((editingOpacity * 100).roundToInt() == (valOp * 100).roundToInt()) Color.White else Color.Black,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
+
+                            Slider(
+                                value = editingOpacity,
+                                onValueChange = { editingOpacity = it },
+                                valueRange = 0.0f..1.0f,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color(0xFF00796B),
+                                    activeTrackColor = Color(0xFF00796B)
+                                ),
+                                modifier = Modifier.fillMaxWidth().height(30.dp)
+                            )
                         }
 
+                        // Ink Shade Palette
                         Text("Ink Shade (Document Print Matching):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
                         Row(
                             modifier = Modifier
@@ -2641,6 +2828,7 @@ fun PdfEditorScreen(
                             }
                         }
 
+                        // Background Highlight
                         Text("Background / Highlight Texture:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Row(
                             modifier = Modifier

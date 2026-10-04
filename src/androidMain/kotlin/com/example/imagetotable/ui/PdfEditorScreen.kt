@@ -495,6 +495,9 @@ fun PdfEditorScreen(
             )
             canvas.drawRect(eraseRect, paint)
 
+            target.associatedElementId?.let { elId ->
+                page.elements.removeAll { it.id == elId }
+            }
             page.detectedWords.removeAll { it.id == target.id }
             state.pageRenderVersion++
             state.statusText = "Erased '${target.word}' completely."
@@ -516,6 +519,9 @@ fun PdfEditorScreen(
 
     // Opens Note Box for a word box or an already replaced word
     fun openWordInNoteBox(target: DetectedWordBox) {
+        state.isInlineWordEditMode = true
+        state.isEraserToolActive = false
+        state.isPenModeActive = false
         state.editingWordBox = target
         state.liveWordText = if (target.isReplaced) target.replacedText else target.word
         state.liveWordFontSizePt = 14f
@@ -547,7 +553,7 @@ fun PdfEditorScreen(
             val pad = state.eraserPaddingPx
             val canvas = android.graphics.Canvas(page.baseBitmap)
 
-            // 1. Wipe original word on baseBitmap with safety padding
+            // 1. Wipe original word on baseBitmap permanently with paper texture
             val erasePaint = Paint().apply {
                 color = solidPaperBg.toArgb()
                 style = Paint.Style.FILL
@@ -560,7 +566,7 @@ fun PdfEditorScreen(
             )
             canvas.drawRect(eraseRect, erasePaint)
 
-            // 2. Add or update the re-editable overlay
+            // 2. Add or update the re-editable overlay element
             val cleanReplacement = replacementText?.trim().orEmpty()
             if (cleanReplacement.isNotEmpty()) {
                 val existingElem = page.elements.find { it.id == target.associatedElementId }
@@ -842,7 +848,7 @@ fun PdfEditorScreen(
                             val dstRect = RectF(0f, 0f, ptWidth.toFloat(), ptHeight.toFloat())
                             pdfCanvas.drawBitmap(page.baseBitmap, null, dstRect, null)
 
-                            // 2. Draw all overlays using exact page-relative ratios
+                            // 2. Draw all overlays using exact page-relative ratios and centered line alignment
                             page.elements.forEach { elem ->
                                 val scaledX = elem.relX * ptWidth.toFloat()
                                 val scaledY = elem.relY * ptHeight.toFloat()
@@ -873,10 +879,12 @@ fun PdfEditorScreen(
 
                                     val lines = elem.text.split("\n")
                                     val lineHeight = textPaint.fontSpacing
-                                    val baselineOffset = -textPaint.fontMetrics.ascent
+                                    val fontMetrics = textPaint.fontMetrics
+                                    // Vertically center text within scaledH to eliminate line-shift
+                                    val firstLineBaseline = scaledY + (scaledH - (lines.size - 1) * lineHeight) / 2f - (fontMetrics.ascent + fontMetrics.descent) / 2f
 
                                     lines.forEachIndexed { lineIdx, line ->
-                                        val lineY = scaledY + baselineOffset + (lineIdx * lineHeight)
+                                        val lineY = firstLineBaseline + (lineIdx * lineHeight)
                                         pdfCanvas.drawText(line, scaledX + 2f, lineY, textPaint)
                                     }
                                 }
@@ -1848,20 +1856,17 @@ fun PdfEditorScreen(
                                 modifier = Modifier
                                     .offset(x = elemLeftDp, y = elemTopDp)
                                     .size(width = elemWDp, height = elemHDp)
-                                    .pointerInput(element.id, pagePixelW, pagePixelH) {
-                                        detectDragGestures(
-                                            onDragStart = { state.activeElementId = element.id },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                element.relX = (element.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
-                                                element.relY = (element.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
-                                            }
-                                        )
-                                    }
                                     .pointerInput(element.id) {
                                         detectTapGestures(
-                                            onTap = { state.activeElementId = element.id },
+                                            onTap = {
+                                                state.activeElementId = element.id
+                                                if (element.isReplacedWord && element.associatedWordBoxId != null) {
+                                                    val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
+                                                    if (wBox != null) openWordInNoteBox(wBox)
+                                                }
+                                            },
                                             onDoubleTap = {
+                                                state.activeElementId = element.id
                                                 if (element.isReplacedWord && element.associatedWordBoxId != null) {
                                                     val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
                                                     if (wBox != null) openWordInNoteBox(wBox)
@@ -1881,19 +1886,19 @@ fun PdfEditorScreen(
                                         color = if (isSelected) Color(0xFF1976D2) else if (element.isWhiteout) Color.LightGray else Color.Transparent,
                                         shape = RoundedCornerShape(2.dp)
                                     )
-                                    .padding(horizontal = 2.dp)
+                                    .padding(horizontal = 2.dp),
+                                contentAlignment = Alignment.CenterStart
                             ) {
                                 if (!element.isWhiteout) {
-                                    BasicTextField(
-                                        value = element.text,
-                                        onValueChange = { element.text = it },
-                                        textStyle = TextStyle(
-                                            fontSize = (element.fontSizePt * (pagePixelH / activePage.heightPt)).sp,
-                                            fontWeight = if (element.isBold) FontWeight.Bold else FontWeight.Normal,
-                                            fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
-                                            color = element.textColor.copy(alpha = element.opacity)
-                                        ),
-                                        modifier = Modifier.fillMaxSize()
+                                    val fontSizeSp = (element.fontSizePt * (pagePixelH / activePage.heightPt)).sp
+                                    Text(
+                                        text = element.text.ifBlank { " " },
+                                        fontSize = fontSizeSp,
+                                        lineHeight = fontSizeSp * 1.2f,
+                                        fontWeight = if (element.isBold) FontWeight.Bold else FontWeight.Normal,
+                                        fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
+                                        color = element.textColor.copy(alpha = element.opacity),
+                                        modifier = Modifier.fillMaxWidth()
                                     )
                                 }
 
@@ -1906,9 +1911,9 @@ fun PdfEditorScreen(
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .size(20.dp)
-                                                .background(Color(0xFF6A1B9A), CircleShape)
+                                                .background(Color(0xFF6A1B9A), RoundedCornerShape(4.dp))
                                                 .clickable {
+                                                    state.activeElementId = element.id
                                                     if (element.isReplacedWord && element.associatedWordBoxId != null) {
                                                         val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
                                                         if (wBox != null) openWordInNoteBox(wBox)
@@ -1916,10 +1921,15 @@ fun PdfEditorScreen(
                                                     } else {
                                                         openEditDialogForElement(element)
                                                     }
-                                                },
-                                            contentAlignment = Alignment.Center
+                                                }
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
-                                            Text("✎", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                text = if (element.isReplacedWord) "✎ Re-edit Word" else "✎ Edit Text",
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
                                         }
 
                                         Box(
@@ -1938,13 +1948,33 @@ fun PdfEditorScreen(
                                         }
                                     }
 
+                                    // Dedicated corner drag pill & resize handle
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomStart)
+                                            .offset(x = (-8).dp, y = 8.dp)
+                                            .size(22.dp)
+                                            .background(Color(0xFF3F51B5), CircleShape)
+                                            .border(1.5.dp, Color.White, CircleShape)
+                                            .pointerInput(element.id, pagePixelW, pagePixelH) {
+                                                detectDragGestures { change, dragAmount ->
+                                                    change.consume()
+                                                    element.relX = (element.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
+                                                    element.relY = (element.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
+                                                }
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("✥", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+
                                     Box(
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
                                             .offset(x = 8.dp, y = 8.dp)
-                                            .size(24.dp)
+                                            .size(22.dp)
                                             .background(Color(0xFF1976D2), CircleShape)
-                                            .border(2.dp, Color.White, CircleShape)
+                                            .border(1.5.dp, Color.White, CircleShape)
                                             .pointerInput(element.id, pagePixelW, pagePixelH) {
                                                 detectDragGestures { change, dragAmount ->
                                                     change.consume()
@@ -1954,7 +1984,7 @@ fun PdfEditorScreen(
                                             },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("⤡", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text("⤡", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -3136,3 +3166,4 @@ fun FourCornerCropDialog(
         }
     }
 }
+

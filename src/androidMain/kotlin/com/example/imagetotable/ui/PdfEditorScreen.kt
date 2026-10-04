@@ -588,7 +588,7 @@ fun refreshFromEngine(editor: PdfEditor) {
         state.panOffsetY = -(target.relY * 200f)
     }*/
 
-fun openWordInNoteBox(target: DetectedWordBox) {
+/*fun openWordInNoteBox(target: DetectedWordBox) {
         state.isInlineWordEditMode = true
         state.isEraserToolActive = false
         state.isPenModeActive = false
@@ -619,8 +619,40 @@ fun openWordInNoteBox(target: DetectedWordBox) {
         state.zoomScale = 1.9f
         state.panOffsetX = -(target.relX * 200f)
         state.panOffsetY = -(target.relY * 200f)
-}
-    
+}*/
+        fun openWordInNoteBox(target: DetectedWordBox) {
+        state.isInlineWordEditMode = true // Force edit mode on
+        state.isEraserToolActive = false   // Disable raw eraser mode
+        state.isPenModeActive = false
+        state.editingWordBox = target
+
+        // Load existing element values if already replaced
+        val existingElem = activePage?.elements?.find { it.id == target.associatedElementId }
+        if (existingElem != null) {
+            state.liveWordText = existingElem.text
+            state.liveWordFontSizePt = existingElem.fontSizePt
+            state.liveWordIsBold = existingElem.isBold
+            state.liveWordIsItalic = existingElem.isItalic
+            state.liveWordColor = existingElem.textColor
+            state.liveWordOpacity = existingElem.opacity
+            state.liveWordPaperColor = existingElem.backgroundColor
+            state.activeElementId = existingElem.id
+        } else {
+            state.liveWordText = if (target.isReplaced) target.replacedText else target.word
+            state.liveWordFontSizePt = 14f
+            state.liveWordIsBold = false
+            state.liveWordIsItalic = false
+            state.liveWordColor = Color(0xFF292524)
+            state.liveWordPaperColor = Color.Transparent
+            state.liveWordOpacity = 0.90f
+        }
+        state.isNoteBoxMinimized = false
+
+        state.zoomScale = 1.9f
+        state.panOffsetX = -(target.relX * 200f)
+        state.panOffsetY = -(target.relY * 200f)
+    }
+
 
     // Permanently wipes original word on baseBitmap and updates/creates the interactive overlay element
     fun applyWordEraseOrReplace(target: DetectedWordBox, replacementText: String?) {
@@ -653,7 +685,7 @@ fun openWordInNoteBox(target: DetectedWordBox) {
 
             // 2. Add or update the re-editable overlay element
             val cleanReplacement = replacementText?.trim().orEmpty()
-            if (cleanReplacement.isNotEmpty()) {
+           /* if (cleanReplacement.isNotEmpty()) {
                 val existingElem = page.elements.find { it.id == target.associatedElementId }
                 if (existingElem != null) {
                     existingElem.text = cleanReplacement
@@ -699,7 +731,59 @@ fun openWordInNoteBox(target: DetectedWordBox) {
             }
 
             state.pageRenderVersion++
+            state.editingWordBox = null*/
+
+                        if (cleanReplacement.isNotEmpty()) {
+                val existingElem = page.elements.find { it.id == target.associatedElementId }
+                if (existingElem != null) {
+                    existingElem.text = cleanReplacement
+                    existingElem.fontSizePt = state.liveWordFontSizePt
+                    existingElem.isBold = state.liveWordIsBold
+                    existingElem.isItalic = state.liveWordIsItalic
+                    existingElem.textColor = state.liveWordColor
+                    existingElem.opacity = state.liveWordOpacity
+                    existingElem.backgroundColor = solidPaperBg
+                    state.activeElementId = existingElem.id
+                } else {
+                    val newOverlay = RichPdfTextElement(
+                        initialText = cleanReplacement,
+                        initialRelX = target.relX,
+                        initialRelY = target.relY,
+                        initialRelWidth = maxOf(target.relWidth, cleanReplacement.length * 0.019f),
+                        initialRelHeight = maxOf(target.relHeight, 0.035f),
+                        initialFontSizePt = state.liveWordFontSizePt,
+                        initialIsBold = state.liveWordIsBold,
+                        initialIsItalic = state.liveWordIsItalic,
+                        initialTextColor = state.liveWordColor,
+                        initialOpacity = state.liveWordOpacity,
+                        initialBackgroundColor = solidPaperBg,
+                        initialIsWhiteout = false,
+                        initialIsReplacedWord = true,
+                        initialOriginalWord = target.word,
+                        initialAssociatedWordBoxId = target.id
+                    )
+                    page.elements.add(newOverlay)
+                    target.associatedElementId = newOverlay.id
+                    state.activeElementId = newOverlay.id
+                }
+
+                // KEEP THE WORD TARGET ACTIVE AND LINKED FOR REPEATED REPLACEMENTS
+                target.isReplaced = true
+                target.replacedText = cleanReplacement
+                state.statusText = "Replaced with '$cleanReplacement'. Tap again anytime to re-edit."
+            } else {
+                // Only if explicitly erased with empty text, clean up
+                target.associatedElementId?.let { elId ->
+                    page.elements.removeAll { it.id == elId }
+                }
+                page.detectedWords.removeAll { it.id == target.id }
+                state.statusText = "Erased '${target.word}' from document."
+            }
+
+            state.pageRenderVersion++
             state.editingWordBox = null
+            // DO NOT turn off isInlineWordEditMode so the shelf stays available
+
         }
     }
 
@@ -1282,12 +1366,30 @@ fun openWordInNoteBox(target: DetectedWordBox) {
                         Text("🔀 Reorder", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    Button(
+                   /* Button(
                         onClick = {
                             if (!state.isInlineWordEditMode) {
                                 state.isPenModeActive = false
                                 state.isEraserToolActive = false
                                 scanCurrentPageWords()
+                            } else {
+                                state.isInlineWordEditMode = false
+                                state.editingWordBox = null
+                                state.statusText = "Exited word inspector mode."
+                            }
+                        },*/
+
+                        Button(
+                        onClick = {
+                            state.isEraserToolActive = false
+                            state.isPenModeActive = false
+                            if (!state.isInlineWordEditMode) {
+                                state.isInlineWordEditMode = true
+                                if (activePage?.detectedWords.isNullOrEmpty()) {
+                                    scanCurrentPageWords()
+                                } else {
+                                    state.statusText = "Word replace active: Select any word below or on page."
+                                }
                             } else {
                                 state.isInlineWordEditMode = false
                                 state.editingWordBox = null

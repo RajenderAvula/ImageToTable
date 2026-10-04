@@ -347,8 +347,8 @@ fun PdfEditorScreen(
     var showPageNumbersDialog by remember { mutableStateOf(false) }
     var pageNumberFormatInput by remember { mutableStateOf("Page {n} of {total}") }
 
-    // Live points in bitmap coordinate pixels [0..bW, 0..bH]
-    val liveDrawingBmpStroke = remember { mutableStateListOf<Offset>() }
+    // Live points in screen display pixels [0..containerW, 0..containerH]
+    val liveDrawingScreenStroke = remember { mutableStateListOf<Offset>() }
 
     val activePage = state.pages.getOrNull(state.activePageIndex)
     val activeElement = activePage?.elements?.find { it.id == state.activeElementId }
@@ -533,7 +533,6 @@ fun PdfEditorScreen(
         showTextEditDialog = true
     }
 
-    // Opens Note Box for a word box or an already replaced word
     fun openWordInNoteBox(target: DetectedWordBox) {
         state.isInlineWordEditMode = true
         state.isEraserToolActive = false
@@ -553,7 +552,7 @@ fun PdfEditorScreen(
         state.panOffsetY = -(target.relY * 200f)
     }
 
-    // Completely erases original word on baseBitmap and creates/updates a persistent, re-editable overlay
+    // Permanently wipes original word on baseBitmap and updates/creates the interactive overlay element
     fun applyWordEraseOrReplace(target: DetectedWordBox, replacementText: String?) {
         activePage?.let { page ->
             pushCanvasSnapshot()
@@ -1158,16 +1157,7 @@ fun PdfEditorScreen(
                     if (activeElement != null) {
                         Button(
                             onClick = {
-                                if (activeElement.isReplacedWord && activeElement.associatedWordBoxId != null) {
-                                    val wBox = activePage?.detectedWords?.find { it.id == activeElement.associatedWordBoxId }
-                                    if (wBox != null) {
-                                        openWordInNoteBox(wBox)
-                                    } else {
-                                        openEditDialogForElement(activeElement)
-                                    }
-                                } else {
-                                    openEditDialogForElement(activeElement)
-                                }
+                                openEditDialogForElement(activeElement)
                             },
                             colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6A1B9A)),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -1429,6 +1419,155 @@ fun PdfEditorScreen(
             }
         }
 
+        // PEN / ANNOTATION DOCKED PALETTE
+        if (state.isPenModeActive && activePage != null) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFFE8F5E9),
+                elevation = 3.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = { state.isHighlighterMode = !state.isHighlighterMode },
+                        colors = ButtonDefaults.buttonColors(
+                            backgroundColor = if (state.isHighlighterMode) Color(0xFFFFEB3B) else Color(0xFF2E7D32)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(26.dp)
+                    ) {
+                        Text(
+                            text = if (state.isHighlighterMode) "🖍️ Highlight" else "✒️ Solid Pen",
+                            color = if (state.isHighlighterMode) Color.Black else Color.White,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Text("Size:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
+                    PenThicknesses.forEach { (lbl, widthVal) ->
+                        val isSel = state.penStrokeWidth == widthVal
+                        Surface(
+                            shape = RoundedCornerShape(3.dp),
+                            color = if (isSel) Color(0xFF2E7D32) else Color.White,
+                            border = BorderStroke(0.5.dp, Color.Gray),
+                            modifier = Modifier.clickable { state.penStrokeWidth = widthVal }
+                        ) {
+                            Text(
+                                text = lbl,
+                                fontSize = 9.sp,
+                                color = if (isSel) Color.White else Color.Black,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    Text("Color:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
+                    AnnotationPenColors.forEach { (_, col) ->
+                        val isSel = state.penColor == col
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .background(col, CircleShape)
+                                .border(
+                                    width = if (isSel) 2.dp else 0.5.dp,
+                                    color = if (isSel) Color(0xFF00E676) else Color.Gray,
+                                    shape = CircleShape
+                                )
+                                .clickable { state.penColor = col }
+                        )
+                    }
+
+                    Button(
+                        onClick = { state.isPenModeActive = false },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF37474F)),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text("Done ✕", color = Color.White, fontSize = 9.sp)
+                    }
+                }
+            }
+        }
+
+        // DOCUMENT ERASER TEXTURE PALETTE DOCK
+        if (state.isEraserToolActive && activePage != null) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFFFFF3E0),
+                elevation = 3.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "🧹 Eraser Texture:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFE65100)
+                    )
+
+                    PaperTexturePalette.forEach { (name, col) ->
+                        val isSelected = state.selectedEraserTexture == col
+                        val displayColor = if (col == Color.Transparent) Color(0xFFF1EAD8) else col
+                        Row(
+                            modifier = Modifier
+                                .background(if (isSelected) Color(0xFFFFCC80) else Color.White, RoundedCornerShape(4.dp))
+                                .border(if (isSelected) 1.5.dp else 0.5.dp, if (isSelected) Color(0xFFE65100) else Color.LightGray, RoundedCornerShape(4.dp))
+                                .clickable { state.selectedEraserTexture = col }
+                                .padding(horizontal = 5.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .background(displayColor, CircleShape)
+                                    .border(0.5.dp, Color.Gray, CircleShape)
+                            )
+                            Text(name, fontSize = 9.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Bleed:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+                    listOf(Pair("Tight", 2f), Pair("Norm", 4f), Pair("Wide", 7f)).forEach { (lbl, pad) ->
+                        val isSel = state.eraserPaddingPx == pad
+                        Surface(
+                            shape = RoundedCornerShape(3.dp),
+                            color = if (isSel) Color(0xFFE65100) else Color.White,
+                            border = BorderStroke(0.5.dp, Color.Gray),
+                            modifier = Modifier.clickable { state.eraserPaddingPx = pad }
+                        ) {
+                            Text(lbl, fontSize = 9.sp, color = if (isSel) Color.White else Color.Black, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                        }
+                    }
+
+                    Button(
+                        onClick = { state.isEraserToolActive = false },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5D4037)),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text("Done ✕", color = Color.White, fontSize = 9.sp)
+                    }
+                }
+            }
+        }
+
         // ELEMENT GEOMETRY & RESIZE TOOLBAR
         if (activeElement != null && state.editingWordBox == null && !state.isEraserToolActive && !state.isPenModeActive) {
             Surface(
@@ -1453,16 +1592,7 @@ fun PdfEditorScreen(
 
                     Button(
                         onClick = {
-                            if (activeElement.isReplacedWord && activeElement.associatedWordBoxId != null) {
-                                val wBox = activePage?.detectedWords?.find { it.id == activeElement.associatedWordBoxId }
-                                if (wBox != null) {
-                                    openWordInNoteBox(wBox)
-                                } else {
-                                    openEditDialogForElement(activeElement)
-                                }
-                            } else {
-                                openEditDialogForElement(activeElement)
-                            }
+                            openEditDialogForElement(activeElement)
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3F51B5)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -1515,7 +1645,7 @@ fun PdfEditorScreen(
             }
         }
 
-        // REAL-TIME WYSIWYG CANVAS
+        // REAL-TIME WYSIWYG CANVAS WITH DECOUPLED GESTURE LAYERS
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
@@ -1523,17 +1653,7 @@ fun PdfEditorScreen(
                 .fillMaxWidth()
                 .padding(4.dp)
                 .clipToBounds()
-                .background(Color(0xFF1E293B), RoundedCornerShape(8.dp))
-                .pointerInput(state.isPenModeActive) {
-                    detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
-                        if (!state.isPenModeActive) {
-                            state.zoomScale = (state.zoomScale * zoom).coerceIn(0.5f, 6.0f)
-                            val maxPan = 1200f * (state.zoomScale - 1f).coerceAtLeast(0f)
-                            state.panOffsetX = (state.panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
-                            state.panOffsetY = (state.panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
-                        }
-                    }
-                },
+                .background(Color(0xFF1E293B), RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
             val containerWidthPx = with(density) { maxWidth.toPx() }
@@ -1548,6 +1668,7 @@ fun PdfEditorScreen(
                 val pageDpW = with(density) { pagePixelW.toDp() }
                 val pageDpH = with(density) { pagePixelH.toDp() }
 
+                // The zoomable & pannable page container
                 Box(
                     modifier = Modifier
                         .size(pageDpW, pageDpH)
@@ -1564,88 +1685,6 @@ fun PdfEditorScreen(
                             contentDescription = "Page ${state.activePageIndex + 1}",
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.FillBounds
-                        )
-                    }
-
-                    // LIVE ON-PAGE STROKE DRAWING
-                    if (liveDrawingBmpStroke.size > 1) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val strokeColor = if (state.isHighlighterMode) {
-                                state.penColor.copy(alpha = 0.40f)
-                            } else {
-                                state.penColor
-                            }
-                            val strokeWidthScreen = state.penStrokeWidth * (size.height / activePage.heightPt)
-                            val path = androidx.compose.ui.graphics.Path()
-                            path.moveTo(liveDrawingBmpStroke[0].x * fitScale, liveDrawingBmpStroke[0].y * fitScale)
-                            for (i in 1 until liveDrawingBmpStroke.size) {
-                                path.lineTo(liveDrawingBmpStroke[i].x * fitScale, liveDrawingBmpStroke[i].y * fitScale)
-                            }
-                            drawPath(
-                                path = path,
-                                color = strokeColor,
-                                style = Stroke(
-                                    width = strokeWidthScreen,
-                                    cap = StrokeCap.Round,
-                                    join = StrokeJoin.Round
-                                )
-                            )
-                        }
-                    }
-
-                    // PEN MODE GESTURE LAYER
-                    if (state.isPenModeActive) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(activePage.pageIndex, state.isHighlighterMode, state.penColor, state.penStrokeWidth, fitScale) {
-                                    detectDragGestures(
-                                        onDragStart = { offset ->
-                                            pushCanvasSnapshot()
-                                            liveDrawingBmpStroke.clear()
-                                            val bmpX = (offset.x / fitScale).coerceIn(0f, bW)
-                                            val bmpY = (offset.y / fitScale).coerceIn(0f, bH)
-                                            liveDrawingBmpStroke.add(Offset(bmpX, bmpY))
-                                        },
-                                        onDrag = { change, _ ->
-                                            change.consume()
-                                            val bmpX = (change.position.x / fitScale).coerceIn(0f, bW)
-                                            val bmpY = (change.position.y / fitScale).coerceIn(0f, bH)
-                                            liveDrawingBmpStroke.add(Offset(bmpX, bmpY))
-                                        },
-                                        onDragEnd = {
-                                            if (liveDrawingBmpStroke.size > 1) {
-                                                val canvas = android.graphics.Canvas(activePage.baseBitmap)
-                                                val strokeWidthBmp = state.penStrokeWidth * (bH / activePage.heightPt)
-                                                val paint = Paint().apply {
-                                                    isAntiAlias = true
-                                                    isDither = true
-                                                    style = Paint.Style.STROKE
-                                                    strokeJoin = Paint.Join.ROUND
-                                                    strokeCap = Paint.Cap.ROUND
-                                                    strokeWidth = strokeWidthBmp.coerceAtLeast(1.5f)
-                                                    color = if (state.isHighlighterMode) {
-                                                        state.penColor.copy(alpha = 0.40f).toArgb()
-                                                    } else {
-                                                        state.penColor.toArgb()
-                                                    }
-                                                }
-                                                val path = AndroidPath()
-                                                path.moveTo(liveDrawingBmpStroke[0].x, liveDrawingBmpStroke[0].y)
-                                                for (i in 1 until liveDrawingBmpStroke.size) {
-                                                    path.lineTo(liveDrawingBmpStroke[i].x, liveDrawingBmpStroke[i].y)
-                                                }
-                                                canvas.drawPath(path, paint)
-                                                state.pageRenderVersion++
-                                                state.statusText = "Annotated on page ${state.activePageIndex + 1}."
-                                            }
-                                            liveDrawingBmpStroke.clear()
-                                        },
-                                        onDragCancel = {
-                                            liveDrawingBmpStroke.clear()
-                                        }
-                                    )
-                                }
                         )
                     }
 
@@ -1678,9 +1717,12 @@ fun PdfEditorScreen(
                                 .padding(horizontal = 2.dp),
                             contentAlignment = Alignment.CenterStart
                         ) {
+                            val liveFontSizeSp = with(density) {
+                                (state.liveWordFontSizePt * (pagePixelH / activePage.heightPt)).toSp()
+                            }
                             Text(
                                 text = state.liveWordText,
-                                fontSize = (state.liveWordFontSizePt * (pagePixelH / activePage.heightPt)).sp,
+                                fontSize = liveFontSizeSp,
                                 fontWeight = if (state.liveWordIsBold) FontWeight.Bold else FontWeight.Normal,
                                 fontStyle = if (state.liveWordIsItalic) FontStyle.Italic else FontStyle.Normal,
                                 color = state.liveWordColor.copy(alpha = state.liveWordOpacity)
@@ -1710,7 +1752,7 @@ fun PdfEditorScreen(
                         }
                     }
 
-                    // REAL-TIME DRAGGABLE & RE-EDITABLE OVERLAYS (DISABLED WHILE PEN IS DRAWING)
+                    // REAL-TIME RE-EDITABLE OVERLAYS (TAP-FIRST ARCHITECTURE TO PREVENT DRAG DEADLOCKS)
                     if (!state.isPenModeActive) {
                         activePage.elements.forEach { element ->
                             val isSelected = element.id == state.activeElementId
@@ -1723,26 +1765,8 @@ fun PdfEditorScreen(
                                 modifier = Modifier
                                     .offset(x = elemLeftDp, y = elemTopDp)
                                     .size(width = elemWDp, height = elemHDp)
-                                    .pointerInput(element.id) {
-                                        detectTapGestures(
-                                            onTap = {
-                                                state.activeElementId = element.id
-                                                if (element.isReplacedWord && element.associatedWordBoxId != null) {
-                                                    val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
-                                                    if (wBox != null) openWordInNoteBox(wBox)
-                                                }
-                                            },
-                                            onDoubleTap = {
-                                                state.activeElementId = element.id
-                                                if (element.isReplacedWord && element.associatedWordBoxId != null) {
-                                                    val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
-                                                    if (wBox != null) openWordInNoteBox(wBox)
-                                                    else openEditDialogForElement(element)
-                                                } else {
-                                                    openEditDialogForElement(element)
-                                                }
-                                            }
-                                        )
+                                    .clickable {
+                                        state.activeElementId = element.id
                                     }
                                     .background(
                                         if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
@@ -1757,7 +1781,9 @@ fun PdfEditorScreen(
                                 contentAlignment = Alignment.CenterStart
                             ) {
                                 if (!element.isWhiteout) {
-                                    val fontSizeSp = (element.fontSizePt * (pagePixelH / activePage.heightPt)).sp
+                                    val fontSizeSp = with(density) {
+                                        (element.fontSizePt * (pagePixelH / activePage.heightPt)).toSp()
+                                    }
                                     Text(
                                         text = element.text.ifBlank { " " },
                                         fontSize = fontSizeSp,
@@ -1781,13 +1807,7 @@ fun PdfEditorScreen(
                                                 .background(Color(0xFF6A1B9A), RoundedCornerShape(4.dp))
                                                 .clickable {
                                                     state.activeElementId = element.id
-                                                    if (element.isReplacedWord && element.associatedWordBoxId != null) {
-                                                        val wBox = activePage.detectedWords.find { it.id == element.associatedWordBoxId }
-                                                        if (wBox != null) openWordInNoteBox(wBox)
-                                                        else openEditDialogForElement(element)
-                                                    } else {
-                                                        openEditDialogForElement(element)
-                                                    }
+                                                    openEditDialogForElement(element)
                                                 }
                                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
@@ -1857,6 +1877,117 @@ fun PdfEditorScreen(
                             }
                         }
                     }
+                }
+
+                // CONTAINER-LEVEL FULL-VIEWPORT PEN DRAWING & PAN GESTURE LAYER
+                if (state.isPenModeActive) {
+                    // 1. Live Stroke Screen Canvas (Never clipped by Box bounds)
+                    if (liveDrawingScreenStroke.size > 1) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val strokeColor = if (state.isHighlighterMode) {
+                                state.penColor.copy(alpha = 0.40f)
+                            } else {
+                                state.penColor
+                            }
+                            val strokeWidthScreen = state.penStrokeWidth * (pagePixelH / activePage.heightPt) * state.zoomScale
+                            val path = androidx.compose.ui.graphics.Path()
+                            path.moveTo(liveDrawingScreenStroke[0].x, liveDrawingScreenStroke[0].y)
+                            for (i in 1 until liveDrawingScreenStroke.size) {
+                                path.lineTo(liveDrawingScreenStroke[i].x, liveDrawingScreenStroke[i].y)
+                            }
+                            drawPath(
+                                path = path,
+                                color = strokeColor,
+                                style = Stroke(
+                                    width = strokeWidthScreen,
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                        }
+                    }
+
+                    // 2. Full-Viewport Gesture Dispatcher (Zero hit-test deadzones)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(activePage.pageIndex, state.isHighlighterMode, state.penColor, state.penStrokeWidth, state.zoomScale, state.panOffsetX, state.panOffsetY) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        pushCanvasSnapshot()
+                                        liveDrawingScreenStroke.clear()
+                                        liveDrawingScreenStroke.add(offset)
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        liveDrawingScreenStroke.add(change.position)
+                                    },
+                                    onDragEnd = {
+                                        if (liveDrawingScreenStroke.size > 1) {
+                                            val canvas = android.graphics.Canvas(activePage.baseBitmap)
+                                            val strokeWidthBmp = state.penStrokeWidth * (bH / activePage.heightPt)
+                                            val paint = Paint().apply {
+                                                isAntiAlias = true
+                                                isDither = true
+                                                style = Paint.Style.STROKE
+                                                strokeJoin = Paint.Join.ROUND
+                                                strokeCap = Paint.Cap.ROUND
+                                                strokeWidth = strokeWidthBmp.coerceAtLeast(1.5f)
+                                                color = if (state.isHighlighterMode) {
+                                                    state.penColor.copy(alpha = 0.40f).toArgb()
+                                                } else {
+                                                    state.penColor.toArgb()
+                                                }
+                                            }
+
+                                            // Invert screen coordinate projection into bitmap coordinates
+                                            val screenCenterX = containerWidthPx / 2f + state.panOffsetX
+                                            val screenCenterY = containerHeightPx / 2f + state.panOffsetY
+
+                                            fun screenToBmp(pt: Offset): Offset {
+                                                val relX = (pt.x - screenCenterX) / state.zoomScale
+                                                val relY = (pt.y - screenCenterY) / state.zoomScale
+                                                val pageX = relX + (pagePixelW / 2f)
+                                                val pageY = relY + (pagePixelH / 2f)
+                                                return Offset(
+                                                    (pageX / fitScale).coerceIn(0f, bW),
+                                                    (pageY / fitScale).coerceIn(0f, bH)
+                                                )
+                                            }
+
+                                            val path = AndroidPath()
+                                            val start = screenToBmp(liveDrawingScreenStroke[0])
+                                            path.moveTo(start.x, start.y)
+                                            for (i in 1 until liveDrawingScreenStroke.size) {
+                                                val next = screenToBmp(liveDrawingScreenStroke[i])
+                                                path.lineTo(next.x, next.y)
+                                            }
+                                            canvas.drawPath(path, paint)
+                                            state.pageRenderVersion++
+                                            state.statusText = "Annotated on page ${state.activePageIndex + 1}."
+                                        }
+                                        liveDrawingScreenStroke.clear()
+                                    },
+                                    onDragCancel = {
+                                        liveDrawingScreenStroke.clear()
+                                    }
+                                )
+                            }
+                    )
+                } else {
+                    // Standard Two-Finger Pan & Pinch Detector when not drawing
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
+                                    state.zoomScale = (state.zoomScale * zoom).coerceIn(0.5f, 6.0f)
+                                    val maxPan = 1200f * (state.zoomScale - 1f).coerceAtLeast(0f)
+                                    state.panOffsetX = (state.panOffsetX + pan.x).coerceIn(-maxPan, maxPan)
+                                    state.panOffsetY = (state.panOffsetY + pan.y).coerceIn(-maxPan, maxPan)
+                                }
+                            }
+                    )
                 }
 
                 // Floating Zoom & Reset Buttons
@@ -2286,7 +2417,7 @@ fun PdfEditorScreen(
             }
         }
 
-        // BOTTOM PAGE SEQUENCE STRIP
+        // BOTTOM PAGE SEQUENCE STRIP (NON-DESTRUCTIVE PAGE NAVIGATION)
         if (state.pages.isNotEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -2308,15 +2439,16 @@ fun PdfEditorScreen(
                             color = Color(0xFF0D47A1)
                         )
 
+                        // Non-destructive Previous Page Navigation
                         Button(
                             onClick = {
-                                val cur = state.activePageIndex
-                                if (cur > 0) {
-                                    state.activeEditor?.let {
-                                        it.movePage(cur + 1, cur)
-                                        refreshFromEngine(it)
-                                        state.activePageIndex = cur - 1
-                                    }
+                                if (state.activePageIndex > 0) {
+                                    state.activePageIndex--
+                                    state.activeElementId = null
+                                    state.editingWordBox = null
+                                    state.zoomScale = 1f
+                                    state.panOffsetX = 0f
+                                    state.panOffsetY = 0f
                                 }
                             },
                             enabled = state.activePageIndex > 0,
@@ -2324,15 +2456,16 @@ fun PdfEditorScreen(
                             modifier = Modifier.size(24.dp)
                         ) { Text("◀", fontSize = 10.sp) }
 
+                        // Non-destructive Next Page Navigation
                         Button(
                             onClick = {
-                                val cur = state.activePageIndex
-                                if (cur < state.pages.size - 1) {
-                                    state.activeEditor?.let {
-                                        it.movePage(cur + 1, cur + 2)
-                                        refreshFromEngine(it)
-                                        state.activePageIndex = cur + 1
-                                    }
+                                if (state.activePageIndex < state.pages.size - 1) {
+                                    state.activePageIndex++
+                                    state.activeElementId = null
+                                    state.editingWordBox = null
+                                    state.zoomScale = 1f
+                                    state.panOffsetX = 0f
+                                    state.panOffsetY = 0f
                                 }
                             },
                             enabled = state.activePageIndex < state.pages.size - 1,
@@ -2771,6 +2904,12 @@ fun PdfEditorScreen(
                             elem.opacity = editingOpacity
                             elem.backgroundColor = editingBgColor
                             elem.relWidth = (editingTextValue.length * 0.018f).coerceIn(0.04f, 0.98f)
+
+                            // Keep detected words synced if this is a replaced word
+                            if (elem.isReplacedWord && elem.associatedWordBoxId != null) {
+                                val wBox = activePage?.detectedWords?.find { it.id == elem.associatedWordBoxId }
+                                wBox?.replacedText = editingTextValue
+                            }
                         }
                         showTextEditDialog = false
                     },

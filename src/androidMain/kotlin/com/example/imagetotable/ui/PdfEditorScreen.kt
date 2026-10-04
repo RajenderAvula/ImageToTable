@@ -1768,7 +1768,7 @@ fun PdfEditorScreen(
                     }
 
                     // LIVE PREVIEW DIRECTLY ON TARGET WORD
-                    if (state.editingWordBox != null) {
+                   /* if (state.editingWordBox != null) {
                         val wordBox = state.editingWordBox!!
                         val activePaperBg = if (state.liveWordPaperColor == Color.Transparent) {
                             wordBox.sampledPaperColor
@@ -1806,6 +1806,127 @@ fun PdfEditorScreen(
                                 fontStyle = if (state.liveWordIsItalic) FontStyle.Italic else FontStyle.Normal,
                                 color = state.liveWordColor.copy(alpha = state.liveWordOpacity)
                             )
+                        }
+                    }*/
+
+                               // LIVE INTERACTIVE REPLACEMENT TEXT BOX DIRECTLY ON THE DOCUMENT
+                    if (state.editingWordBox != null) {
+                        val wordBox = state.editingWordBox!!
+                        val activePaperBg = if (state.liveWordPaperColor == Color.Transparent) {
+                            wordBox.sampledPaperColor
+                        } else {
+                            state.liveWordPaperColor
+                        }
+
+                        val targetWordLeftDp = (wordBox.relX * pageDpW.value).dp
+                        val targetWordTopDp = (wordBox.relY * pageDpH.value).dp
+                        val patchWDp = (wordBox.relWidth * pageDpW.value).coerceAtLeast(24f).dp
+                        val patchHDp = (wordBox.relHeight * pageDpH.value).coerceAtLeast(16f).dp
+
+                        Box(
+                            modifier = Modifier
+                                .offset(x = targetWordLeftDp, y = targetWordTopDp)
+                                .size(width = patchWDp, height = patchHDp)
+                                // 1. Direct finger dragging across the document in real time
+                                .pointerInput(wordBox.id, pagePixelW, pagePixelH) {
+                                    detectDragGestures { change, dragAmount ->
+                                        change.consume()
+                                        wordBox.relX = (wordBox.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
+                                        wordBox.relY = (wordBox.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
+                                    }
+                                }
+                                // Solid matched paper background to cleanly cover the original word
+                                .background(activePaperBg, RoundedCornerShape(2.dp))
+                                .border(1.5.dp, Color(0xFF00C853), RoundedCornerShape(2.dp))
+                                .padding(horizontal = 2.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            val liveFontSizeSp = with(density) {
+                                (state.liveWordFontSizePt * (pagePixelH / activePage.heightPt)).toSp()
+                            }
+
+                            // 2. Direct in-place live typing right on the document
+                            BasicTextField(
+                                value = state.liveWordText,
+                                onValueChange = { state.liveWordText = it },
+                                textStyle = TextStyle(
+                                    fontSize = liveFontSizeSp,
+                                    lineHeight = liveFontSizeSp * 1.2f,
+                                    fontWeight = if (state.liveWordIsBold) FontWeight.Bold else FontWeight.Normal,
+                                    fontStyle = if (state.liveWordIsItalic) FontStyle.Italic else FontStyle.Normal,
+                                    color = state.liveWordColor.copy(alpha = state.liveWordOpacity)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            // 3. Top action badges: Commit replacement (✓) or cancel (✕)
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 8.dp, y = (-14).dp),
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(Color(0xFF00C853), RoundedCornerShape(3.dp))
+                                        .clickable {
+                                            applyWordEraseOrReplace(wordBox, state.liveWordText)
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                ) {
+                                    Text("✓ Replace", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .background(Color(0xFF455A64), CircleShape)
+                                        .clickable { state.editingWordBox = null },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("✕", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            // 4. Bottom-Left drag pill (✥)
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .offset(x = (-6).dp, y = 6.dp)
+                                    .size(20.dp)
+                                    .background(Color(0xFF00897B), CircleShape)
+                                    .border(1.dp, Color.White, CircleShape)
+                                    .pointerInput(wordBox.id, pagePixelW, pagePixelH) {
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            wordBox.relX = (wordBox.relX + dragAmount.x / pagePixelW).coerceIn(0f, 0.98f)
+                                            wordBox.relY = (wordBox.relY + dragAmount.y / pagePixelH).coerceIn(0f, 0.98f)
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("✥", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            // 5. Bottom-Right corner resize handle (⤡) to freely expand width & height
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .offset(x = 6.dp, y = 6.dp)
+                                    .size(20.dp)
+                                    .background(Color(0xFF00C853), CircleShape)
+                                    .border(1.dp, Color.White, CircleShape)
+                                    .pointerInput(wordBox.id, pagePixelW, pagePixelH) {
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            wordBox.relWidth = (wordBox.relWidth + dragAmount.x / pagePixelW).coerceIn(0.02f, 1f)
+                                            wordBox.relHeight = (wordBox.relHeight + dragAmount.y / pagePixelH).coerceIn(0.015f, 1f)
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("⤡", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
 
@@ -2717,7 +2838,7 @@ fun PdfEditorScreen(
                             }
 
                             // Action buttons: Permanently Erase & Apply to PDF
-                            Row(
+                           /* Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
@@ -2744,6 +2865,47 @@ fun PdfEditorScreen(
                                     modifier = Modifier.weight(0.6f).height(32.dp),
                                     shape = RoundedCornerShape(6.dp)
                                 ) { Text("Back", fontSize = 10.sp) }
+                            }*/
+
+                             // Action buttons: Confirm, Erase, or Convert directly to a full text box
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        applyWordEraseOrReplace(target, state.liveWordText)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF00796B)),
+                                    modifier = Modifier.weight(1.2f).height(32.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) { Text("✓ Confirm Edit", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+
+                                Button(
+                                    onClick = {
+                                        // Immediately wipe word on bitmap and turn into an interactive text box on the document
+                                        applyWordEraseOrReplace(target, state.liveWordText.ifBlank { target.word })
+                                        state.editingWordBox = null
+                                    },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3F51B5)),
+                                    modifier = Modifier.weight(1.2f).height(32.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) { Text("➕ Text Box on Doc", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+
+                                Button(
+                                    onClick = {
+                                        applyWordEraseOrReplace(target, null)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828)),
+                                    modifier = Modifier.weight(0.9f).height(32.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) { Text("🗑 Erase Word", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+
+                                OutlinedButton(
+                                    onClick = { state.editingWordBox = null },
+                                    modifier = Modifier.weight(0.6f).height(32.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) { Text("Back", fontSize = 9.sp) }
                             }
                         }
                     }

@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -59,6 +60,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -127,13 +129,14 @@ class RichPdfTextElement(
 
 class DetectedWordBox(
     val id: String = UUID.randomUUID().toString(),
-    val word: String,
+    initialWord: String,
     initialRelX: Float,
     initialRelY: Float,
     initialRelWidth: Float,
     initialRelHeight: Float,
     initialSampledPaperColor: Color = Color.White
 ) {
+    var word by mutableStateOf(initialWord)
     var relX by mutableFloatStateOf(initialRelX)
     var relY by mutableFloatStateOf(initialRelY)
     var relWidth by mutableFloatStateOf(initialRelWidth)
@@ -312,7 +315,6 @@ fun PdfEditorScreen(
     var showPageNumbersDialog by remember { mutableStateOf(false) }
     var pageNumberFormatInput by remember { mutableStateOf("Page {n} of {total}") }
 
-    // Live points in bitmap coordinate pixels [0..bW, 0..bH]
     val liveDrawingBmpStroke = remember { mutableStateListOf<Offset>() }
 
     val activePage = state.pages.getOrNull(state.activePageIndex)
@@ -450,6 +452,7 @@ fun PdfEditorScreen(
         }
     }
 
+    // Direct permanent erasure on the document bitmap
     fun eraseWordWithTexture(target: DetectedWordBox) {
         activePage?.let { page ->
             pushCanvasSnapshot()
@@ -476,19 +479,9 @@ fun PdfEditorScreen(
             )
             canvas.drawRect(eraseRect, paint)
 
-            val overlayWhiteout = RichPdfTextElement(
-                initialText = "",
-                initialRelX = target.relX - (pad / bW),
-                initialRelY = target.relY - (pad / bH),
-                initialRelWidth = target.relWidth + (2f * pad / bW),
-                initialRelHeight = target.relHeight + (2f * pad / bH),
-                initialBackgroundColor = targetPaperColor,
-                initialIsWhiteout = true
-            )
-            page.elements.add(overlayWhiteout)
-            state.activeElementId = overlayWhiteout.id
+            page.detectedWords.removeAll { it.id == target.id }
             state.pageRenderVersion++
-            state.statusText = "Erased '${target.word}' from document."
+            state.statusText = "Erased '${target.word}' completely."
         }
     }
 
@@ -505,6 +498,7 @@ fun PdfEditorScreen(
         showTextEditDialog = true
     }
 
+    // Completely erases original word on baseBitmap and paints the replacement text permanently
     fun applyWordEraseOrReplace(target: DetectedWordBox, replacementText: String?) {
         activePage?.let { page ->
             pushCanvasSnapshot()
@@ -515,14 +509,16 @@ fun PdfEditorScreen(
                 state.liveWordPaperColor
             }
 
+            val bW = page.baseBitmap.width.toFloat()
+            val bH = page.baseBitmap.height.toFloat()
+            val pad = state.eraserPaddingPx
             val canvas = android.graphics.Canvas(page.baseBitmap)
+
+            // 1. Wipe original word on baseBitmap with safety padding
             val erasePaint = Paint().apply {
                 color = solidPaperBg.toArgb()
                 style = Paint.Style.FILL
             }
-            val bW = page.baseBitmap.width.toFloat()
-            val bH = page.baseBitmap.height.toFloat()
-            val pad = state.eraserPaddingPx
             val eraseRect = RectF(
                 (target.relX * bW - pad).coerceAtLeast(0f),
                 (target.relY * bH - pad).coerceAtLeast(0f),
@@ -531,25 +527,49 @@ fun PdfEditorScreen(
             )
             canvas.drawRect(eraseRect, erasePaint)
 
-            if (!replacementText.isNullOrBlank()) {
-                val newOverlay = RichPdfTextElement(
-                    initialText = replacementText,
-                    initialRelX = target.relX,
-                    initialRelY = target.relY,
-                    initialRelWidth = maxOf(target.relWidth, replacementText.length * 0.019f),
-                    initialRelHeight = maxOf(target.relHeight, 0.035f),
-                    initialFontSizePt = state.liveWordFontSizePt,
-                    initialIsBold = state.liveWordIsBold,
-                    initialIsItalic = state.liveWordIsItalic,
-                    initialTextColor = state.liveWordColor,
-                    initialOpacity = state.liveWordOpacity,
-                    initialBackgroundColor = solidPaperBg,
-                    initialIsWhiteout = false
-                )
-                page.elements.add(newOverlay)
-                state.activeElementId = newOverlay.id
-                state.statusText = "Replaced with '$replacementText'. Original word wiped."
+            // 2. If replacement text is provided, paint it directly onto the bitmap at font baseline
+            val cleanReplacement = replacementText?.trim().orEmpty()
+            if (cleanReplacement.isNotEmpty()) {
+                val ptToBmpScale = bH / page.heightPt
+                val textPaint = Paint().apply {
+                    color = state.liveWordColor.copy(alpha = state.liveWordOpacity).toArgb()
+                    textSize = state.liveWordFontSizePt * ptToBmpScale
+                    isAntiAlias = true
+                    val style = when {
+                        state.liveWordIsBold && state.liveWordIsItalic -> Typeface.BOLD_ITALIC
+                        state.liveWordIsBold -> Typeface.BOLD
+                        state.liveWordIsItalic -> Typeface.ITALIC
+                        else -> Typeface.NORMAL
+                    }
+                    typeface = Typeface.create(Typeface.DEFAULT, style)
+                }
+
+                val baselineOffset = -textPaint.fontMetrics.ascent
+                val startX = target.relX * bW
+                val startY = (target.relY * bH) + baselineOffset
+
+                // If new text is wider than the original box, expand the whiteout patch to clean background
+                val measuredWidth = textPaint.measureText(cleanReplacement)
+                if (measuredWidth > (eraseRect.width() - pad)) {
+                    val extendedEraseRect = RectF(
+                        eraseRect.left,
+                        eraseRect.top,
+                        (startX + measuredWidth + pad).coerceAtMost(bW),
+                        eraseRect.bottom
+                    )
+                    canvas.drawRect(extendedEraseRect, erasePaint)
+                }
+
+                // Draw the replacement text permanently onto the document
+                canvas.drawText(cleanReplacement, startX, startY, textPaint)
+
+                // Update the word box with the new replacement text so it can be re-edited anytime
+                target.word = cleanReplacement
+                target.relWidth = maxOf(target.relWidth, (measuredWidth + pad * 2f) / bW)
+
+                state.statusText = "Replaced with '$cleanReplacement' successfully!"
             } else {
+                page.detectedWords.removeAll { it.id == target.id }
                 state.statusText = "Erased '${target.word}' from document."
             }
 
@@ -604,7 +624,7 @@ fun PdfEditorScreen(
                                             val rW = rect.width() / bW
                                             val rH = rect.height() / bH
                                             val wBox = DetectedWordBox(
-                                                word = text.trim(),
+                                                initialWord = text.trim(),
                                                 initialRelX = rX,
                                                 initialRelY = rY,
                                                 initialRelWidth = rW,
@@ -630,7 +650,7 @@ fun PdfEditorScreen(
                                         curY += 0.032f
                                     }
                                     val wBox = DetectedWordBox(
-                                        word = token,
+                                        initialWord = token,
                                         initialRelX = curX,
                                         initialRelY = curY,
                                         initialRelWidth = tw,
@@ -647,7 +667,7 @@ fun PdfEditorScreen(
                     page.detectedWords.clear()
                     page.detectedWords.addAll(words)
                     state.isInlineWordEditMode = true
-                    state.statusText = "Found ${words.size} word(s). Tap any word below to edit or erase."
+                    state.statusText = "Found ${words.size} word(s). Tap any word to erase or replace."
                 } catch (e: Exception) {
                     state.statusText = "Detection error: ${e.message}"
                 } finally {
@@ -657,7 +677,6 @@ fun PdfEditorScreen(
         }
     }
 
-    // Launchers
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -1515,6 +1534,7 @@ fun PdfEditorScreen(
                         Text("✎ Edit Text", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
 
+                    // REAL-TIME NUDGING
                     Text("Move:", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                     Button(onClick = { activeElement.relX = (activeElement.relX - 0.004f).coerceAtLeast(0f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("◀", fontSize = 10.sp) }
                     Button(onClick = { activeElement.relX = (activeElement.relX + 0.004f).coerceAtMost(0.98f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("▶", fontSize = 10.sp) }
@@ -1523,6 +1543,7 @@ fun PdfEditorScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
+                    // REAL-TIME SIZING
                     Text("Size:", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                     Button(onClick = { activeElement.relWidth = (activeElement.relWidth - 0.02f).coerceAtLeast(0.02f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("W-", fontSize = 9.sp) }
                     Button(onClick = { activeElement.relWidth = (activeElement.relWidth + 0.02f).coerceAtMost(1f) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(26.dp)) { Text("W+", fontSize = 9.sp) }
@@ -1816,7 +1837,7 @@ fun PdfEditorScreen(
                                     Box(
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
-                                            .offset(x = 10.dp, y = 10.dp)
+                                            .offset(x = 8.dp, y = 8.dp)
                                             .size(24.dp)
                                             .background(Color(0xFF1976D2), CircleShape)
                                             .border(2.dp, Color.White, CircleShape)
@@ -2749,7 +2770,7 @@ fun PdfEditorScreen(
 fun FourCornerCropDialog(
     sourceBitmap: Bitmap,
     onDismiss: () -> Unit,
-    onCropConfirmed: (cropL: Float, cropT: Float, cropR: Float, cropB: Float) -> Unit
+    onCropConfirmed: (cL: Float, cT: Float, cR: Float, cB: Float) -> Unit
 ) {
     var leftFraction by remember { mutableFloatStateOf(0.08f) }
     var topFraction by remember { mutableFloatStateOf(0.08f) }
@@ -2823,7 +2844,7 @@ fun FourCornerCropDialog(
                             )
                         }
 
-                        // 4 Draggable Handles
+                        // 4 Draggable Corner Handles
                         Box(
                             modifier = Modifier
                                 .align(Alignment.TopStart)

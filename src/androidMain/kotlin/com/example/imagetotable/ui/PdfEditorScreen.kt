@@ -80,6 +80,14 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.roundToInt
 
+/**
+ * RichPdfTextElement encapsulates an interactive on-page element
+ * (either a custom text box, a paper-matched whiteout patch, or a replaced word).
+ *
+ * All coordinates are normalized ratios (0.0f..1.0f) relative to page dimensions.
+ * This guarantees WYSIWYG placement precision regardless of screen density,
+ * orientation, canvas zooming, or PDF export resolution.
+ */
 class RichPdfTextElement(
     val id: String = UUID.randomUUID().toString(),
     initialText: String = "Tap to type",
@@ -136,6 +144,10 @@ class RichPdfTextElement(
     }
 }
 
+/**
+ * DetectedWordBox tracks words identified via ML Kit OCR or document inspection.
+ * Coordinates are normalized to 0.0f..1.0f relative to the page image dimensions.
+ */
 class DetectedWordBox(
     val id: String = UUID.randomUUID().toString(),
     initialWord: String,
@@ -174,6 +186,9 @@ data class CanvasSnapshot(
     val elements: List<RichPdfTextElement>
 )
 
+/**
+ * State holder that persists across tab navigation and screen re-composition.
+ */
 class PdfEditorState {
     var activeEditor by mutableStateOf<PdfEditor?>(null)
     val pages = mutableStateListOf<EditablePdfPage>()
@@ -332,6 +347,7 @@ fun PdfEditorScreen(
     var showPageNumbersDialog by remember { mutableStateOf(false) }
     var pageNumberFormatInput by remember { mutableStateOf("Page {n} of {total}") }
 
+    // Live points in bitmap coordinate pixels [0..bW, 0..bH]
     val liveDrawingBmpStroke = remember { mutableStateListOf<Offset>() }
 
     val activePage = state.pages.getOrNull(state.activePageIndex)
@@ -707,7 +723,7 @@ fun PdfEditorScreen(
                     page.detectedWords.clear()
                     page.detectedWords.addAll(words)
                     state.isInlineWordEditMode = true
-                    state.statusText = "Found ${words.size} word(s). Tap any word to erase or replace."
+                    state.statusText = "Found ${words.size} word(s). Tap any word below to edit or erase."
                 } catch (e: Exception) {
                     state.statusText = "Detection error: ${e.message}"
                 } finally {
@@ -1413,155 +1429,6 @@ fun PdfEditorScreen(
             }
         }
 
-        // PEN / ANNOTATION DOCKED PALETTE
-        if (state.isPenModeActive && activePage != null) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = Color(0xFFE8F5E9),
-                elevation = 3.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Button(
-                        onClick = { state.isHighlighterMode = !state.isHighlighterMode },
-                        colors = ButtonDefaults.buttonColors(
-                            backgroundColor = if (state.isHighlighterMode) Color(0xFFFFEB3B) else Color(0xFF2E7D32)
-                        ),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                        modifier = Modifier.height(26.dp)
-                    ) {
-                        Text(
-                            text = if (state.isHighlighterMode) "🖍️ Highlight" else "✒️ Solid Pen",
-                            color = if (state.isHighlighterMode) Color.Black else Color.White,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Text("Size:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
-                    PenThicknesses.forEach { (lbl, widthVal) ->
-                        val isSel = state.penStrokeWidth == widthVal
-                        Surface(
-                            shape = RoundedCornerShape(3.dp),
-                            color = if (isSel) Color(0xFF2E7D32) else Color.White,
-                            border = BorderStroke(0.5.dp, Color.Gray),
-                            modifier = Modifier.clickable { state.penStrokeWidth = widthVal }
-                        ) {
-                            Text(
-                                text = lbl,
-                                fontSize = 9.sp,
-                                color = if (isSel) Color.White else Color.Black,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    Text("Color:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
-                    AnnotationPenColors.forEach { (_, col) ->
-                        val isSel = state.penColor == col
-                        Box(
-                            modifier = Modifier
-                                .size(20.dp)
-                                .background(col, CircleShape)
-                                .border(
-                                    width = if (isSel) 2.dp else 0.5.dp,
-                                    color = if (isSel) Color(0xFF00E676) else Color.Gray,
-                                    shape = CircleShape
-                                )
-                                .clickable { state.penColor = col }
-                        )
-                    }
-
-                    Button(
-                        onClick = { state.isPenModeActive = false },
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF37474F)),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                        modifier = Modifier.height(24.dp)
-                    ) {
-                        Text("Done ✕", color = Color.White, fontSize = 9.sp)
-                    }
-                }
-            }
-        }
-
-        // DOCUMENT ERASER TEXTURE PALETTE DOCK
-        if (state.isEraserToolActive && activePage != null) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = Color(0xFFFFF3E0),
-                elevation = 3.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "🧹 Eraser Texture:",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFE65100)
-                    )
-
-                    PaperTexturePalette.forEach { (name, col) ->
-                        val isSelected = state.selectedEraserTexture == col
-                        val displayColor = if (col == Color.Transparent) Color(0xFFF1EAD8) else col
-                        Row(
-                            modifier = Modifier
-                                .background(if (isSelected) Color(0xFFFFCC80) else Color.White, RoundedCornerShape(4.dp))
-                                .border(if (isSelected) 1.5.dp else 0.5.dp, if (isSelected) Color(0xFFE65100) else Color.LightGray, RoundedCornerShape(4.dp))
-                                .clickable { state.selectedEraserTexture = col }
-                                .padding(horizontal = 5.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .background(displayColor, CircleShape)
-                                    .border(0.5.dp, Color.Gray, CircleShape)
-                            )
-                            Text(name, fontSize = 9.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Bleed:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-                    listOf(Pair("Tight", 2f), Pair("Norm", 4f), Pair("Wide", 7f)).forEach { (lbl, pad) ->
-                        val isSel = state.eraserPaddingPx == pad
-                        Surface(
-                            shape = RoundedCornerShape(3.dp),
-                            color = if (isSel) Color(0xFFE65100) else Color.White,
-                            border = BorderStroke(0.5.dp, Color.Gray),
-                            modifier = Modifier.clickable { state.eraserPaddingPx = pad }
-                        ) {
-                            Text(lbl, fontSize = 9.sp, color = if (isSel) Color.White else Color.Black, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
-                        }
-                    }
-
-                    Button(
-                        onClick = { state.isEraserToolActive = false },
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF5D4037)),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                        modifier = Modifier.height(24.dp)
-                    ) {
-                        Text("Done ✕", color = Color.White, fontSize = 9.sp)
-                    }
-                }
-            }
-        }
-
         // ELEMENT GEOMETRY & RESIZE TOOLBAR
         if (activeElement != null && state.editingWordBox == null && !state.isEraserToolActive && !state.isPenModeActive) {
             Surface(
@@ -1843,7 +1710,7 @@ fun PdfEditorScreen(
                         }
                     }
 
-                    // REAL-TIME DRAGGABLE & RE-EDITABLE OVERLAYS
+                    // REAL-TIME DRAGGABLE & RE-EDITABLE OVERLAYS (DISABLED WHILE PEN IS DRAWING)
                     if (!state.isPenModeActive) {
                         activePage.elements.forEach { element ->
                             val isSelected = element.id == state.activeElementId
@@ -3166,4 +3033,3 @@ fun FourCornerCropDialog(
         }
     }
 }
-

@@ -2897,7 +2897,7 @@ fun refreshFromEngine(editor: PdfEditor) {
 
                             
                     
-                } else {
+                } /*else {
                     // Standard Two-Finger Pan & Pinch Detector when not drawing or manually erasing
                     Box(
                         modifier = Modifier
@@ -2911,7 +2911,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                                 }
                             }
                     )
-                }
+                }*/
 
 
                 // Floating Zoom & Reset Buttons

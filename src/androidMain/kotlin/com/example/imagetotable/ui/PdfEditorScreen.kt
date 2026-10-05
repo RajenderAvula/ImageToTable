@@ -230,7 +230,7 @@ class PdfEditorState {
     var eraserBrushSize by mutableFloatStateOf(20f) // <-- ADD THIS: Manual eraser width in points
     var isEraserPanMode by mutableStateOf(false) // <-- ADD THIS: false = Erase, true = Pan/Move page
 
-
+var isPanModeActive by mutableStateOf(false)
     // Dedicated Pen / Highlighter Tool State
     var isPenModeActive by mutableStateOf(false)
     var isHighlighterMode by mutableStateOf(false)
@@ -265,6 +265,8 @@ class PdfEditorState {
         isHighlighterMode = false
         penColor = Color(0xFF1565C0)
         penStrokeWidth = 3f
+            isPanModeActive = false
+
     }
 }
 
@@ -1247,6 +1249,35 @@ fun refreshFromEngine(editor: PdfEditor) {
                         modifier = Modifier.height(28.dp)
                     ) {
                         Text("↪ Redo", fontSize = 10.sp, color = if (canRedoAction) Color.White else Color.Gray, fontWeight = FontWeight.Bold)
+                    }
+                    
+                    // ✋ DEDICATED MOVE / PAN PAGE TOGGLE
+                    Button(
+                        onClick = {
+                            state.isPanModeActive = !state.isPanModeActive
+                            if (state.isPanModeActive) {
+                                state.isPenModeActive = false
+                                state.isEraserToolActive = false
+                                state.isInlineWordEditMode = false
+                                state.activeElementId = null
+                                state.editingWordBox = null
+                                state.statusText = "Move mode active: Drag to pan, pinch to zoom."
+                            } else {
+                                state.statusText = "Exited Move mode."
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            backgroundColor = if (state.isPanModeActive) Color(0xFF0288D1) else Color(0xFFECEFF1)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text(
+                            text = if (state.isPanModeActive) "✓ Move Mode" else "✋ Move Page",
+                            color = if (state.isPanModeActive) Color.White else Color.Black,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
 
                     // FREEHAND PEN / HIGHLIGHTER TOOL BUTTON
@@ -2897,7 +2928,7 @@ fun refreshFromEngine(editor: PdfEditor) {
 
                             
                     
-                } /*else {
+                } else {
                     // Standard Two-Finger Pan & Pinch Detector when not drawing or manually erasing
                     Box(
                         modifier = Modifier
@@ -2911,7 +2942,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                                 }
                             }
                     )
-                }*/
+                }
 
 
                 // Floating Zoom & Reset Buttons

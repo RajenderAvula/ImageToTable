@@ -1027,7 +1027,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                                 val scaledW = elem.relWidth * ptWidth.toFloat()
                                 val scaledH = elem.relHeight * ptHeight.toFloat()
 
-                                if (elem.isWhiteout || elem.backgroundColor != Color.Transparent) {
+                                /*if (elem.isWhiteout || elem.backgroundColor != Color.Transparent) {
                                     val bgPaint = Paint().apply {
                                         //color = elem.backgroundColor.toArgb()
                                         color = elem.backgroundColor.toArgb()
@@ -1035,7 +1035,24 @@ fun refreshFromEngine(editor: PdfEditor) {
                                         style = Paint.Style.FILL
                                     }
                                     pdfCanvas.drawRect(scaledX, scaledY, scaledX + scaledW, scaledY + scaledH, bgPaint)
+                                }*/
+                                 if (elem.isWhiteout || elem.backgroundColor != Color.Transparent) {
+                                    val targetColor = if (elem.backgroundColor == Color.Transparent && elem.isWhiteout) {
+                                        samplePurePaperBackground(page.baseBitmap, elem.relX, elem.relY, elem.relWidth, elem.relHeight)
+                                    } else {
+                                        elem.backgroundColor
+                                    }
+
+                                    if (targetColor != Color.Transparent) {
+                                        val bgPaint = Paint().apply {
+                                            color = targetColor.toArgb()
+                                            alpha = (elem.opacity.coerceIn(0f, 1f) * 255).toInt()
+                                            style = Paint.Style.FILL
+                                        }
+                                        pdfCanvas.drawRect(scaledX, scaledY, scaledX + scaledW, scaledY + scaledH, bgPaint)
+                                    }
                                 }
+
 
                                 if (!elem.isWhiteout && elem.text.isNotBlank()) {
                                     val textPaint = Paint().apply {
@@ -2337,11 +2354,39 @@ fun refreshFromEngine(editor: PdfEditor) {
                                             }
                                         )
                                                                     }
-                                    .background(
+                                    /*.background(
                                         //if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
                                        element.backgroundColor.copy(alpha = element.opacity),
                                         RoundedCornerShape(2.dp)
-                                    )
+                                    )*/
+                                    // 1. If Auto Match (Transparent) on Whiteout, sample the real paper texture underneath
+                                    val resolvedBgColor = when {
+                                        element.backgroundColor != Color.Transparent -> element.backgroundColor
+                                        element.isWhiteout -> samplePurePaperBackground(
+                                            activePage.baseBitmap,
+                                            element.relX,
+                                            element.relY,
+                                            element.relWidth,
+                                            element.relHeight
+                                        )
+                                        else -> Color.Transparent
+                                    }
+
+                                    // 2. Never apply alpha to Color.Transparent (avoids turning into solid black)
+                                    val finalBoxBackground = if (resolvedBgColor == Color.Transparent) {
+                                        Color.Transparent
+                                    } else {
+                                        resolvedBgColor.copy(alpha = element.opacity.coerceIn(0.05f, 1f))
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .offset(x = elemLeftDp, y = elemTopDp)
+                                            .size(width = elemWDp, height = elemHDp)
+                                            ...
+                                            .background(finalBoxBackground, RoundedCornerShape(2.dp))
+
+                                    
                                     .border(
                                         width = if (isSelected) 1.5.dp else 0.5.dp,
                                         color = if (isSelected) Color(0xFF1976D2) else if (element.isWhiteout) Color.LightGray else Color.Transparent,
@@ -4082,7 +4127,20 @@ fun refreshFromEngine(editor: PdfEditor) {
                                 modifier = Modifier
                                     .background(if (isSelected) Color(0xFFE0F2F1) else Color.Transparent, RoundedCornerShape(4.dp))
                                     .border(if (isSelected) 1.dp else 0.dp, if (isSelected) Color(0xFF00796B) else Color.Transparent, RoundedCornerShape(4.dp))
-                                    .clickable { editingBgColor = bg }
+                                   /* .clickable { editingBgColor = bg }*/
+                                   .clickable {
+                                        if (bg == Color.Transparent && editingIsWhiteout) {
+                                            // Sample the exact paper tone at this whiteout location
+                                            val elem = activePage?.elements?.find { it.id == state.activeElementId }
+                                            editingBgColor = if (elem != null && activePage != null) {
+                                                samplePurePaperBackground(activePage.baseBitmap, elem.relX, elem.relY, elem.relWidth, elem.relHeight)
+                                            } else {
+                                                Color.White
+                                            }
+                                        } else {
+                                            editingBgColor = bg
+                                        }
+                                   }
                                     .padding(horizontal = 4.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -4112,8 +4170,18 @@ fun refreshFromEngine(editor: PdfEditor) {
                                 elem.textColor = editingColor
                                 elem.relWidth = (editingTextValue.length * 0.018f).coerceIn(0.04f, 0.98f)
                             }
-                            elem.opacity = editingOpacity
-                            elem.backgroundColor = editingBgColor
+                            //elem.opacity = editingOpacity
+                           // elem.backgroundColor = editingBgColor
+
+                             elem.opacity = editingOpacity
+                            elem.backgroundColor = if (elem.isWhiteout && editingBgColor == Color.Transparent) {
+                                activePage?.let { page ->
+                                    samplePurePaperBackground(page.baseBitmap, elem.relX, elem.relY, elem.relWidth, elem.relHeight)
+                                } ?: Color.White
+                            } else {
+                                editingBgColor
+                            }
+
 
                             // Keep detected words synced if this is a replaced word
                             if (elem.isReplacedWord && elem.associatedWordBoxId != null) {

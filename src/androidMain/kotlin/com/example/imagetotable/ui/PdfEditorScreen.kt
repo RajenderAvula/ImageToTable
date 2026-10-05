@@ -1029,7 +1029,9 @@ fun refreshFromEngine(editor: PdfEditor) {
 
                                 if (elem.isWhiteout || elem.backgroundColor != Color.Transparent) {
                                     val bgPaint = Paint().apply {
+                                        //color = elem.backgroundColor.toArgb()
                                         color = elem.backgroundColor.toArgb()
+                                    alpha = (elem.opacity.coerceIn(0f, 1f) * 255).toInt()
                                         style = Paint.Style.FILL
                                     }
                                     pdfCanvas.drawRect(scaledX, scaledY, scaledX + scaledW, scaledY + scaledH, bgPaint)
@@ -1534,7 +1536,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                         modifier = Modifier.height(28.dp)
                     ) { Text("➕ Text Box", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
 
-                    Button(
+                   /* Button(
                         onClick = {
                             activePage?.let { page ->
                                 pushCanvasSnapshot()
@@ -1551,7 +1553,30 @@ fun refreshFromEngine(editor: PdfEditor) {
                                 state.activeElementId = whiteout.id
                                 state.statusText = "Added Whiteout patch."
                             }
+                        },*/
+                                            Button(
+                        onClick = {
+                            val activeTexture = if (state.selectedEraserTexture != Color.Transparent) {
+                                state.selectedEraserTexture
+                            } else {
+                                Color.White
+                            }
+                            val newElem = RichPdfTextElement(
+                                initialText = "",
+                                initialRelX = 0.35f,
+                                initialRelY = 0.35f,
+                                initialRelWidth = 0.25f,
+                                initialRelHeight = 0.05f,
+                                initialIsWhiteout = true,
+                                initialOpacity = 1.0f,
+                                initialBackgroundColor = activeTexture
+                            )
+                            activePage.elements.add(newElem)
+                            state.activeElementId = newElem.id
+                            state.statusText = "Added Whiteout patch. Adjust fading and texture in edit controls."
                         },
+
+                        
                         enabled = activePage != null,
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFE65100)),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -2313,7 +2338,8 @@ fun refreshFromEngine(editor: PdfEditor) {
                                         )
                                                                     }
                                     .background(
-                                        if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
+                                        //if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
+                                       element.backgroundColor.copy(alpha = element.opacity),
                                         RoundedCornerShape(2.dp)
                                     )
                                     .border(

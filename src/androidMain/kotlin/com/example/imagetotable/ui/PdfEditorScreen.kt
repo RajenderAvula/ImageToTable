@@ -3822,7 +3822,7 @@ fun refreshFromEngine(editor: PdfEditor) {
 
                             Text("${editingFontSizePt.toInt()}pt", fontSize = 11.sp, fontWeight = FontWeight.Bold)
 
-                            Button(
+                           /* Button(
                                 onClick = { editingFontSizePt = (editingFontSizePt + 1f).coerceAtMost(72f) },
                                 contentPadding = PaddingValues(0.dp),
                                 modifier = Modifier.size(26.dp)
@@ -3970,7 +3970,167 @@ fun refreshFromEngine(editor: PdfEditor) {
             dismissButton = {
                 TextButton(onClick = { showTextEditDialog = false }) { Text("Cancel") }
             }
+        )*/
+
+
+                                    Button(
+                                onClick = { editingFontSizePt = (editingFontSizePt + 1f).coerceAtMost(72f) },
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.size(26.dp)
+                            ) { Text("+") }
+                        }
+
+                        // Ink Shade Palette (Text Only)
+                        Text("Ink Shade (Document Print Matching):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            InkShadePalette.forEach { (name, col) ->
+                                val isSelected = editingColor == col
+                                Row(
+                                    modifier = Modifier
+                                        .background(if (isSelected) Color(0xFFE0F2F1) else Color.Transparent, RoundedCornerShape(4.dp))
+                                        .border(if (isSelected) 1.dp else 0.dp, if (isSelected) Color(0xFF00796B) else Color.Transparent, RoundedCornerShape(4.dp))
+                                        .clickable { editingColor = col }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .background(col, CircleShape)
+                                            .border(0.5.dp, Color.Gray, CircleShape)
+                                    )
+                                    Text(name, fontSize = 9.sp, color = Color.DarkGray)
+                                }
+                            }
+                        }
+
+                        Divider(modifier = Modifier.padding(vertical = 4.dp))
+                    } // <--- Closes if (!editingIsWhiteout) so the sliders below show for Whiteout!
+
+                    // --- WHITEOUT & TEXT SHARED CONTROLS (ALWAYS VISIBLE) ---
+                    // Density / Fading Slider
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (editingIsWhiteout) "Whiteout Density (Fade): ${(editingOpacity * 100).roundToInt()}%" else "Shading / Ink Density: ${(editingOpacity * 100).roundToInt()}%",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.DarkGray
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                listOf(
+                                    Pair("25%", 0.25f),
+                                    Pair("50%", 0.50f),
+                                    Pair("75%", 0.75f),
+                                    Pair("85%", 0.85f),
+                                    Pair("100%", 1.0f)
+                                ).forEach { (lbl, valOp) ->
+                                    Surface(
+                                        shape = RoundedCornerShape(3.dp),
+                                        color = if ((editingOpacity * 100).roundToInt() == (valOp * 100).roundToInt()) Color(0xFF00796B) else Color(0xFFECEFF1),
+                                        modifier = Modifier.clickable { editingOpacity = valOp }
+                                    ) {
+                                        Text(
+                                            text = lbl,
+                                            fontSize = 8.sp,
+                                            color = if ((editingOpacity * 100).roundToInt() == (valOp * 100).roundToInt()) Color.White else Color.Black,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Slider(
+                            value = editingOpacity,
+                            onValueChange = { editingOpacity = it },
+                            valueRange = 0.05f..1.0f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFF00796B),
+                                activeTrackColor = Color(0xFF00796B)
+                            ),
+                            modifier = Modifier.fillMaxWidth().height(30.dp)
+                        )
+                    }
+
+                    // Background / Paper Texture Palette
+                    Text(
+                        text = if (editingIsWhiteout) "Match Paper Texture:" else "Background / Highlight Texture:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        PaperTexturePalette.forEach { (name, bg) ->
+                            val isSelected = editingBgColor == bg
+                            val displayColor = if (bg == Color.Transparent) Color.LightGray else bg
+                            Row(
+                                modifier = Modifier
+                                    .background(if (isSelected) Color(0xFFE0F2F1) else Color.Transparent, RoundedCornerShape(4.dp))
+                                    .border(if (isSelected) 1.dp else 0.dp, if (isSelected) Color(0xFF00796B) else Color.Transparent, RoundedCornerShape(4.dp))
+                                    .clickable { editingBgColor = bg }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .background(displayColor, CircleShape)
+                                        .border(0.5.dp, Color.Gray, CircleShape)
+                                )
+                                Text(name, fontSize = 9.sp, color = Color.DarkGray)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pushCanvasSnapshot()
+                        activeElement?.let { elem ->
+                            if (!elem.isWhiteout) {
+                                elem.text = editingTextValue
+                                elem.fontSizePt = editingFontSizePt
+                                elem.isBold = editingIsBold
+                                elem.isItalic = editingIsItalic
+                                elem.textColor = editingColor
+                                elem.relWidth = (editingTextValue.length * 0.018f).coerceIn(0.04f, 0.98f)
+                            }
+                            elem.opacity = editingOpacity
+                            elem.backgroundColor = editingBgColor
+
+                            // Keep detected words synced if this is a replaced word
+                            if (elem.isReplacedWord && elem.associatedWordBoxId != null) {
+                                val wBox = activePage?.detectedWords?.find { it.id == elem.associatedWordBoxId }
+                                wBox?.replacedText = editingTextValue
+                            }
+                        }
+                        showTextEditDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF15803D))
+                ) { Text("Apply Format", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTextEditDialog = false }) { Text("Cancel") }
+            }
         )
+
     }
 
     // MODAL: ADD WATERMARK

@@ -1571,7 +1571,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                                 initialOpacity = 1.0f,
                                 initialBackgroundColor = activeTexture
                             )
-                            activePage.elements.add(newElem)
+                            activePage?.elements?.add(newElem)
                             state.activeElementId = newElem.id
                             state.statusText = "Added Whiteout patch. Adjust fading and texture in edit controls."
                         },

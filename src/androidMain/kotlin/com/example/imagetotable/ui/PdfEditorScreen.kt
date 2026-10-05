@@ -2928,7 +2928,8 @@ fun refreshFromEngine(editor: PdfEditor) {
 
                             
                     
-                } else {
+                } else  if (state.isPanModeActive) {
+                    // Full-Viewport Pan & Zoom dispatcher (Active only in Move Mode)
                     // Standard Two-Finger Pan & Pinch Detector when not drawing or manually erasing
                     Box(
                         modifier = Modifier

@@ -752,7 +752,8 @@ fun refreshFromEngine(editor: PdfEditor) {
                         initialRelX = target.relX,
                         initialRelY = target.relY,
                         initialRelWidth = maxOf(target.relWidth, cleanReplacement.length * 0.019f),
-                        initialRelHeight = maxOf(target.relHeight, 0.035f),
+                        //initialRelHeight = maxOf(target.relHeight, 0.035f),
+                        initialRelHeight = target.relHeight,
                         initialFontSizePt = state.liveWordFontSizePt,
                         initialIsBold = state.liveWordIsBold,
                         initialIsItalic = state.liveWordIsItalic,
@@ -1048,7 +1049,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                                         typeface = Typeface.create(Typeface.DEFAULT, style)
                                     }
 
-                                    val lines = elem.text.split("\n")
+                                    /*val lines = elem.text.split("\n")
                                     val lineHeight = textPaint.fontSpacing
                                     val fontMetrics = textPaint.fontMetrics
                                     // Vertically center text within scaledH to eliminate line-shift
@@ -1057,7 +1058,24 @@ fun refreshFromEngine(editor: PdfEditor) {
                                     lines.forEachIndexed { lineIdx, line ->
                                         val lineY = firstLineBaseline + (lineIdx * lineHeight)
                                         pdfCanvas.drawText(line, scaledX + 2f, lineY, textPaint)
-                                    }
+                                    }*/
+                                                                    val lines = elem.text.split("\n")
+                                val lineHeight = textPaint.fontSpacing
+                                val fontMetrics = textPaint.fontMetrics
+
+                                // Replaced words center on the original word line; custom text boxes remain top-aligned
+                                val firstLineBaseline = if (elem.isReplacedWord) {
+                                    val boxCenterY = scaledY + (scaledH / 2f)
+                                    boxCenterY - ((fontMetrics.ascent + fontMetrics.descent) / 2f)
+                                } else {
+                                    scaledY - fontMetrics.ascent
+                                }
+
+                                lines.forEachIndexed { lineIdx, line ->
+                                    val lineY = firstLineBaseline + (lineIdx * lineHeight)
+                                    pdfCanvas.drawText(line, scaledX + 2f, lineY, textPaint)
+                                }
+
                                 }
                             }
 
@@ -2043,8 +2061,14 @@ fun refreshFromEngine(editor: PdfEditor) {
 
                         val targetWordLeftDp = (wordBox.relX * pageDpW.value).dp
                         val targetWordTopDp = (wordBox.relY * pageDpH.value).dp
-                        val patchWDp = (wordBox.relWidth * pageDpW.value).coerceAtLeast(24f).dp
-                        val patchHDp = (wordBox.relHeight * pageDpH.value).coerceAtLeast(16f).dp
+                        //val patchWDp = (wordBox.relWidth * pageDpW.value).coerceAtLeast(24f).dp
+                        //val patchHDp = (wordBox.relHeight * pageDpH.value).coerceAtLeast(16f).dp
+                        
+                        val patchWDp = maxOf(
+                            (wordBox.relWidth * pageDpW.value + 4f).dp,
+                            (state.liveWordText.length * (state.liveWordFontSizePt * 0.65f) + 6f).dp
+                        )
+                        val patchHDp = (wordBox.relHeight * pageDpH.value).coerceAtLeast(14f).dp
 
                         Box(
                             modifier = Modifier

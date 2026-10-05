@@ -2354,13 +2354,13 @@ fun refreshFromEngine(editor: PdfEditor) {
                                             }
                                         )
                                                                     }
-                                    /*.background(
-                                        //if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
-                                       element.backgroundColor.copy(alpha = element.opacity),
+                                    .background(
+                                        if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
+                                       //element.backgroundColor.copy(alpha = element.opacity),
                                         RoundedCornerShape(2.dp)
-                                    )*/
+                                    )
                                     // 1. If Auto Match (Transparent) on Whiteout, sample the real paper texture underneath
-                                    val resolvedBgColor = when {
+                                   /*val resolvedBgColor = when {
                                         element.backgroundColor != Color.Transparent -> element.backgroundColor
                                         element.isWhiteout -> samplePurePaperBackground(
                                             activePage.baseBitmap,
@@ -2384,7 +2384,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                                             .offset(x = elemLeftDp, y = elemTopDp)
                                             .size(width = elemWDp, height = elemHDp)
                                             ...
-                                            .background(finalBoxBackground, RoundedCornerShape(2.dp))
+                                            .background(finalBoxBackground, RoundedCornerShape(2.dp))*/
 
                                     
                                     .border(

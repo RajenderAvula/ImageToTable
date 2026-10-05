@@ -2218,7 +2218,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                                         )
                                     }*/
 
-                                                                    .pointerInput(element.id) {
+                                                                   /* .pointerInput(element.id) {
                                         detectTapGestures(
                                             onTap = {
                                                 state.activeElementId = element.id
@@ -2256,7 +2256,7 @@ fun refreshFromEngine(editor: PdfEditor) {
                                                 }
                                             }
                                         )
-                                                                    }
+                                                                    }*/
                                     .background(
                                         if (element.isWhiteout) element.backgroundColor else element.backgroundColor,
                                         RoundedCornerShape(2.dp)
